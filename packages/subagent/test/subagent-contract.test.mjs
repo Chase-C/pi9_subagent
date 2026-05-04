@@ -168,6 +168,105 @@ async function writeAgent(agentDir, { name, description, model, tools, systemPro
   await writeFile(join(agentDir, 'agents', `${name}.md`), `---\n${fields.join('\n')}\n---\n${systemPrompt}\n`);
 }
 
+function createCommandContext(cwd) {
+  const notifications = [];
+  return {
+    notifications,
+    ctx: {
+      cwd,
+      ui: {
+        notify(message, level) {
+          notifications.push({ message, level });
+        },
+      },
+    },
+  };
+}
+
+test('/subagents rejects invalid scope arguments before discovery', async () => withTempAgentDir(async ({ temp, agentDir }) => {
+  await writeAgent(agentDir, {
+    name: 'user-helper',
+    description: 'User helper agent',
+    systemPrompt: 'You are helpful.',
+  });
+
+  const { commands } = registerExtension();
+  const { ctx, notifications } = createCommandContext(temp);
+  await commands.get('subagents').handler('bogus', ctx);
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, 'warning');
+  assert.match(notifications[0].message, /Invalid subagent scope: bogus/);
+  assert.match(notifications[0].message, /Valid scopes: user, project, both/);
+  assert.doesNotMatch(notifications[0].message, /user-helper/);
+  assert.doesNotMatch(notifications[0].message, /Searched:/);
+}));
+
+test('/subagents without an argument lists user-scope agents and searched directories', async () => withTempAgentDir(async ({ temp, agentDir }) => {
+  const project = join(temp, 'project');
+  const projectAgentDir = join(project, '.pi');
+  await mkdir(join(projectAgentDir, 'agents'), { recursive: true });
+  await writeAgent(agentDir, {
+    name: 'user-helper',
+    description: 'User helper agent',
+    systemPrompt: 'You are helpful.',
+  });
+  await writeAgent(projectAgentDir, {
+    name: 'project-helper',
+    description: 'Project helper agent',
+    systemPrompt: 'You are project helpful.',
+  });
+
+  const { commands } = registerExtension();
+  const { ctx, notifications } = createCommandContext(project);
+  await commands.get('subagents').handler('   ', ctx);
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, 'info');
+  assert.match(notifications[0].message, /user-helper \(user\) — User helper agent/);
+  assert.match(notifications[0].message, /Searched:/);
+  assert.match(notifications[0].message, new RegExp(`${agentDir}/agents`));
+  assert.doesNotMatch(notifications[0].message, /project-helper/);
+  assert.doesNotMatch(notifications[0].message, new RegExp(`${projectAgentDir}/agents`));
+}));
+
+test('/subagents user, project, and both use the requested discovery scope', async () => withTempAgentDir(async ({ temp, agentDir }) => {
+  const project = join(temp, 'project');
+  const projectAgentDir = join(project, '.pi');
+  await mkdir(join(projectAgentDir, 'agents'), { recursive: true });
+  await writeAgent(agentDir, {
+    name: 'user-helper',
+    description: 'User helper agent',
+    systemPrompt: 'You are helpful.',
+  });
+  await writeAgent(projectAgentDir, {
+    name: 'project-helper',
+    description: 'Project helper agent',
+    systemPrompt: 'You are project helpful.',
+  });
+
+  const { commands } = registerExtension();
+
+  const userRun = createCommandContext(project);
+  await commands.get('subagents').handler('user', userRun.ctx);
+  assert.match(userRun.notifications[0].message, /user-helper \(user\) — User helper agent/);
+  assert.match(userRun.notifications[0].message, new RegExp(`${agentDir}/agents`));
+  assert.doesNotMatch(userRun.notifications[0].message, /project-helper/);
+
+  const projectRun = createCommandContext(project);
+  await commands.get('subagents').handler('project', projectRun.ctx);
+  assert.match(projectRun.notifications[0].message, /project-helper \(project\) — Project helper agent/);
+  assert.match(projectRun.notifications[0].message, new RegExp(`${projectAgentDir}/agents`));
+  assert.doesNotMatch(projectRun.notifications[0].message, /user-helper/);
+
+  const bothRun = createCommandContext(project);
+  await commands.get('subagents').handler('both', bothRun.ctx);
+  assert.match(bothRun.notifications[0].message, /user-helper \(user\) — User helper agent/);
+  assert.match(bothRun.notifications[0].message, /project-helper \(project\) — Project helper agent/);
+  assert.match(bothRun.notifications[0].message, new RegExp(`${agentDir}/agents`));
+  assert.match(bothRun.notifications[0].message, new RegExp(`${projectAgentDir}/agents`));
+}));
+
 test('subagent tool schema requires tasks with per-task prompt and optional agentScope only', () => {
   const { tools } = registerExtension();
   const tool = tools.get('subagent');
@@ -236,6 +335,27 @@ test('one-item tasks array is the single delegation path and details use prompt'
   assert.equal('exitCode' in run, false);
   assert.equal('task' in run, false);
 });
+
+test('unknown agent errors include summarized available agents', async () => withTempAgentDir(async ({ temp, agentDir }) => {
+  await writeAgent(agentDir, {
+    name: 'known-helper',
+    description: 'Known helper agent',
+    systemPrompt: 'You are known.',
+  });
+
+  const { tools } = registerExtension();
+  const result = await tools.get('subagent').execute(
+    'call-1',
+    { tasks: [{ agent: 'missing-agent', prompt: 'inspect' }] },
+    undefined,
+    undefined,
+    { cwd: temp },
+  );
+
+  assert.equal(result.isError, true);
+  assert.match(result.details.runs[0].error, /Unknown agent: missing-agent/);
+  assert.match(result.details.runs[0].error, /Available agents:\nknown-helper \(user\) — Known helper agent/);
+}));
 
 test('unknown agents synthesize failures without blocking other scheduled runs', async () => {
   const { tools } = registerExtension();

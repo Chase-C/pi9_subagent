@@ -108,7 +108,7 @@ async function runAgent(options: {
 }): Promise<SubagentRun> {
   const agent = options.agents.find((candidate) => candidate.name === options.agentName);
   if (!agent) {
-    const error = `Unknown agent: ${options.agentName}. Available agents: ${options.agents.map((a) => a.name).join(", ") || "none"}`;
+    const error = `Unknown agent: ${options.agentName}. Available agents:\n${summarizeAgents(options.agents) || "none"}`;
     return {
       agent: options.agentName,
       prompt: options.prompt,
@@ -235,16 +235,37 @@ function renderRuns(runs: SubagentRun[]) {
     .join("\n\n");
 }
 
+function parseAgentScopeArgument(args: string): AgentScope | undefined {
+  switch (args.trim()) {
+    case "":
+      return "user";
+    case "user":
+      return "user";
+    case "project":
+      return "project";
+    case "both":
+      return "both";
+    default:
+      return undefined;
+  }
+}
+
+function renderAgentDiscovery(agents: AgentConfig[], searched: string[]) {
+  return `${agents.length} subagent(s) found\n\n${summarizeAgents(agents) || "No agents found."}\n\nSearched:\n${searched.join("\n")}`;
+}
+
 export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerCommand("subagents", {
     description: "List available subagents",
     handler: async (args, ctx) => {
-      const scope = (args.trim() as AgentScope) || "user";
+      const scope = parseAgentScopeArgument(args);
+      if (!scope) {
+        ctx.ui.notify(`Invalid subagent scope: ${args.trim()}\n\nValid scopes: user, project, both`, "warning");
+        return;
+      }
+
       const { agents, searched } = discoverAgents(ctx.cwd, scope);
-      ctx.ui.notify(
-        `${agents.length} subagent(s) found\n\n${summarizeAgents(agents) || "No agents found."}\n\nSearched:\n${searched.join("\n")}`,
-        agents.length ? "info" : "warning",
-      );
+      ctx.ui.notify(renderAgentDiscovery(agents, searched), agents.length ? "info" : "warning");
     },
   });
 
