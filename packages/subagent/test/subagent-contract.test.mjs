@@ -98,6 +98,39 @@ function createEchoModelRegistry(onContext) {
   return modelRegistry;
 }
 
+function createErrorModelRegistry() {
+  const authStorage = AuthStorage.inMemory({ 'test-provider': { type: 'api_key', key: 'test-key' } });
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  registerTestProvider(modelRegistry, {
+    id: 'failing',
+    name: 'Failing',
+    streamSimple(model) {
+      const stream = createAssistantMessageEventStream();
+      const partial = (contentText, errorMessage) => ({
+        role: 'assistant',
+        content: contentText === undefined ? [] : [{ type: 'text', text: contentText }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: usage(),
+        stopReason: 'error',
+        errorMessage,
+        timestamp: Date.now(),
+      });
+      const text = 'partial before failure';
+      const message = partial(text, 'provider exploded');
+      queueMicrotask(() => {
+        stream.push({ type: 'start', partial: partial() });
+        stream.push({ type: 'text_start', contentIndex: 0, partial: partial('') });
+        stream.push({ type: 'text_delta', contentIndex: 0, delta: text, partial: message });
+        stream.push({ type: 'error', reason: 'error', error: message });
+      });
+      return stream;
+    },
+  });
+  return modelRegistry;
+}
+
 function createDelayedModelRegistry(delayMs = 25) {
   const authStorage = AuthStorage.inMemory({ 'test-provider': { type: 'api_key', key: 'test-key' } });
   const modelRegistry = ModelRegistry.inMemory(authStorage);
@@ -437,6 +470,32 @@ test('final task content includes full output while live updates stay truncated'
   assert.ok(updates.some((text) => text.includes('line 6')), 'live progress should include the first six output lines');
   assert.ok(updates.every((text) => !text.includes('line 7')), 'live progress should omit output after six lines');
   assert.ok(updates.every((text) => !text.includes('line 8')), 'live progress should omit output after six lines');
+}));
+
+test('model error assistant messages are reported as failed runs with partial output', async () => withTempAgentDir(async ({ temp, agentDir }) => {
+  await writeAgent(agentDir, {
+    name: 'failing',
+    description: 'Failing test agent',
+    model: 'test-provider/failing',
+    systemPrompt: 'You are the failing agent.',
+  });
+
+  const { tools } = registerExtension();
+  const result = await tools.get('subagent').execute(
+    'call-1',
+    { tasks: [{ agent: 'failing', prompt: 'trigger provider failure' }] },
+    undefined,
+    undefined,
+    { cwd: temp, modelRegistry: createErrorModelRegistry() },
+  );
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.runs[0].status, 'failed');
+  assert.equal(result.details.runs[0].output, 'partial before failure');
+  assert.match(result.details.runs[0].error, /provider exploded/);
+  assert.match(result.content[0].text, /## failing — failed/);
+  assert.match(result.content[0].text, /partial before failure/);
+  assert.match(result.content[0].text, /provider exploded/);
 }));
 
 test('failed task final content includes partial streamed output and the error reason', async () => withTempAgentDir(async ({ temp, agentDir }) => {

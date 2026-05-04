@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import type { Model } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { StringEnum } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -96,6 +96,16 @@ function clearSessionListeners(session: AgentSession | undefined) {
   if (clearable?._eventListeners) clearable._eventListeners = [];
 }
 
+function finalAssistantFailure(session: AgentSession) {
+  const lastAssistant = session.messages
+    .slice()
+    .reverse()
+    .find((message): message is AssistantMessage => message.role === "assistant");
+
+  if (lastAssistant?.stopReason !== "error" && lastAssistant?.stopReason !== "aborted") return undefined;
+  return lastAssistant.errorMessage?.trim() || `Agent session ended with stopReason "${lastAssistant.stopReason}".`;
+}
+
 async function runAgent(options: {
   rootCwd: string;
   agents: AgentConfig[];
@@ -173,7 +183,18 @@ async function runAgent(options: {
     await waitForSessionIdle(session);
     if (options.signal?.aborted) throw new Error("Parent request aborted.");
 
-    run.output = session.getLastAssistantText() ?? "";
+    const finalOutput = session.getLastAssistantText();
+    if (finalOutput !== undefined) run.output = finalOutput;
+
+    const assistantFailure = finalAssistantFailure(session);
+    if (assistantFailure) {
+      run.status = "failed";
+      run.error = assistantFailure;
+      run.output ||= run.error;
+      options.onUpdate?.(run);
+      return run;
+    }
+
     run.status = "success";
     options.onUpdate?.(run);
     return run;
