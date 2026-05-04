@@ -76,9 +76,24 @@ function resolveAgentModel(modelRegistry: ModelRegistry | undefined, modelSpec: 
   throw new Error(`Agent model ${modelSpec} was not found.`);
 }
 
-function disposeSession(session: AgentSession | undefined) {
-  const disposable = session as (AgentSession & { dispose?: () => void | Promise<void> }) | undefined;
-  return Promise.resolve(disposable?.dispose?.());
+async function waitForSessionIdle(session: AgentSession | undefined) {
+  const queuedSession = session as unknown as { _agentEventQueue?: Promise<unknown> } | undefined;
+  while (queuedSession?._agentEventQueue) {
+    const queued = queuedSession._agentEventQueue;
+    await queued.catch(() => undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (queuedSession._agentEventQueue === queued) return;
+  }
+}
+
+function disconnectSessionFromAgent(session: AgentSession | undefined) {
+  const disconnectable = session as unknown as { _disconnectFromAgent?: () => void } | undefined;
+  disconnectable?._disconnectFromAgent?.();
+}
+
+function clearSessionListeners(session: AgentSession | undefined) {
+  const clearable = session as unknown as { _eventListeners?: unknown[] } | undefined;
+  if (clearable?._eventListeners) clearable._eventListeners = [];
 }
 
 async function runAgent(options: {
@@ -155,6 +170,7 @@ async function runAgent(options: {
     });
 
     await session.prompt(options.prompt, { source: "extension" });
+    await waitForSessionIdle(session);
     if (options.signal?.aborted) throw new Error("Parent request aborted.");
 
     run.output = session.getLastAssistantText() ?? "";
@@ -171,7 +187,9 @@ async function runAgent(options: {
   } finally {
     options.signal?.removeEventListener("abort", abort);
     unsubscribe?.();
-    await disposeSession(session);
+    disconnectSessionFromAgent(session);
+    await waitForSessionIdle(session);
+    clearSessionListeners(session);
   }
 }
 
@@ -209,8 +227,10 @@ function summarizeRuns(runs: SubagentRun[]) {
 function renderRuns(runs: SubagentRun[]) {
   return runs
     .map((run) => {
-      const output = run.output.trim() || run.error?.trim() || "(no output)";
-      return `## ${run.agent} — ${run.status}\n\n${output}`;
+      const output = run.output.trim();
+      const error = run.error?.trim();
+      const text = output && error && !output.includes(error) ? `${output}\n\n${error}` : output || error || "(no output)";
+      return `## ${run.agent} — ${run.status}\n\n${text}`;
     })
     .join("\n\n");
 }

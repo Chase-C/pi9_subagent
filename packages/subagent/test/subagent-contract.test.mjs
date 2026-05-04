@@ -319,6 +319,36 @@ test('final task content includes full output while live updates stay truncated'
   assert.ok(updates.every((text) => !text.includes('line 8')), 'live progress should omit output after six lines');
 }));
 
+test('failed task final content includes partial streamed output and the error reason', async () => withTempAgentDir(async ({ temp, agentDir }) => {
+  await writeAgent(agentDir, {
+    name: 'delayed',
+    description: 'Delayed test agent',
+    model: 'test-provider/delayed',
+    systemPrompt: 'You are the delayed agent.',
+  });
+
+  const controller = new AbortController();
+  const { tools } = registerExtension();
+  const { modelRegistry } = createDelayedModelRegistry();
+  const result = await tools.get('subagent').execute(
+    'call-1',
+    { tasks: [{ agent: 'delayed', prompt: 'task 1' }] },
+    controller.signal,
+    (update) => {
+      if (update.content[0].text.includes('done: task 1')) controller.abort();
+    },
+    { cwd: temp, modelRegistry },
+  );
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.runs[0].status, 'failed');
+  assert.match(result.details.runs[0].output, /done: task 1/);
+  assert.match(result.details.runs[0].error, /aborted/i);
+  assert.match(result.content[0].text, /## delayed — failed/);
+  assert.match(result.content[0].text, /done: task 1/);
+  assert.match(result.content[0].text, /aborted/i);
+}));
+
 test('batch execution preserves input order while running at most three sessions concurrently', async () => withTempAgentDir(async ({ temp, agentDir }) => {
   await writeAgent(agentDir, {
     name: 'delayed',
