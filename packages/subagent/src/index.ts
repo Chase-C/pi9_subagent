@@ -1,10 +1,15 @@
-import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
-import type { Message } from "@mariozechner/pi-ai";
+import { isAbsolute, resolve } from "node:path";
+import type { Model } from "@mariozechner/pi-ai";
 import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  getAgentDir,
+  SessionManager,
+  type AgentSession,
+  type ExtensionAPI,
+  type ModelRegistry,
+} from "@mariozechner/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, summarizeAgents } from "./agents.js";
 
@@ -33,8 +38,7 @@ interface SubagentRun {
   prompt: string;
   status: RunStatus;
   output: string;
-  stderr: string;
-  exitCode?: number;
+  error?: string;
   model?: string;
 }
 
@@ -43,40 +47,44 @@ interface SubagentDetails {
   runs: SubagentRun[];
 }
 
-function finalAssistantText(messages: Message[]) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message.role !== "assistant") continue;
-    for (const part of message.content) {
-      if (part.type === "text") return part.text;
-    }
-  }
-  return "";
+function resolveChildCwd(rootCwd: string, cwd?: string) {
+  if (!cwd) return rootCwd;
+  return isAbsolute(cwd) ? cwd : resolve(rootCwd, cwd);
 }
 
-function piInvocation(args: string[]) {
-  const currentScript = process.argv[1];
-  const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-  if (currentScript && !isBunVirtualScript) {
-    return { command: process.execPath, args: [currentScript, ...args] };
+function resolveAgentModel(modelRegistry: ModelRegistry | undefined, modelSpec: string | undefined): Model<any> | undefined {
+  if (!modelSpec) return undefined;
+  if (!modelRegistry) throw new Error(`Agent specifies model ${modelSpec}, but no model registry is available.`);
+
+  const slash = modelSpec.indexOf("/");
+  if (slash !== -1) {
+    const provider = modelSpec.slice(0, slash);
+    const modelId = modelSpec.slice(slash + 1);
+    if (!provider || !modelId) throw new Error(`Invalid agent model ${modelSpec}. Use provider/model or a bare model id.`);
+
+    const model = modelRegistry.find(provider, modelId);
+    if (!model) throw new Error(`Agent model ${modelSpec} was not found.`);
+    return model;
   }
 
-  const execName = basename(process.execPath).toLowerCase();
-  if (!/^(node|bun)(\.exe)?$/.test(execName)) return { command: process.execPath, args };
-  return { command: "pi", args };
+  const matches = modelRegistry.getAll().filter((model) => model.id === modelSpec);
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    const candidates = matches.map((model) => `${model.provider}/${model.id}`).join(", ");
+    throw new Error(`Agent model ${modelSpec} is ambiguous. Use one of: ${candidates}`);
+  }
+  throw new Error(`Agent model ${modelSpec} was not found.`);
 }
 
-async function writeSystemPrompt(agent: AgentConfig) {
-  if (!agent.systemPrompt) return undefined;
-  const dir = await mkdtemp(join(tmpdir(), "pi-subagent-"));
-  const file = join(dir, `${agent.name.replace(/[^a-z0-9_.-]/gi, "_")}-system.md`);
-  await writeFile(file, agent.systemPrompt, { mode: 0o600 });
-  return { dir, file };
+function disposeSession(session: AgentSession | undefined) {
+  const disposable = session as (AgentSession & { dispose?: () => void | Promise<void> }) | undefined;
+  return Promise.resolve(disposable?.dispose?.());
 }
 
 async function runAgent(options: {
   rootCwd: string;
   agents: AgentConfig[];
+  modelRegistry: ModelRegistry | undefined;
   agentName: string;
   prompt: string;
   cwd?: string;
@@ -85,13 +93,13 @@ async function runAgent(options: {
 }): Promise<SubagentRun> {
   const agent = options.agents.find((candidate) => candidate.name === options.agentName);
   if (!agent) {
+    const error = `Unknown agent: ${options.agentName}. Available agents: ${options.agents.map((a) => a.name).join(", ") || "none"}`;
     return {
       agent: options.agentName,
       prompt: options.prompt,
       status: "failed",
-      output: `Unknown agent: ${options.agentName}. Available agents: ${options.agents.map((a) => a.name).join(", ") || "none"}`,
-      stderr: "",
-      exitCode: 1,
+      output: error,
+      error,
     };
   }
 
@@ -100,75 +108,70 @@ async function runAgent(options: {
     prompt: options.prompt,
     status: "running",
     output: "",
-    stderr: "",
     model: agent.model,
   };
   options.onUpdate?.(run);
 
-  let promptFile: Awaited<ReturnType<typeof writeSystemPrompt>>;
+  let session: AgentSession | undefined;
+  let unsubscribe: (() => void) | undefined;
+  let aborting = false;
+  const abort = () => {
+    aborting = true;
+    void session?.abort().catch(() => undefined);
+  };
+
+  options.signal?.addEventListener("abort", abort, { once: true });
+
   try {
-    const args = ["--mode", "json", "-p", "--no-session"];
-    if (agent.model) args.push("--model", agent.model);
-    if (agent.tools?.length) args.push("--tools", agent.tools.join(","));
+    if (options.signal?.aborted) throw new Error("Parent request aborted.");
 
-    promptFile = await writeSystemPrompt(agent);
-    if (promptFile) args.push("--append-system-prompt", promptFile.file);
-    args.push(options.prompt);
+    const childCwd = resolveChildCwd(options.rootCwd, options.cwd);
+    const model = resolveAgentModel(options.modelRegistry, agent.model);
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: childCwd,
+      agentDir: getAgentDir(),
+      appendSystemPromptOverride: (base) => (agent.systemPrompt ? [...base, agent.systemPrompt] : base),
+    });
+    await resourceLoader.reload();
 
-    const invocation = piInvocation(args);
-    const messages: Message[] = [];
+    const result = await createAgentSession({
+      cwd: childCwd,
+      resourceLoader,
+      modelRegistry: options.modelRegistry,
+      model,
+      tools: agent.tools?.length ? agent.tools : undefined,
+      sessionManager: SessionManager.inMemory(childCwd),
+    });
+    session = result.session;
 
-    const exitCode = await new Promise<number>((resolve) => {
-      const child = spawn(invocation.command, invocation.args, {
-        cwd: options.cwd ?? options.rootCwd,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+    if (options.signal?.aborted) throw new Error("Parent request aborted.");
 
-      let stdoutBuffer = "";
-      const consumeLine = (line: string) => {
-        if (!line.trim()) return;
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "message_end" && event.message) {
-            messages.push(event.message as Message);
-            run.output = finalAssistantText(messages);
-            options.onUpdate?.(run);
-          }
-        } catch {
-          // JSON mode writes one event per line; ignore non-JSON noise defensively.
-        }
-      };
-
-      child.stdout.on("data", (data) => {
-        stdoutBuffer += data.toString();
-        const lines = stdoutBuffer.split("\n");
-        stdoutBuffer = lines.pop() ?? "";
-        for (const line of lines) consumeLine(line);
-      });
-      child.stderr.on("data", (data) => {
-        run.stderr += data.toString();
-      });
-      child.on("error", () => resolve(1));
-      child.on("close", (code) => {
-        if (stdoutBuffer.trim()) consumeLine(stdoutBuffer);
-        resolve(code ?? 0);
-      });
-
-      const abort = () => {
-        child.kill("SIGTERM");
-        setTimeout(() => child.kill("SIGKILL"), 5000).unref();
-      };
-      if (options.signal?.aborted) abort();
-      else options.signal?.addEventListener("abort", abort, { once: true });
+    unsubscribe = session.subscribe((event) => {
+      if (event.type !== "message_update") return;
+      const update = event.assistantMessageEvent;
+      if (update.type !== "text_delta") return;
+      run.output += update.delta;
+      options.onUpdate?.(run);
     });
 
-    run.exitCode = exitCode;
-    run.output ||= finalAssistantText(messages) || run.stderr.trim() || "(no output)";
-    run.status = exitCode === 0 ? "success" : "failed";
+    await session.prompt(options.prompt, { source: "extension" });
+    if (options.signal?.aborted) throw new Error("Parent request aborted.");
+
+    run.output = session.getLastAssistantText() ?? "";
+    run.status = "success";
+    options.onUpdate?.(run);
+    return run;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    run.status = "failed";
+    run.error = aborting && !message.toLowerCase().includes("abort") ? `Aborted: ${message}` : message;
+    run.output ||= run.error;
     options.onUpdate?.(run);
     return run;
   } finally {
-    if (promptFile) await rm(promptFile.dir, { recursive: true, force: true });
+    options.signal?.removeEventListener("abort", abort);
+    unsubscribe?.();
+    await disposeSession(session);
   }
 }
 
@@ -243,13 +246,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
       }
 
       const tasks = params.tasks;
-      const liveRuns: SubagentRun[] = tasks.map((task) => ({ agent: task.agent, prompt: task.prompt, status: "running", output: "", stderr: "" }));
+      const liveRuns: SubagentRun[] = tasks.map((task) => ({ agent: task.agent, prompt: task.prompt, status: "running", output: "" }));
       const emit = () => onUpdate?.({ content: [{ type: "text", text: summarizeRuns(liveRuns) }], details: { mode, runs: liveRuns } });
 
       const runs = await mapLimited(tasks, MAX_CONCURRENCY, async (task, index) => {
         const run = await runAgent({
           rootCwd: ctx.cwd,
           agents: discovery.agents,
+          modelRegistry: ctx.modelRegistry,
           agentName: task.agent,
           prompt: task.prompt,
           cwd: task.cwd,
