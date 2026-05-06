@@ -9,7 +9,8 @@
   "keywords": ["pi-package", "pi", "subagent"],
   "scripts": {
     "build": "tsc --build",
-    "clean": "tsc --build --clean"
+    "clean": "tsc --build --clean",
+    "test": "npm run build && node --test test/*.mjs"
   },
   "pi": {
     "extensions": ["./dist/index.js"],
@@ -19,11 +20,13 @@
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
     "typebox": "*"
   },
   "devDependencies": {
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
     "typebox": "*"
   }
 }

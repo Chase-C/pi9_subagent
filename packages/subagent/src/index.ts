@@ -1,350 +1,195 @@
-import { isAbsolute, resolve } from "node:path";
-import type { AssistantMessage, Model } from "@mariozechner/pi-ai";
-import { StringEnum } from "@mariozechner/pi-ai";
+import { defineTool, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+
+import { AgentManager, AgentOptions } from "./agent-manager.js";
+import { AgentRegistry } from "./agent-registry.js";
+import { SubagentParams } from "./schema.js";
 import {
-  createAgentSession,
-  DefaultResourceLoader,
-  getAgentDir,
-  SessionManager,
-  type AgentSession,
-  type ExtensionAPI,
-  type ModelRegistry,
-} from "@mariozechner/pi-coding-agent";
-import { Type, type Static } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents, summarizeAgents } from "./agents.js";
+  createSubagentTextComponent,
+  formatSubagentToolLines,
+  formatWidgetLines,
+  type SubagentSessionDto,
+} from "./subagent-ui.js";
 
-const MAX_TASKS = 6;
-const MAX_CONCURRENCY = 3;
+const MAX_TASKS = 8;
 
-const TaskSchema = Type.Object({
-  agent: Type.String({ description: "Agent name from ~/.pi/agent/agents or .pi/agents" }),
-  prompt: Type.String({ description: "Concrete prompt to delegate" }),
-  cwd: Type.Optional(Type.String({ description: "Working directory for this subagent" })),
-});
-
-const SubagentParams = Type.Object({
-  tasks: Type.Array(TaskSchema, { description: "Tasks to run" }),
-  agentScope: Type.Optional(StringEnum(["user", "project", "both"] as const, {
-    description: "Agent discovery scope. Default: user.",
-  })),
-});
-
-type SubagentParams = Static<typeof SubagentParams>;
-
-type RunStatus = "running" | "success" | "failed";
-
-interface SubagentRun {
-  agent: string;
-  prompt: string;
-  status: RunStatus;
-  output: string;
-  error?: string;
-  model?: string;
-}
-
-interface SubagentDetails {
-  mode: "tasks";
-  runs: SubagentRun[];
-}
-
-function resolveChildCwd(rootCwd: string, cwd?: string) {
-  if (!cwd) return rootCwd;
-  return isAbsolute(cwd) ? cwd : resolve(rootCwd, cwd);
-}
-
-function resolveAgentModel(modelRegistry: ModelRegistry | undefined, modelSpec: string | undefined): Model<any> | undefined {
-  if (!modelSpec) return undefined;
-  if (!modelRegistry) throw new Error(`Agent specifies model ${modelSpec}, but no model registry is available.`);
-
-  const slash = modelSpec.indexOf("/");
-  if (slash !== -1) {
-    const provider = modelSpec.slice(0, slash);
-    const modelId = modelSpec.slice(slash + 1);
-    if (!provider || !modelId) throw new Error(`Invalid agent model ${modelSpec}. Use provider/model or a bare model id.`);
-
-    const model = modelRegistry.find(provider, modelId);
-    if (!model) throw new Error(`Agent model ${modelSpec} was not found.`);
-    return model;
-  }
-
-  const matches = modelRegistry.getAll().filter((model) => model.id === modelSpec);
-  if (matches.length === 1) return matches[0];
-  if (matches.length > 1) {
-    const candidates = matches.map((model) => `${model.provider}/${model.id}`).join(", ");
-    throw new Error(`Agent model ${modelSpec} is ambiguous. Use one of: ${candidates}`);
-  }
-  throw new Error(`Agent model ${modelSpec} was not found.`);
-}
-
-async function waitForSessionIdle(session: AgentSession | undefined) {
-  const queuedSession = session as unknown as { _agentEventQueue?: Promise<unknown> } | undefined;
-  while (queuedSession?._agentEventQueue) {
-    const queued = queuedSession._agentEventQueue;
-    await queued.catch(() => undefined);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    if (queuedSession._agentEventQueue === queued) return;
-  }
-}
-
-function disconnectSessionFromAgent(session: AgentSession | undefined) {
-  const disconnectable = session as unknown as { _disconnectFromAgent?: () => void } | undefined;
-  disconnectable?._disconnectFromAgent?.();
-}
-
-function clearSessionListeners(session: AgentSession | undefined) {
-  const clearable = session as unknown as { _eventListeners?: unknown[] } | undefined;
-  if (clearable?._eventListeners) clearable._eventListeners = [];
-}
-
-function finalAssistantFailure(session: AgentSession) {
-  const lastAssistant = session.messages
-    .slice()
-    .reverse()
-    .find((message): message is AssistantMessage => message.role === "assistant");
-
-  if (lastAssistant?.stopReason !== "error" && lastAssistant?.stopReason !== "aborted") return undefined;
-  return lastAssistant.errorMessage?.trim() || `Agent session ended with stopReason "${lastAssistant.stopReason}".`;
-}
-
-async function runAgent(options: {
-  rootCwd: string;
-  agents: AgentConfig[];
-  modelRegistry: ModelRegistry | undefined;
-  agentName: string;
-  prompt: string;
-  cwd?: string;
-  signal?: AbortSignal;
-  onUpdate?: (run: SubagentRun) => void;
-}): Promise<SubagentRun> {
-  const agent = options.agents.find((candidate) => candidate.name === options.agentName);
-  if (!agent) {
-    const error = `Unknown agent: ${options.agentName}. Available agents:\n${summarizeAgents(options.agents) || "none"}`;
-    return {
-      agent: options.agentName,
-      prompt: options.prompt,
-      status: "failed",
-      output: error,
-      error,
-    };
-  }
-
-  const run: SubagentRun = {
-    agent: agent.name,
-    prompt: options.prompt,
-    status: "running",
-    output: "",
-    model: agent.model,
-  };
-  options.onUpdate?.(run);
-
-  let session: AgentSession | undefined;
-  let unsubscribe: (() => void) | undefined;
-  let aborting = false;
-  const abort = () => {
-    aborting = true;
-    void session?.abort().catch(() => undefined);
-  };
-
-  options.signal?.addEventListener("abort", abort, { once: true });
-
-  try {
-    if (options.signal?.aborted) throw new Error("Parent request aborted.");
-
-    const childCwd = resolveChildCwd(options.rootCwd, options.cwd);
-    const model = resolveAgentModel(options.modelRegistry, agent.model);
-    const resourceLoader = new DefaultResourceLoader({
-      cwd: childCwd,
-      agentDir: getAgentDir(),
-      appendSystemPromptOverride: (base) => (agent.systemPrompt ? [...base, agent.systemPrompt] : base),
-    });
-    await resourceLoader.reload();
-
-    const result = await createAgentSession({
-      cwd: childCwd,
-      resourceLoader,
-      modelRegistry: options.modelRegistry,
-      model,
-      tools: agent.tools?.length ? agent.tools : undefined,
-      sessionManager: SessionManager.inMemory(childCwd),
-    });
-    session = result.session;
-
-    if (options.signal?.aborted) throw new Error("Parent request aborted.");
-
-    unsubscribe = session.subscribe((event) => {
-      if (event.type !== "message_update") return;
-      const update = event.assistantMessageEvent;
-      if (update.type !== "text_delta") return;
-      run.output += update.delta;
-      options.onUpdate?.(run);
-    });
-
-    await session.prompt(options.prompt, { source: "extension" });
-    await waitForSessionIdle(session);
-    if (options.signal?.aborted) throw new Error("Parent request aborted.");
-
-    const finalOutput = session.getLastAssistantText();
-    if (finalOutput !== undefined) run.output = finalOutput;
-
-    const assistantFailure = finalAssistantFailure(session);
-    if (assistantFailure) {
-      run.status = "failed";
-      run.error = assistantFailure;
-      run.output ||= run.error;
-      options.onUpdate?.(run);
-      return run;
-    }
-
-    run.status = "success";
-    options.onUpdate?.(run);
-    return run;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    run.status = "failed";
-    run.error = aborting && !message.toLowerCase().includes("abort") ? `Aborted: ${message}` : message;
-    run.output ||= run.error;
-    options.onUpdate?.(run);
-    return run;
-  } finally {
-    options.signal?.removeEventListener("abort", abort);
-    unsubscribe?.();
-    disconnectSessionFromAgent(session);
-    await waitForSessionIdle(session);
-    clearSessionListeners(session);
-  }
-}
-
-async function mapLimited<T, R>(items: T[], concurrency: number, fn: (item: T, index: number) => Promise<R>) {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-      while (next < items.length) {
-        const index = next++;
-        results[index] = await fn(items[index], index);
-      }
-    }),
-  );
-  return results;
+interface SubagentExtensionDependencies {
+  agentRegistry?: AgentRegistry;
+  agentManager?: AgentManager;
 }
 
 function validateTasks(tasks: SubagentParams["tasks"] | undefined) {
-  if (!Array.isArray(tasks)) return "Provide a tasks array.";
+  if (!Array.isArray(tasks)) return "Provide a tasks array for action=start.";
   if (tasks.length === 0) return "Provide at least one task.";
   if (tasks.length > MAX_TASKS) return `Too many tasks (${tasks.length}). Max is ${MAX_TASKS}.`;
   return undefined;
 }
 
-function summarizeRuns(runs: SubagentRun[]) {
-  return runs
-    .map((run) => {
-      const icon = run.status === "success" ? "✓" : run.status === "failed" ? "✗" : "…";
-      const preview = run.output.trim().split("\n").slice(0, 6).join("\n");
-      return `${icon} ${run.agent}: ${preview || "(no output)"}`;
-    })
-    .join("\n\n");
+function validateString(value: unknown, name: string) {
+  if (typeof value !== "string" || value.trim() === "") return `Provide a non-empty ${name}.`;
+  return undefined;
 }
 
-function renderRuns(runs: SubagentRun[]) {
-  return runs
-    .map((run) => {
-      const output = run.output.trim();
-      const error = run.error?.trim();
-      const text = output && error && !output.includes(error) ? `${output}\n\n${error}` : output || error || "(no output)";
-      return `## ${run.agent} — ${run.status}\n\n${text}`;
-    })
-    .join("\n\n");
+function listAgentDefinitions(agentRegistry: AgentRegistry) {
+  return Array.from(agentRegistry.agents.values()).map(agent => ({
+    name: agent.name,
+    description: agent.description,
+    source: agent.source,
+    model: agent.model,
+    thinking: agent.thinking,
+    tools: agent.tools,
+    resumable: agent.resumable,
+  }));
 }
 
-function parseAgentScopeArgument(args: string): AgentScope | undefined {
-  switch (args.trim()) {
-    case "":
-      return "user";
-    case "user":
-      return "user";
-    case "project":
-      return "project";
-    case "both":
-      return "both";
-    default:
-      return undefined;
+function toolResult(details: Record<string, unknown>, isError = false) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }],
+    details,
+    isError,
+  };
+}
+
+function errorResult(message: string, details: Record<string, unknown> = { }) {
+  return {
+    content: [{ type: "text" as const, text: message }],
+    details,
+    isError: true,
+  };
+}
+
+function partialToolResult(sessions: SubagentSessionDto[], active: boolean) {
+  const details = { sessions, active };
+  return {
+    content: [{ type: "text" as const, text: formatSubagentToolLines(details, true).join("\n") }],
+    details,
+  };
+}
+
+function updateSubagentWidget(ctx: ExtensionContext, sessions: SubagentSessionDto[]) {
+  if (!ctx.hasUI || !ctx.ui?.setWidget) return;
+  try {
+    const lines = formatWidgetLines(sessions);
+    ctx.ui.setWidget("subagent", lines.length > 0 ? lines : undefined, { placement: "belowEditor" });
+  } catch (error) {
+    try {
+      ctx.ui.notify(`Subagent UI update failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    } catch { }
   }
 }
 
-function renderAgentDiscovery(agents: AgentConfig[], searched: string[]) {
-  return `${agents.length} subagent(s) found\n\n${summarizeAgents(agents) || "No agents found."}\n\nSearched:\n${searched.join("\n")}`;
-}
+export default function subagentExtension(pi: ExtensionAPI, dependencies: SubagentExtensionDependencies = {}) {
+  const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
+  const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
 
-export default function subagentExtension(pi: ExtensionAPI) {
-  pi.registerCommand("subagents", {
-    description: "List available subagents",
-    handler: async (args, ctx) => {
-      const scope = parseAgentScopeArgument(args);
-      if (!scope) {
-        ctx.ui.notify(`Invalid subagent scope: ${args.trim()}\n\nValid scopes: user, project, both`, "warning");
-        return;
-      }
-
-      const { agents, searched } = discoverAgents(ctx.cwd, scope);
-      ctx.ui.notify(renderAgentDiscovery(agents, searched), agents.length ? "info" : "warning");
-    },
-  });
-
-  pi.registerTool({
+  pi.registerTool(defineTool({
     name: "subagent",
     label: "Subagent",
-    description: "Delegate work to isolated pi subagents. Supports task-array delegation.",
-    promptSnippet: "Delegate focused tasks to isolated pi subagents with separate context windows",
+    description: `Delegate focused work to specialized subagents running in isolated context windows.
+
+Use this tool when a task benefits from separation from the main conversation: code research, planning, design review, bug investigation, test analysis, or a focused implementation handoff. Each subagent receives only its configured system prompt plus the prompt you provide, so prompts must be self-contained.
+
+Inputs:
+- action: one of "list", "start", "resume", or "clear".
+- action="list": list configured agent definitions by default. Pass type="sessions" to list retained resumable subagent sessions instead of definitions.
+- action="start": run one to eight independent delegations. Each task requires an agent name and prompt, and can include cwd to run from a different directory relative to the current project.
+- action="resume": send a follow-up prompt to a completed resumable subagent session by sessionId.
+- action="clear": release one retained resumable session by sessionId, or all retained sessions when sessionId is omitted.
+
+Prompt guidance:
+- Name the exact objective, relevant files/directories, constraints, and expected output format.
+- Include enough context for the subagent to work without reading the parent conversation.
+- Prefer one writer task at a time. Parallel tasks should be independent and should not edit the same files unless the user explicitly requested that workflow.
+
+Execution notes:
+- Up to four start tasks run concurrently; final results preserve input order.
+- start and resume are blocking and return structured results when the child prompt completes.
+- start returns sessionId only for agents whose definition has resumable: true and whose initial prompt completed successfully.
+- Resumable sessions live for the current Pi process lifetime or until cleared.
+- Unknown agents and failed subagents are reported as failed runs and do not prevent other scheduled start tasks from completing.
+`, 
+    promptSnippet: "Delegate focused tasks to specialized subagents with separate context windows",
     promptGuidelines: [
-      "Use subagent for independent research, planning, review, or implementation tasks that benefit from isolated context.",
-      "Use subagent with one writer by default; avoid parallel file-writing tasks unless explicitly requested.",
+      "Use subagent for independent research, planning, review, or implementation tasks that would benefit from isolated context.",
     ],
     parameters: SubagentParams,
+    renderCall(args: any, theme: any) {
+      const action = typeof args?.action === "string" ? args.action : "pending";
+      const count = Array.isArray(args?.tasks) ? args.tasks.length : undefined;
+      const suffix = count ? ` · ${count} task${count === 1 ? "" : "s"}` : "";
+      const line = `subagent ${action}${suffix}`;
+      return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
+    },
+    renderResult(result: any, options: any, theme: any) {
+      return createSubagentTextComponent(result?.details, Boolean(options?.expanded), theme);
+    },
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const mode = "tasks";
-      const scope = params.agentScope ?? "user";
-      const discovery = discoverAgents(ctx.cwd, scope);
-      const availableAgents = summarizeAgents(discovery.agents) || "none";
-      const validationError = validateTasks(params.tasks);
+      await agentRegistry.reload(ctx.cwd);
 
-      if (validationError) {
-        return {
-          content: [{ type: "text", text: `${validationError}\n\nAvailable agents:\n${availableAgents}` }],
-          details: { mode, runs: [] } satisfies SubagentDetails,
-          isError: true,
-        };
+      if (!params.action) {
+        return errorResult(`Provide an action: "list", "start", "resume", or "clear".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
       }
 
-      const tasks = params.tasks;
-      const liveRuns: SubagentRun[] = tasks.map((task) => ({ agent: task.agent, prompt: task.prompt, status: "running", output: "" }));
-      const emit = () => onUpdate?.({ content: [{ type: "text", text: summarizeRuns(liveRuns) }], details: { mode, runs: liveRuns } });
+      if (params.action === "list") {
+        const type = params.type ?? "agents";
+        if (type === "agents") {
+          const agents = listAgentDefinitions(agentRegistry);
+          return toolResult({ agents });
+        }
+        if (type === "sessions") {
+          const sessions = agentManager.sessions;
+          return toolResult({ sessions });
+        }
+        return errorResult('For action=list, type must be "agents" or "sessions".');
+      }
 
-      const runs = await mapLimited(tasks, MAX_CONCURRENCY, async (task, index) => {
-        const run = await runAgent({
-          rootCwd: ctx.cwd,
-          agents: discovery.agents,
-          modelRegistry: ctx.modelRegistry,
-          agentName: task.agent,
-          prompt: task.prompt,
-          cwd: task.cwd,
-          signal,
-          onUpdate: (partial) => {
-            liveRuns[index] = partial;
-            emit();
-          },
+      if (params.action === "start") {
+        const validationError = validateTasks(params.tasks);
+
+        if (validationError) {
+          return errorResult(`${validationError}\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
+        }
+
+        const options = params.tasks as Array<AgentOptions>;
+        let lastSessions: SubagentSessionDto[] = [];
+        const results = await agentManager.spawn(pi, ctx, signal, options, update => {
+          lastSessions = update.sessions;
+          onUpdate?.(partialToolResult(update.sessions, update.active));
+          updateSubagentWidget(ctx, update.sessions);
         });
-        liveRuns[index] = run;
-        emit();
-        return run;
-      });
+        updateSubagentWidget(ctx, agentManager.sessions);
+        const isError = results.some(result => result.status !== "completed");
+        return toolResult({ results, sessions: lastSessions.length > 0 ? lastSessions : agentManager.sessions }, isError);
+      }
 
-      const failed = runs.some((run) => run.status === "failed");
-      return {
-        content: [{ type: "text", text: renderRuns(runs) }],
-        details: { mode, runs } satisfies SubagentDetails,
-        isError: failed || undefined,
-      };
+      if (params.action === "resume") {
+        const sessionIdError = validateString(params.sessionId, "sessionId");
+        if (sessionIdError) return errorResult(sessionIdError);
+        const promptError = validateString(params.prompt, "prompt");
+        if (promptError) return errorResult(promptError);
+
+        try {
+          const result = await agentManager.resume(ctx, signal, params.sessionId!, params.prompt!);
+          return toolResult({ result }, result.status !== "completed");
+        } catch (error) {
+          return errorResult(error instanceof Error ? error.message : String(error), { sessionId: params.sessionId });
+        }
+      }
+
+      if (params.action === "clear") {
+        if (params.sessionId !== undefined && typeof params.sessionId !== "string") {
+          return errorResult("sessionId must be a string when provided.");
+        }
+
+        const result = agentManager.clear(params.sessionId);
+        if (params.sessionId && result.cleared === 0) {
+          return errorResult(`Unknown resumable subagent session: ${params.sessionId}`, result);
+        }
+        return toolResult(result);
+      }
+
+      return errorResult(`Unknown action: ${String(params.action)}. Use "list", "start", "resume", or "clear".`);
     },
-  });
+  }));
 }
