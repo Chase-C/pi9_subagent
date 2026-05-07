@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean",
-    "test": "npm run build && node --test test/*.mjs"
+    "test": "npm run build && node --test --test-timeout=5000 test/*.mjs"
   },
   "pi": {
     "extensions": ["./src/index.ts"],

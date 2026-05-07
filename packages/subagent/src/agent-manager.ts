@@ -188,6 +188,7 @@ export class AgentManager {
     signal: AbortSignal | undefined,
     sessionId: string,
     prompt: string,
+    onUpdate?: AgentManagerUpdateListener,
   ): Promise<AgentRunResult> {
     const agent = this._agents.find(a => a.id === sessionId && a.config.resumable);
     if (!agent) {
@@ -197,6 +198,7 @@ export class AgentManager {
       throw new Error(`Cannot resume subagent session ${sessionId} while it is ${agent.status.kind}.`);
     }
 
+    const unsubscribe = onUpdate ? this.subscribe(agent.groupId, onUpdate) : undefined;
     try {
       const { response } = await this._resumeAgent(ctx, agent, prompt, signal);
       return this._resultFromAgent(agent, prompt, response);
@@ -206,6 +208,9 @@ export class AgentManager {
       } catch { }
 
       return this._resultFromAgent(agent, prompt, undefined, error);
+    } finally {
+      this._flushPendingMessageUpdate(agent.groupId);
+      unsubscribe?.();
     }
   }
 

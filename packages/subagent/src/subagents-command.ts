@@ -4,9 +4,12 @@ import { type Component, type TUI } from "@mariozechner/pi-tui";
 import { AgentManager } from "./agent-manager.js";
 import {
   canClearSubagentSession,
+  canResumeSubagentSession,
+  createSubagentResumeMessage,
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
   formatSubagentToolLines,
+  formatWidgetLines,
   type SubagentSessionDto,
 } from "./subagent-ui.js";
 
@@ -14,6 +17,8 @@ function listManagedSessions(agentManager: AgentManager): SubagentSessionDto[] {
   const maybeManager = agentManager as AgentManager & { sessions?: SubagentSessionDto[]; listSessions?: () => SubagentSessionDto[] };
   return maybeManager.listSessions?.() ?? maybeManager.sessions ?? [];
 }
+
+type SubagentsCommandResult = { action: "resume"; sessionId: string; agent: string };
 
 type SubagentSessionsTheme = {
   fg?: (color: "accent" | "dim", text: string) => string;
@@ -29,7 +34,7 @@ class SubagentSessionsComponent implements Component {
     private readonly tui: Pick<TUI, "requestRender">,
     private readonly theme: SubagentSessionsTheme,
     private readonly notify: (message: string, level?: string) => void,
-    private readonly done: () => void,
+    private readonly done: (result?: SubagentsCommandResult) => void,
   ) { }
 
   invalidate(): void { }
@@ -44,9 +49,7 @@ class SubagentSessionsComponent implements Component {
       return [
         this.accent("Subagent Session"),
         ...formatSubagentSessionInspect(session).map(line => `  ${line}`),
-        this.dim(canClearSubagentSession(session)
-          ? "c clear · b back · esc close"
-          : "b back · esc close"),
+        this.dim(inspectHelp(session)),
       ];
     }
 
@@ -57,7 +60,7 @@ class SubagentSessionsComponent implements Component {
         const line = `${prefix}${formatSubagentSessionSummary(session)}`;
         return index === this.selected ? this.accent(line) : line;
       }),
-      this.dim("↑↓ select · enter inspect · c clear retained · esc close"),
+      this.dim(listHelp(sessions[this.selected])),
     ];
   }
 
@@ -76,6 +79,10 @@ class SubagentSessionsComponent implements Component {
       this.clearSelected();
       return;
     }
+    if (data === "r" || data === "R") {
+      this.resumeSelected();
+      return;
+    }
     if (isEnterKey(data) && sessions.length > 0) {
       this.mode = "inspect";
       this.tui.requestRender();
@@ -90,6 +97,16 @@ class SubagentSessionsComponent implements Component {
       this.selected = clamp(this.selected + 1, 0, Math.max(0, sessions.length - 1));
       this.tui.requestRender();
     }
+  }
+
+  private resumeSelected() {
+    const session = this.sessions[this.selected];
+    if (!session) return;
+    if (!canResumeSubagentSession(session)) {
+      this.notify(`Subagent session ${session.sessionId} is ${session.status} and cannot be resumed.`, "warning");
+      return;
+    }
+    this.done({ action: "resume", sessionId: session.sessionId, agent: session.agent });
   }
 
   private clearSelected() {
@@ -131,6 +148,21 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function listHelp(session: SubagentSessionDto | undefined) {
+  const actions = ["↑↓ select", "enter inspect"];
+  if (session && canResumeSubagentSession(session)) actions.push("r resume");
+  actions.push("c clear retained", "esc close");
+  return actions.join(" · ");
+}
+
+function inspectHelp(session: SubagentSessionDto) {
+  const actions = [];
+  if (canResumeSubagentSession(session)) actions.push("r resume");
+  if (canClearSubagentSession(session)) actions.push("c clear");
+  actions.push("b back", "esc close");
+  return actions.join(" · ");
+}
+
 function isEnterKey(data: string) {
   return data === "\r" || data === "\n";
 }
@@ -145,6 +177,110 @@ function isUpKey(data: string) {
 
 function isDownKey(data: string) {
   return data === "\x1b[B" || data === "j" || data === "J";
+}
+
+async function resumeSessionFromCommand(
+  pi: ExtensionAPI,
+  agentManager: AgentManager,
+  action: SubagentsCommandResult,
+  ctx: ExtensionCommandContext,
+) {
+  const prompt = await ctx.ui.editor(`Resume subagent ${action.agent}`, "");
+  if (typeof prompt !== "string" || prompt.trim() === "") {
+    ctx.ui.notify("Subagent resume cancelled: no follow-up prompt provided.", "info");
+    return;
+  }
+
+  const outcome = await ctx.ui.custom<{ result?: unknown; error?: unknown }>((tui, theme, _keybindings, done) => {
+    const loader = createResumeLoader(tui, theme, `Resuming subagent ${action.agent}...`);
+    let settled = false;
+    const finish = (value: { result?: unknown; error?: unknown }) => {
+      if (settled) return;
+      settled = true;
+      done(value);
+    };
+
+    agentManager.resume(ctx, loader.signal, action.sessionId, prompt, update => {
+      updateSubagentCommandWidget(ctx, update.sessions);
+    }).then(
+      result => finish({ result }),
+      error => finish({ error }),
+    );
+
+    return loader;
+  });
+
+  const result = normalizeResumeOutcome(action, prompt, outcome);
+  updateSubagentCommandWidget(ctx, listManagedSessions(agentManager));
+  pi.sendMessage?.(createSubagentResumeMessage(result), { deliverAs: "nextTurn" });
+  ctx.ui.notify(result.status === "completed"
+    ? `Subagent session ${action.sessionId} resumed.`
+    : `Subagent session ${action.sessionId} resume ${result.status}.`,
+    result.status === "completed" ? "info" : "warning");
+}
+
+function createResumeLoader(_tui: TUI, theme: SubagentSessionsTheme, message: string) {
+  return new SubagentResumeLoader(theme, message);
+}
+
+class SubagentResumeLoader implements Component {
+  private readonly controller = new AbortController();
+
+  constructor(private readonly theme: SubagentSessionsTheme, private readonly message: string) { }
+
+  get signal() { return this.controller.signal; }
+
+  invalidate(): void { }
+
+  render() { return [this.accent(this.message), this.dim("esc cancel")]; }
+
+  handleInput(data: string) {
+    if (isCancelKey(data)) this.controller.abort();
+  }
+
+  dispose(): void { }
+
+  private accent(text: string) {
+    return this.theme.fg?.("accent", text) ?? text;
+  }
+
+  private dim(text: string) {
+    return this.theme.fg?.("dim", text) ?? text;
+  }
+}
+
+function normalizeResumeOutcome(action: SubagentsCommandResult, prompt: string, outcome: { result?: unknown; error?: unknown }) {
+  if (outcome?.result && typeof outcome.result === "object") return outcome.result as {
+    agent: string;
+    prompt: string;
+    status: string;
+    output?: string;
+    error?: string;
+    sessionId?: string;
+    resumable?: boolean;
+  };
+
+  const error = outcome?.error instanceof Error ? outcome.error.message : String(outcome?.error ?? "Subagent resume failed.");
+  return {
+    agent: action.agent,
+    prompt,
+    status: "error",
+    error,
+    sessionId: action.sessionId,
+    resumable: true,
+  };
+}
+
+function updateSubagentCommandWidget(ctx: ExtensionCommandContext, sessions: SubagentSessionDto[]) {
+  if (!ctx.hasUI || !ctx.ui?.setWidget) return;
+  try {
+    const lines = formatWidgetLines(sessions);
+    ctx.ui.setWidget("subagent", lines.length > 0 ? lines : undefined, { placement: "belowEditor" });
+  } catch (error) {
+    try {
+      ctx.ui.notify(`Subagent UI update failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    } catch { }
+  }
 }
 
 export function registerSubagentsCommand(pi: ExtensionAPI, agentManager: AgentManager) {
@@ -162,15 +298,17 @@ export function registerSubagentsCommand(pi: ExtensionAPI, agentManager: AgentMa
         return;
       }
 
-      await ctx.ui.custom((tui, theme, _keybindings, done) => {
+      const action = await ctx.ui.custom<SubagentsCommandResult | undefined>((tui, theme, _keybindings, done) => {
         return new SubagentSessionsComponent(
           agentManager,
           tui,
           theme,
           (message, level) => ctx.ui.notify(message, level as any),
-          () => done(undefined),
+          result => done(result),
         );
       });
+
+      if (action?.action === "resume") await resumeSessionFromCommand(pi, agentManager, action, ctx);
     },
   });
 }

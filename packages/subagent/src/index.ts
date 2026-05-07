@@ -7,7 +7,9 @@ import { SubagentParams } from "./schema.js";
 import { registerSubagentsCommand } from "./subagents-command.js";
 import {
   createSubagentGroupDto,
+  createSubagentResumeMessage,
   createSubagentTextComponent,
+  formatSubagentResumeMessageContent,
   formatSubagentToolLines,
   formatWidgetLines,
   type SubagentGroupDto,
@@ -86,6 +88,12 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
 
   registerSubagentsCommand(pi, agentManager);
+  (pi as ExtensionAPI & { registerMessageRenderer?: ExtensionAPI["registerMessageRenderer"] }).registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
+    const content = typeof message.content === "string"
+      ? message.content
+      : formatSubagentResumeMessageContent(message.details as any);
+    return new Text(theme?.fg ? theme.fg("customMessageText", content) : content, 0, 0);
+  });
 
   pi.registerTool(defineTool({
     name: "subagent",
@@ -177,8 +185,16 @@ Execution notes:
         if (promptError) return errorResult(promptError);
 
         try {
-          const result = await agentManager.resume(ctx, signal, params.sessionId!, params.prompt!);
-          return toolResult({ result }, result.status !== "completed");
+          let lastGroup: SubagentGroupDto | undefined;
+          const result = await agentManager.resume(ctx, signal, params.sessionId!, params.prompt!, update => {
+            const group = update.group ?? createSubagentGroupDto(update.groupId ?? "subagent", Date.now(), update.sessions);
+            lastGroup = group;
+            onUpdate?.(partialToolResult(group, update.active));
+            updateSubagentWidget(ctx, update.sessions);
+          });
+          updateSubagentWidget(ctx, agentManager.sessions);
+          const message = createSubagentResumeMessage(result);
+          return toolResult({ result, group: lastGroup, sessions: lastGroup?.sessions ?? agentManager.sessions, message }, result.status !== "completed");
         } catch (error) {
           return errorResult(error instanceof Error ? error.message : String(error), { sessionId: params.sessionId });
         }

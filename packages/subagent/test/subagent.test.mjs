@@ -160,6 +160,136 @@ test('subagents command opens a sessions view from serialized DTOs', async () =>
   assert.doesNotMatch(text, /"config"/);
 });
 
+test('subagents command resumes completed retained session with editor loader and concise message', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const retainedSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
+    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
+    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
+    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
+    finalOutcome: { status: 'completed' },
+  };
+  const resumeCalls = [];
+  const fakeManager = {
+    sessions: [retainedSession],
+    listSessions() { return this.sessions; },
+    resume(_ctx, signal, sessionId, prompt) {
+      resumeCalls.push({ signal, sessionId, prompt });
+      return Promise.resolve({ agent: 'helper', prompt, status: 'completed', output: `Result ${'z'.repeat(1000)}`, sessionId, resumable: true });
+    },
+  };
+  const commands = new Map();
+  const sentMessages = [];
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+    registerMessageRenderer() {},
+    sendMessage: message => sentMessages.push(message),
+  }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager });
+
+  let customCalls = 0;
+  const editorCalls = [];
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  await commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget() {},
+      editor(title, prefill) {
+        editorCalls.push({ title, prefill });
+        return Promise.resolve('follow\nup');
+      },
+      custom(factory) {
+        customCalls += 1;
+        return new Promise(resolve => {
+          let resolved = false;
+          let component;
+          const done = value => {
+            resolved = true;
+            component?.dispose?.();
+            resolve(value);
+          };
+          component = factory({ requestRender() {} }, theme, {}, done);
+          if (customCalls === 1) {
+            component.handleInput('r');
+            setImmediate(() => { if (!resolved) resolve(undefined); });
+          }
+        });
+      },
+    },
+  });
+
+  assert.equal(customCalls, 2);
+  assert.equal(editorCalls[0].title, 'Resume subagent helper');
+  assert.deepEqual(resumeCalls.map(call => [call.sessionId, call.prompt]), [['s1', 'follow\nup']]);
+  assert.ok(resumeCalls[0].signal instanceof AbortSignal);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].customType, 'subagent-resume');
+  assert.match(sentMessages[0].content, /Subagent resume completed/);
+  assert.equal(sentMessages[0].content.includes('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'), false);
+  assert.equal(sentMessages[0].details.result.output.startsWith('Result z'), true);
+});
+
+test('subagents command resume cancellation aborts the child and reports interruption', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const retainedSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
+    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
+    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
+    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
+    finalOutcome: { status: 'completed' },
+  };
+  const fakeManager = {
+    sessions: [retainedSession],
+    listSessions() { return this.sessions; },
+    resume(_ctx, signal, sessionId, prompt) {
+      return new Promise(resolve => {
+        signal.addEventListener('abort', () => {
+          this.sessions = [{ ...retainedSession, status: 'interrupted', availableActions: ['inspect', 'clear'], errorSnippet: 'Agent interrupted.' }];
+          resolve({ agent: 'helper', prompt, status: 'interrupted', error: 'Agent interrupted.', sessionId, resumable: true });
+        }, { once: true });
+      });
+    },
+  };
+  const commands = new Map();
+  const sentMessages = [];
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+    registerMessageRenderer() {},
+    sendMessage: message => sentMessages.push(message),
+  }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager });
+
+  let customCalls = 0;
+  const notifications = [];
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  await commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify: (...args) => notifications.push(args),
+      setWidget() {},
+      editor() { return Promise.resolve('follow up'); },
+      custom(factory) {
+        customCalls += 1;
+        return new Promise(resolve => {
+          const component = factory({ requestRender() {} }, theme, {}, resolve);
+          if (customCalls === 1) component.handleInput('r');
+          if (customCalls === 2) component.handleInput('\x1b');
+        });
+      },
+    },
+  });
+
+  assert.equal(customCalls, 2);
+  assert.equal(sentMessages.length, 1);
+  assert.match(sentMessages[0].content, /Subagent resume interrupted/);
+  assert.match(sentMessages[0].content, /error: Agent interrupted/);
+  assert.equal(sentMessages[0].details.status, 'interrupted');
+  assert.match(notifications.at(-1)[0], /resume interrupted/);
+});
+
 test('subagents command inspect view shows metadata and clears retained session immediately', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const retainedSession = {
@@ -256,7 +386,7 @@ test('subagent tool lists retained sessions as serialized DTOs with clear action
   assert.equal(retained.model, 'test/model');
   assert.deepEqual(retained.tools, ['read']);
   assert.equal(retained.outputSnippet, 'The final answer from the child.');
-  assert.deepEqual(retained.availableActions, ['inspect', 'clear']);
+  assert.deepEqual(retained.availableActions, ['inspect', 'resume', 'clear']);
   assert.equal(Object.prototype.hasOwnProperty.call(retained, 'config'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(retained, 'run'), false);
 });
@@ -758,6 +888,48 @@ test('subagent DTO render helpers collapse groups and expand every child row', a
   assert.match(expanded[1], /tool:bash/);
   assert.match(expanded[2], /missing/);
   assert.match(expanded[2], /Unknown agent: missing/);
+});
+
+test('subagent resume message keeps context concise while preserving structured result details', async () => {
+  const { createSubagentResumeMessage } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const fullOutput = `done ${'x'.repeat(1500)} secret-tail`;
+  const message = createSubagentResumeMessage({
+    agent: 'helper',
+    prompt: `follow up ${'y'.repeat(300)} prompt-tail`,
+    status: 'completed',
+    output: fullOutput,
+    sessionId: 's1',
+    resumable: true,
+  });
+
+  assert.equal(message.customType, 'subagent-resume');
+  assert.equal(message.display, true);
+  assert.match(message.content, /Subagent resume completed/);
+  assert.match(message.content, /agent: helper/);
+  assert.match(message.content, /session: s1/);
+  assert.match(message.content, /prompt: follow up/);
+  assert.match(message.content, /output: done/);
+  assert.equal(message.content.includes('prompt-tail'), false);
+  assert.equal(message.content.includes('secret-tail'), false);
+  assert.ok(message.content.length < 700);
+  assert.equal(message.details.result.output, fullOutput);
+  assert.equal(message.details.promptPreview.includes('prompt-tail'), false);
+  assert.equal(message.details.outputSnippet.includes('secret-tail'), false);
+});
+
+test('subagent DTO helpers allow resume only for completed resumable sessions', async () => {
+  const { canResumeSubagentSession } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const base = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', resumable: true,
+    promptPreview: 'work', turns: 0, toolUses: 0, compactions: 0, createdAt: 1,
+    availableActions: ['inspect'],
+  };
+
+  assert.equal(canResumeSubagentSession({ ...base, status: 'completed', availableActions: ['inspect', 'resume', 'clear'] }), true);
+  for (const status of ['queued', 'running', 'error', 'aborted', 'interrupted', 'skipped']) {
+    assert.equal(canResumeSubagentSession({ ...base, status, availableActions: ['inspect'] }), false, status);
+  }
+  assert.equal(canResumeSubagentSession({ ...base, status: 'completed', resumable: false, availableActions: ['inspect', 'clear'] }), false);
 });
 
 test('subagent DTO render helpers show compact operational progress and auto-hide empty widgets', async () => {
