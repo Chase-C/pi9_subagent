@@ -1,33 +1,17 @@
 import type { Usage } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 
-import type { Agent } from "./agent.js";
+import type { Agent, AgentStatus } from "./agent.js";
 import type { AgentConfig } from "./agent-config.js";
+import type { AgentRegistry } from "./agent-registry.js";
 
 const PROMPT_PREVIEW_LENGTH = 120;
 const MESSAGE_SNIPPET_LENGTH = 200;
 const OUTPUT_SNIPPET_LENGTH = 200;
 const RESUME_MESSAGE_SNIPPET_LENGTH = 80;
 
-export interface SubagentFinalOutcomeDto {
-  status: "completed" | "error" | "aborted" | "skipped" | "interrupted";
-  message?: string;
-}
-
-export interface SubagentDefinitionDto {
-  name: string;
-  description: string;
-  source: "user" | "project";
-  model?: string;
-  thinking?: string;
-  tools?: string[];
-  resumable: boolean;
-  sourcePath?: string;
-}
-
-export interface SubagentSessionDto {
+interface AgentRow {
   id: string;
-  sessionId: string;
   groupId: string;
   agent: string;
   status: string;
@@ -49,24 +33,14 @@ export interface SubagentSessionDto {
   tools?: string[];
   usage?: Usage;
   inputIndex?: number;
-  finalOutcome?: SubagentFinalOutcomeDto;
-  availableActions: string[];
 }
 
-export interface SubagentGroupDto {
+interface AgentRowGroup {
   id: string;
   createdAt: number;
   statusCounts: Record<string, number>;
-  sessions: SubagentSessionDto[];
+  sessions: AgentRow[];
   isError: boolean;
-}
-
-export interface SubagentGroupUpdateDto {
-  groupId: string;
-  group: SubagentGroupDto;
-  sessions: SubagentSessionDto[];
-  active: boolean;
-  updatedAt: number;
 }
 
 export interface SubagentResumeMessageDetails {
@@ -86,36 +60,45 @@ export interface SubagentResumeMessage {
   details: SubagentResumeMessageDetails;
 }
 
-export function createSubagentGroupDto(
-  id: string,
-  createdAt: number,
-  sessions: SubagentSessionDto[],
-): SubagentGroupDto {
-  const statusCounts: Record<string, number> = {};
-  for (const session of sessions) {
-    statusCounts[session.status] = (statusCounts[session.status] ?? 0) + 1;
-  }
-
-  return {
-    id,
-    createdAt,
-    statusCounts,
-    sessions,
-    isError: sessions.some(session => !isActiveStatus(session.status) && session.status !== "completed"),
+export function serializeAgent(agent: Agent, inputIndex?: number): AgentRow {
+  const status = agent.status;
+  const row: AgentRow = {
+    id: agent.id,
+    groupId: agent.groupId,
+    agent: agent.options.agent,
+    status: status.kind,
+    resumable: isResumable(agent),
+    promptPreview: compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH),
+    messageSnippet: agent.message ? compact(agent.message, MESSAGE_SNIPPET_LENGTH) : undefined,
+    activeTool: agent.tool,
+    turns: agent.turns,
+    toolUses: agent.toolUses,
+    compactions: agent.compactions,
+    createdAt: agent.createdAt,
+    startedAt: getStartedAt(status),
+    completedAt: getCompletedAt(status),
+    outputSnippet: getOutputSnippet(status),
+    errorSnippet: getErrorSnippet(status),
+    source: agent.config.source,
+    model: agent.options.model ?? agent.config.model,
+    thinking: agent.options.thinking ?? agent.config.thinking,
+    tools: agent.config.tools,
+    usage: agent.totalUsage,
+    inputIndex,
   };
+  return row;
 }
 
-export function createSubagentErrorSessionDto(
+export function serializeUnknownAgentError(
   id: string,
   groupId: string,
   task: { agent: string; prompt: string; model?: string },
   error: string,
   createdAt: number,
   inputIndex?: number,
-): SubagentSessionDto {
+): AgentRow {
   return {
     id,
-    sessionId: id,
     groupId,
     agent: task.agent,
     status: "error",
@@ -129,63 +112,153 @@ export function createSubagentErrorSessionDto(
     model: task.model,
     inputIndex,
     errorSnippet: compact(error, OUTPUT_SNIPPET_LENGTH),
-    finalOutcome: { status: "error", message: error },
-    availableActions: ["inspect"],
   };
 }
 
-export function agentToSessionDto(agent: Agent): SubagentSessionDto {
-  const status = agent.status;
-  const dto: SubagentSessionDto = {
-    id: agent.id,
-    sessionId: agent.id,
-    groupId: agent.groupId,
-    agent: agent.options.agent,
-    status: status.kind,
-    resumable: Boolean(agent.config.resumable && (status.kind === "queued" || ("session" in status && status.session))),
-    promptPreview: compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH),
-    messageSnippet: agent.message ? compact(agent.message, MESSAGE_SNIPPET_LENGTH) : undefined,
-    activeTool: agent.tool,
-    turns: agent.turns,
-    toolUses: agent.toolUses,
-    compactions: agent.compactions,
-    createdAt: agent.createdAt,
-    source: agent.config.source,
-    model: agent.options.model ?? agent.config.model,
-    thinking: agent.options.thinking ?? agent.config.thinking,
-    tools: agent.config.tools,
-    usage: agent.totalUsage,
-    availableActions: ["inspect"],
-  };
-
-  if (status.kind === "completed" && dto.resumable) dto.availableActions.push("resume");
-  if (!isActiveStatus(status.kind) && dto.resumable) dto.availableActions.push("clear");
-
-  if ("startedAt" in status) dto.startedAt = status.startedAt;
-
-  if (status.kind === "completed") {
-    dto.completedAt = status.completedAt;
-    dto.outputSnippet = compact(status.response, OUTPUT_SNIPPET_LENGTH);
-    dto.finalOutcome = { status: "completed" };
-  } else if (status.kind === "error") {
-    dto.completedAt = status.errorAt;
-    dto.errorSnippet = compact(status.error, OUTPUT_SNIPPET_LENGTH);
-    dto.finalOutcome = { status: "error", message: status.error };
-  } else if (status.kind === "skipped") {
-    dto.completedAt = status.skippedAt;
-    dto.errorSnippet = "Agent skipped.";
-    dto.finalOutcome = { status: "skipped", message: "Agent skipped." };
-  } else if (status.kind === "interrupted") {
-    dto.completedAt = status.interruptedAt;
-    dto.errorSnippet = compact(status.error ?? "Agent interrupted.", OUTPUT_SNIPPET_LENGTH);
-    dto.finalOutcome = { status: "interrupted", message: status.error ?? "Agent interrupted." };
-  } else if (status.kind === "aborted") {
-    dto.completedAt = status.abortedAt;
-    dto.errorSnippet = "Agent aborted.";
-    dto.finalOutcome = { status: "aborted", message: "Agent aborted." };
+export function serializeGroup(
+  id: string,
+  createdAt: number,
+  sessions: AgentRow[],
+): AgentRowGroup {
+  const statusCounts: Record<string, number> = {};
+  for (const session of sessions) {
+    statusCounts[session.status] = (statusCounts[session.status] ?? 0) + 1;
   }
 
-  return dto;
+  return {
+    id,
+    createdAt,
+    statusCounts,
+    sessions,
+    isError: sessions.some(session => !isActiveStatusKind(session.status) && session.status !== "completed"),
+  };
+}
+
+export function serializeAgentConfig(config: AgentConfig) {
+  return {
+    name: config.name,
+    description: config.description,
+    source: config.source,
+    model: config.model,
+    thinking: config.thinking,
+    tools: config.tools,
+    resumable: config.resumable,
+    sourcePath: config.sourcePath,
+  };
+}
+
+export function activeOrRetainedAgents(agents: Agent[]): Agent[] {
+  return agents.filter(a => isActiveStatusKind(a.status.kind) || isResumable(a));
+}
+
+export function canResumeSubagentSession(agent: Agent): boolean {
+  return isResumable(agent) && agent.status.kind === "completed";
+}
+
+export function canClearSubagentSession(agent: Agent): boolean {
+  return isResumable(agent) && !isActiveStatusKind(agent.status.kind);
+}
+
+export function formatAgentConfigSummary(config: AgentConfig): string {
+  const badges = [config.source, config.resumable ? "resumable" : undefined].filter(Boolean);
+  return [config.name, ...badges, config.description].join(" · ");
+}
+
+export function formatAgentConfigInspect(config: AgentConfig): string[] {
+  const lines = [
+    `Name: ${config.name}`,
+    `Description: ${config.description}`,
+    `Source: ${config.source}`,
+    `Model: ${config.model ?? "default"}`,
+    `Thinking: ${config.thinking ?? "default"}`,
+    `Tools: ${config.tools?.length ? config.tools.join(", ") : "default"}`,
+    `Resumable: ${config.resumable}`,
+  ];
+  if (config.sourcePath) lines.push(`Path: ${config.sourcePath}`);
+  return lines;
+}
+
+export function formatSubagentSessionSummary(agent: Agent): string {
+  const badges = [
+    isResumable(agent) ? "resumable" : undefined,
+    `session:${agent.id}`,
+  ].filter(Boolean);
+  return [agent.options.agent, agent.status.kind, ...badges, `"${compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH)}"`].join(" · ");
+}
+
+export function formatSubagentSessionInspect(agent: Agent, now = Date.now()): string[] {
+  const status = agent.status;
+  const startedAt = getStartedAt(status);
+  const completedAt = getCompletedAt(status);
+  const elapsed = formatElapsed(startedAt ?? agent.createdAt, completedAt ?? now);
+  const resumable = isResumable(agent);
+  const model = agent.options.model ?? agent.config.model;
+  const thinking = agent.options.thinking ?? agent.config.thinking;
+
+  const lines = [
+    `Session ${agent.id}`,
+    `Status: ${status.kind}${resumable ? " · resumable" : ""}`,
+    `Agent: ${agent.options.agent} (${agent.config.source})`,
+  ];
+
+  if (model || thinking) {
+    lines.push(`Model: ${model ?? "default"}${thinking ? ` · thinking:${thinking}` : ""}`);
+  }
+  lines.push(`Tools: ${agent.config.tools?.length ? agent.config.tools.join(", ") : "default"}`);
+  lines.push(`Prompt: ${compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH)}`);
+  if (agent.tool) lines.push(`Active tool: ${agent.tool}`);
+  lines.push(`Progress: ${agent.turns} turn${agent.turns === 1 ? "" : "s"} · ${agent.toolUses} tool use${agent.toolUses === 1 ? "" : "s"} · ${agent.compactions} compaction${agent.compactions === 1 ? "" : "s"}`);
+  lines.push(`Usage: ${formatUsage(agent.totalUsage)}`);
+  lines.push(`Timestamps: created ${formatTimestamp(agent.createdAt)}${startedAt ? ` · started ${formatTimestamp(startedAt)}` : ""}${completedAt ? ` · completed ${formatTimestamp(completedAt)}` : ""} · elapsed ${elapsed}`);
+
+  const outputSnippet = getOutputSnippet(status);
+  const errorSnippet = getErrorSnippet(status);
+  if (outputSnippet) lines.push(`Output: ${outputSnippet}`);
+  if (errorSnippet) lines.push(`Error: ${errorSnippet}`);
+  if (agent.message) lines.push(`Message: ${compact(agent.message, MESSAGE_SNIPPET_LENGTH)}`);
+
+  const actions = ["inspect"];
+  if (canResumeSubagentSession(agent)) actions.push("resume");
+  if (canClearSubagentSession(agent)) actions.push("clear");
+  lines.push(`Actions: ${actions.join(", ")}`);
+  return lines;
+}
+
+export function formatSubagentSessionLine(agent: Agent, now = Date.now()): string {
+  const status = agent.status;
+  const startedAt = getStartedAt(status);
+  const completedAt = getCompletedAt(status);
+  const elapsed = formatElapsed(startedAt ?? agent.createdAt, completedAt ?? now);
+  const parts = [
+    agent.options.agent,
+    status.kind,
+    `${agent.turns} turn${agent.turns === 1 ? "" : "s"}`,
+    elapsed,
+  ];
+
+  if (agent.tool) parts.push(`tool:${agent.tool}`);
+  if (agent.message) parts.push(`"${compact(agent.message, MESSAGE_SNIPPET_LENGTH)}"`);
+
+  if (!isActiveStatusKind(status.kind)) {
+    if (status.kind === "completed") {
+      parts.push(`outcome:completed`);
+    } else {
+      const errorSnippet = getErrorSnippet(status);
+      parts.push(`outcome:${status.kind}:${errorSnippet ?? status.kind}`);
+    }
+  }
+
+  return parts.join(" · ");
+}
+
+export function formatWidgetLines(agents: Agent[], now = Date.now()): string[] {
+  const visible = activeOrRetainedAgents(agents);
+  if (visible.length === 0) return [];
+  if (visible.length === 1) return [formatSubagentSessionLine(visible[0], now)];
+
+  const active = visible.filter(a => isActiveStatusKind(a.status.kind)).length;
+  const retained = visible.length - active;
+  return [`Subagents: ${active} active · ${retained} retained`];
 }
 
 export function formatSubagentToolLines(
@@ -195,22 +268,21 @@ export function formatSubagentToolLines(
 ): string[] {
   const group = extractGroup(details);
   if (group) {
-    if (!expanded) return [formatSubagentGroupLine(group)];
-    return group.sessions.map(session => formatSubagentSessionLine(session, now));
+    if (!expanded) return [formatRowGroupLine(group)];
+    return group.sessions.map(row => formatRowSessionLine(row, now));
   }
 
   const sessions = extractSessions(details);
   if (sessions.length === 0) return ["No subagent sessions."];
 
   if (!expanded && sessions.length > 1) {
-    const group = createSubagentGroupDto("subagent", Date.now(), sessions);
-    return [formatSubagentGroupLine(group)];
+    return [formatRowGroupLine(serializeGroup("subagent", Date.now(), sessions))];
   }
 
-  return sessions.map(session => formatSubagentSessionLine(session, now));
+  return sessions.map(row => formatRowSessionLine(row, now));
 }
 
-export function formatSubagentGroupLine(group: SubagentGroupDto): string {
+function formatRowGroupLine(group: AgentRowGroup): string {
   const knownStatuses = ["queued", "running", "completed", "error", "interrupted", "skipped", "aborted"];
   const counts = knownStatuses
     .filter(status => group.statusCounts[status])
@@ -219,81 +291,32 @@ export function formatSubagentGroupLine(group: SubagentGroupDto): string {
     .filter(status => !knownStatuses.includes(status))
     .sort()
     .map(status => `${group.statusCounts[status]} ${status}`);
-  const active = group.sessions.some(session => isActiveStatus(session.status));
+  const active = group.sessions.some(session => isActiveStatusKind(session.status));
   const outcome = group.isError ? "error" : active ? "running" : "completed";
   return [`${group.sessions.length} subagents`, ...counts, ...extraCounts, `outcome:${outcome}`].join(" · ");
 }
 
-export function formatSubagentSessionSummary(session: SubagentSessionDto): string {
-  const badges = [
-    session.resumable ? "resumable" : undefined,
-    `session:${session.sessionId}`,
-  ].filter(Boolean);
-  return [session.agent, session.status, ...badges, `“${session.promptPreview}”`].join(" · ");
-}
-
-export function agentConfigToDefinitionDto(agent: AgentConfig): SubagentDefinitionDto {
-  return {
-    name: agent.name,
-    description: agent.description,
-    source: agent.source,
-    model: agent.model,
-    thinking: agent.thinking,
-    tools: agent.tools,
-    resumable: agent.resumable,
-    sourcePath: agent.sourcePath,
-  };
-}
-
-export function formatSubagentDefinitionSummary(agent: SubagentDefinitionDto): string {
-  const badges = [agent.source, agent.resumable ? "resumable" : undefined].filter(Boolean);
-  return [agent.name, ...badges, agent.description].join(" · ");
-}
-
-export function formatSubagentDefinitionInspect(agent: SubagentDefinitionDto): string[] {
-  const lines = [
-    `Name: ${agent.name}`,
-    `Description: ${agent.description}`,
-    `Source: ${agent.source}`,
-    `Model: ${agent.model ?? "default"}`,
-    `Thinking: ${agent.thinking ?? "default"}`,
-    `Tools: ${agent.tools?.length ? agent.tools.join(", ") : "default"}`,
-    `Resumable: ${agent.resumable}`,
-  ];
-  if (agent.sourcePath) lines.push(`Path: ${agent.sourcePath}`);
-  return lines;
-}
-
-export function formatSubagentSessionInspect(session: SubagentSessionDto, now = Date.now()): string[] {
-  const elapsed = formatElapsed((session.startedAt ?? session.createdAt), session.completedAt ?? now);
-  const lines = [
-    `Session ${session.sessionId}`,
-    `Status: ${session.status}${session.resumable ? " · resumable" : ""}`,
-    `Agent: ${session.agent}${session.source ? ` (${session.source})` : ""}`,
+function formatRowSessionLine(row: AgentRow, now: number): string {
+  const elapsed = formatElapsed((row.startedAt ?? row.createdAt), row.completedAt ?? now);
+  const parts = [
+    row.agent,
+    row.status,
+    `${row.turns} turn${row.turns === 1 ? "" : "s"}`,
+    elapsed,
   ];
 
-  if (session.model || session.thinking) {
-    lines.push(`Model: ${session.model ?? "default"}${session.thinking ? ` · thinking:${session.thinking}` : ""}`);
+  if (row.activeTool) parts.push(`tool:${row.activeTool}`);
+  if (row.messageSnippet) parts.push(`"${row.messageSnippet}"`);
+
+  if (!isActiveStatusKind(row.status)) {
+    if (row.status === "completed") {
+      parts.push(`outcome:completed`);
+    } else {
+      parts.push(`outcome:${row.status}:${row.errorSnippet ?? row.status}`);
+    }
   }
-  lines.push(`Tools: ${session.tools?.length ? session.tools.join(", ") : "default"}`);
-  lines.push(`Prompt: ${session.promptPreview}`);
-  if (session.activeTool) lines.push(`Active tool: ${session.activeTool}`);
-  lines.push(`Progress: ${session.turns} turn${session.turns === 1 ? "" : "s"} · ${session.toolUses} tool use${session.toolUses === 1 ? "" : "s"} · ${session.compactions} compaction${session.compactions === 1 ? "" : "s"}`);
-  if (session.usage) lines.push(`Usage: ${formatUsage(session.usage)}`);
-  lines.push(`Timestamps: created ${formatTimestamp(session.createdAt)}${session.startedAt ? ` · started ${formatTimestamp(session.startedAt)}` : ""}${session.completedAt ? ` · completed ${formatTimestamp(session.completedAt)}` : ""} · elapsed ${elapsed}`);
-  if (session.outputSnippet) lines.push(`Output: ${session.outputSnippet}`);
-  if (session.errorSnippet) lines.push(`Error: ${session.errorSnippet}`);
-  if (session.messageSnippet) lines.push(`Message: ${session.messageSnippet}`);
-  lines.push(`Actions: ${session.availableActions.length ? session.availableActions.join(", ") : "none"}`);
-  return lines;
-}
 
-export function canClearSubagentSession(session: SubagentSessionDto): boolean {
-  return session.availableActions.includes("clear") && !isActiveStatus(session.status);
-}
-
-export function canResumeSubagentSession(session: SubagentSessionDto): boolean {
-  return session.resumable && session.status === "completed" && session.availableActions.includes("resume");
+  return parts.join(" · ");
 }
 
 export function createSubagentResumeMessage(result: {
@@ -339,27 +362,6 @@ export function formatSubagentResumeMessageContent(details: SubagentResumeMessag
   return parts.join(" · ");
 }
 
-export function formatSubagentSessionLine(session: SubagentSessionDto, now = Date.now()): string {
-  const elapsed = formatElapsed((session.startedAt ?? session.createdAt), session.completedAt ?? now);
-  const parts = [
-    session.agent,
-    session.status,
-    `${session.turns} turn${session.turns === 1 ? "" : "s"}`,
-    elapsed,
-  ];
-
-  if (session.activeTool) parts.push(`tool:${session.activeTool}`);
-  if (session.messageSnippet) parts.push(`“${session.messageSnippet}”`);
-  if (session.finalOutcome) {
-    const outcome = session.finalOutcome.message
-      ? `${session.finalOutcome.status}:${session.finalOutcome.message}`
-      : session.finalOutcome.status;
-    parts.push(`outcome:${outcome}`);
-  }
-
-  return parts.join(" · ");
-}
-
 export function createSubagentTextComponent(
   details: unknown,
   expanded: boolean,
@@ -371,39 +373,56 @@ export function createSubagentTextComponent(
   return new Text(text, 0, 0);
 }
 
-export function activeOrRetainedSessions(sessions: SubagentSessionDto[]) {
-  return sessions.filter(session => isActiveStatus(session.status) || session.resumable);
+export function listAgentDefinitions(agentRegistry: AgentRegistry) {
+  return Array.from(agentRegistry.agents.values()).map(serializeAgentConfig);
 }
 
-export function formatWidgetLines(sessions: SubagentSessionDto[], now = Date.now()): string[] {
-  const visible = activeOrRetainedSessions(sessions);
-  if (visible.length === 0) return [];
-  if (visible.length === 1) return [formatSubagentSessionLine(visible[0], now)];
-
-  const active = visible.filter(session => isActiveStatus(session.status)).length;
-  const retained = visible.length - active;
-  return [`Subagents: ${active} active · ${retained} retained`];
+function isResumable(agent: Agent): boolean {
+  const status = agent.status;
+  return Boolean(agent.config.resumable && (status.kind === "queued" || ("session" in status && status.session)));
 }
 
-function extractGroup(details: unknown): SubagentGroupDto | undefined {
-  if (!details || typeof details !== "object") return undefined;
-  const record = details as { group?: unknown; groups?: unknown };
-  if (record.group && typeof record.group === "object") return record.group as SubagentGroupDto;
-  if (Array.isArray(record.groups) && record.groups[0] && typeof record.groups[0] === "object") {
-    return record.groups[0] as SubagentGroupDto;
-  }
+function getStartedAt(status: AgentStatus): number | undefined {
+  return "startedAt" in status ? status.startedAt : undefined;
+}
+
+function getCompletedAt(status: AgentStatus): number | undefined {
+  if (status.kind === "completed") return status.completedAt;
+  if (status.kind === "error") return status.errorAt;
+  if (status.kind === "skipped") return status.skippedAt;
+  if (status.kind === "interrupted") return status.interruptedAt;
+  if (status.kind === "aborted") return status.abortedAt;
   return undefined;
 }
 
-function extractSessions(details: unknown): SubagentSessionDto[] {
+function getOutputSnippet(status: AgentStatus): string | undefined {
+  if (status.kind === "completed") return compact(status.response, OUTPUT_SNIPPET_LENGTH);
+  return undefined;
+}
+
+function getErrorSnippet(status: AgentStatus): string | undefined {
+  if (status.kind === "error") return compact(status.error, OUTPUT_SNIPPET_LENGTH);
+  if (status.kind === "skipped") return "Agent skipped.";
+  if (status.kind === "interrupted") return compact(status.error ?? "Agent interrupted.", OUTPUT_SNIPPET_LENGTH);
+  if (status.kind === "aborted") return "Agent aborted.";
+  return undefined;
+}
+
+function extractGroup(details: unknown): AgentRowGroup | undefined {
+  if (!details || typeof details !== "object") return undefined;
+  const record = details as { group?: unknown };
+  if (record.group && typeof record.group === "object") return record.group as AgentRowGroup;
+  return undefined;
+}
+
+function extractSessions(details: unknown): AgentRow[] {
   if (!details || typeof details !== "object") return [];
-  const record = details as { sessions?: unknown; session?: unknown };
-  if (Array.isArray(record.sessions)) return record.sessions as SubagentSessionDto[];
-  if (record.session && typeof record.session === "object") return [record.session as SubagentSessionDto];
+  const record = details as { sessions?: unknown };
+  if (Array.isArray(record.sessions)) return record.sessions as AgentRow[];
   return [];
 }
 
-function isActiveStatus(status: string) {
+function isActiveStatusKind(status: string): boolean {
   return status === "queued" || status === "running";
 }
 

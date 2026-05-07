@@ -7,6 +7,18 @@ import { visibleWidth } from '@mariozechner/pi-tui';
 
 const unique = () => `${Date.now()}-${Math.random()}`;
 
+const ZERO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+
+function fakeAgent({ config: configOverrides, options: optionsOverrides, status: statusOverride, ...rest } = {}) {
+  const config = { name: 'helper', description: '', systemPrompt: '', source: 'project', resumable: false, ...configOverrides };
+  const options = { agent: config.name, prompt: 'Fix issue', ...optionsOverrides };
+  const baseStatus = statusOverride ?? { kind: 'completed', startedAt: 1, completedAt: 2, response: 'done' };
+  const status = ['running', 'completed', 'interrupted'].includes(baseStatus.kind) && !('session' in baseStatus)
+    ? { ...baseStatus, session: {} }
+    : baseStatus;
+  return { id: 's1', groupId: 'g1', message: '', tool: undefined, turns: 0, toolUses: 0, compactions: 0, totalUsage: ZERO_USAGE, createdAt: 1, ...rest, config, options, status };
+}
+
 test('subagent UI settings default to below editor when file is missing', async () => {
   const root = await mkdtemp(join(tmpdir(), 'subagent-settings-default-'));
   const { SubagentUiSettingsStore } = await import(`../dist/subagent-settings.js?t=${unique()}`);
@@ -62,7 +74,7 @@ test('agent transitions from queued to terminal states and rejects invalid trans
   const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
   const config = { name: 'agent', description: 'desc', systemPrompt: 'prompt', source: 'project' };
   const opts = { agent: 'agent', prompt: 'do work' };
-  const session = { abort() {} };
+  const session = { subscribe() { return () => {}; }, abort() {} };
 
   const running = new Agent('id', 'group', config, opts, () => {});
   assert.doesNotThrow(() => running.start(session));
@@ -190,13 +202,9 @@ test('tool resume action returns full output only once in JSON details', async (
 
 test('/subagents settings exposes placement values, saves changes, and updates active widget', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const runningSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
-    promptPreview: 'Fix issue', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
-  };
+  const runningSession = fakeAgent({ status: { kind: 'running', startedAt: 1 }, turns: 1 });
   const fakeManager = {
     sessions: [runningSession],
-    listSessions() { return this.sessions; },
   };
   let current = 'belowEditor';
   const saved = [];
@@ -239,13 +247,9 @@ test('/subagents settings exposes placement values, saves changes, and updates a
 
 test('/subagents settings persists the latest rapid placement change before command completion', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const runningSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
-    promptPreview: 'Fix issue', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
-  };
+  const runningSession = fakeAgent({ status: { kind: 'running', startedAt: 1 }, turns: 1 });
   const fakeManager = {
     sessions: [runningSession],
-    listSessions() { return this.sessions; },
   };
   let persisted = 'belowEditor';
   let releaseFirstSave;
@@ -298,6 +302,42 @@ test('/subagents settings persists the latest rapid placement change before comm
   assert.equal(persisted, 'off');
 });
 
+test('/subagents settings closes through injected cancel keybindings', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: { sessions: [] },
+    settingsStore: { async load() { return { settings: { widgetPlacement: 'belowEditor' } }; }, async save() {} },
+  });
+
+  let closed = false;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  await commands.get('subagents').handler('settings', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory) {
+        return new Promise(resolve => {
+          const keybindings = { matches: (data, id) => data === 'q' && id === 'tui.select.cancel' };
+          const component = factory({ requestRender() {} }, theme, keybindings, value => {
+            closed = true;
+            resolve(value);
+          });
+          component.handleInput('q');
+          setImmediate(() => { if (!closed) resolve(undefined); });
+        });
+      },
+    },
+  });
+
+  assert.equal(closed, true);
+});
+
 test('/subagents command no-ops without UI or notify instead of throwing', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeRegistry = {
@@ -307,7 +347,6 @@ test('/subagents command no-ops without UI or notify instead of throwing', async
   };
   const fakeManager = {
     sessions: [],
-    listSessions() { return this.sessions; },
   };
   const commands = new Map();
   subagentExtension({
@@ -330,7 +369,6 @@ test('/subagents command does not notify through UI when hasUI is false', async 
   };
   const fakeManager = {
     sessions: [],
-    listSessions() { return this.sessions; },
   };
   const commands = new Map();
   subagentExtension({
@@ -361,7 +399,6 @@ test('subagents command opens agents browser by default when sessions are empty'
   };
   const fakeManager = {
     sessions: [],
-    listSessions() { return this.sessions; },
   };
   const commands = new Map();
   subagentExtension({
@@ -409,6 +446,76 @@ test('subagents command opens agents browser by default when sessions are empty'
   assert.doesNotMatch(inspectText, /launch|start/i);
 });
 
+test('/subagents command closes agents and sessions menus on terminal escape sequences', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const theme = { fg: (_color, text) => text, bold: text => text };
+
+  const agentsCommands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => agentsCommands.set(name, command),
+  }, {
+    agentRegistry: {
+      agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project', resumable: false }]]),
+      async reload() {},
+      summarizeAgent() { return ''; },
+    },
+    agentManager: { sessions: [] },
+  });
+
+  let agentsClosed = false;
+  await agentsCommands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory) {
+        return new Promise(resolve => {
+          const component = factory({ requestRender() {} }, theme, {}, value => {
+            agentsClosed = true;
+            resolve(value);
+          });
+          component.handleInput('\x1b[27u');
+          setImmediate(() => { if (!agentsClosed) resolve(undefined); });
+        });
+      },
+    },
+  });
+
+  const sessionsCommands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => sessionsCommands.set(name, command),
+  }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: {
+      sessions: [fakeAgent({ status: { kind: 'completed', startedAt: 1, completedAt: 2, response: 'done' }, turns: 1 })],
+      },
+  });
+
+  let sessionsClosed = false;
+  await sessionsCommands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory) {
+        return new Promise(resolve => {
+          const component = factory({ requestRender() {} }, theme, {}, value => {
+            sessionsClosed = true;
+            resolve(value);
+          });
+          component.handleInput('\x1b[27u');
+          setImmediate(() => { if (!sessionsClosed) resolve(undefined); });
+        });
+      },
+    },
+  });
+
+  assert.equal(agentsClosed, true);
+  assert.equal(sessionsClosed, true);
+});
+
 test('/subagents command reports custom UI failure without throwing', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeRegistry = {
@@ -417,13 +524,7 @@ test('/subagents command reports custom UI failure without throwing', async () =
     summarizeAgent() { return ''; },
   };
   const fakeManager = {
-    sessions: [{
-      id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
-      promptPreview: 'Fix issue', turns: 1, toolUses: 0, compactions: 0,
-      createdAt: 1, startedAt: 1, completedAt: 2,
-      availableActions: ['inspect', 'clear'], finalOutcome: { status: 'completed' },
-    }],
-    listSessions() { return this.sessions; },
+    sessions: [fakeAgent({ config: { name: 'helper', resumable: true, source: 'project' }, status: { kind: 'completed', startedAt: 1, completedAt: 2, response: 'done' }, turns: 1 })],
   };
   const commands = new Map();
   subagentExtension({
@@ -453,16 +554,10 @@ test('subagents command opens a sessions view from serialized DTOs', async () =>
     summarizeAgent() { return ''; },
   };
   const fakeManager = {
-    sessions: [
-      {
-        id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
-        promptPreview: 'Fix issue by updating the API', turns: 3, toolUses: 2, compactions: 1,
-        createdAt: 1_000, startedAt: 2_000, completedAt: 5_000, source: 'project', model: 'test/model', thinking: 'low',
-        tools: ['read', 'bash'], outputSnippet: 'Implemented the fix.', availableActions: ['inspect', 'clear'],
-        finalOutcome: { status: 'completed' },
-      },
-    ],
-    listSessions() { return this.sessions; },
+    sessions: [fakeAgent({
+      config: { resumable: true },
+      options: { prompt: 'Fix issue by updating the API' },
+    })],
   };
   const commands = new Map();
 
@@ -520,7 +615,6 @@ test('/subagents agents view constrains long rendered rows to the TUI width', as
   };
   const fakeManager = {
     sessions: [],
-    listSessions() { return this.sessions; },
   };
   const commands = new Map();
   subagentExtension({
@@ -559,25 +653,12 @@ test('/subagents sessions view constrains long rendered rows to the TUI width', 
     summarizeAgent() { return ''; },
   };
   const fakeManager = {
-    sessions: [
-      {
-        id: 's1',
-        sessionId: '123e4567-e89b-12d3-a456-426614174000',
-        groupId: 'g1',
-        agent: 'explorer',
-        status: 'running',
-        resumable: false,
-        promptPreview: `Investigate the rendering crash caused by an extremely long prompt preview ${'x'.repeat(180)}`,
-        outputSnippet: `Detailed output with long diagnostic context ${'o'.repeat(180)}`,
-        turns: 12,
-        toolUses: 4,
-        compactions: 0,
-        createdAt: 1_000,
-        startedAt: 2_000,
-        availableActions: ['inspect'],
-      },
-    ],
-    listSessions() { return this.sessions; },
+    sessions: [fakeAgent({
+      config: { name: 'explorer' },
+      options: { prompt: `Investigate the rendering crash caused by an extremely long prompt preview ${'x'.repeat(180)}` },
+      status: { kind: 'running', startedAt: 1 },
+      turns: 12,
+    })],
   };
   const commands = new Map();
   subagentExtension({
@@ -614,16 +695,8 @@ test('/subagents sessions view constrains long rendered rows to the TUI width', 
 
 test('/subagents command handles resume when editor UI is unavailable', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const retainedSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
-    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
-    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
-    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
-    finalOutcome: { status: 'completed' },
-  };
   const fakeManager = {
-    sessions: [retainedSession],
-    listSessions() { return this.sessions; },
+    sessions: [fakeAgent({ config: { resumable: true } })],
     resume() { throw new Error('resume should not start'); },
   };
   const commands = new Map();
@@ -652,17 +725,9 @@ test('/subagents command handles resume when editor UI is unavailable', async ()
 
 test('/subagents command handles resume when editor UI throws', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const retainedSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
-    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
-    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
-    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
-    finalOutcome: { status: 'completed' },
-  };
   let resumeCalls = 0;
   const fakeManager = {
-    sessions: [retainedSession],
-    listSessions() { return this.sessions; },
+    sessions: [fakeAgent({ config: { resumable: true } })],
     resume() { resumeCalls += 1; throw new Error('resume should not start'); },
   };
   const commands = new Map();
@@ -697,16 +762,8 @@ test('subagents command resume loader constrains long rendered lines to the TUI 
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const width = 50;
   const longAgent = `helper-${'z'.repeat(120)}`;
-  const retainedSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: longAgent, status: 'completed', resumable: true,
-    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
-    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
-    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
-    finalOutcome: { status: 'completed' },
-  };
   const fakeManager = {
-    sessions: [retainedSession],
-    listSessions() { return this.sessions; },
+    sessions: [fakeAgent({ config: { name: longAgent, resumable: true } })],
     resume(_ctx, _signal, sessionId, prompt) {
       return Promise.resolve({ agent: longAgent, prompt, status: 'completed', output: 'done', sessionId, resumable: true });
     },
@@ -758,17 +815,9 @@ test('subagents command resume loader constrains long rendered lines to the TUI 
 
 test('subagents command resumes completed retained session with editor loader and visible concise message', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const retainedSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
-    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
-    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
-    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
-    finalOutcome: { status: 'completed' },
-  };
   const resumeCalls = [];
   const fakeManager = {
-    sessions: [retainedSession],
-    listSessions() { return this.sessions; },
+    sessions: [fakeAgent({ config: { resumable: true } })],
     resume(_ctx, signal, sessionId, prompt) {
       resumeCalls.push({ signal, sessionId, prompt });
       return Promise.resolve({ agent: 'helper', prompt, status: 'completed', output: `Result ${'z'.repeat(1000)}`, sessionId, resumable: true });
@@ -831,20 +880,11 @@ test('subagents command resumes completed retained session with editor loader an
 
 test('subagents command resume cancellation aborts the child and reports interruption', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const retainedSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
-    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
-    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
-    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
-    finalOutcome: { status: 'completed' },
-  };
   const fakeManager = {
-    sessions: [retainedSession],
-    listSessions() { return this.sessions; },
+    sessions: [fakeAgent({ config: { resumable: true } })],
     resume(_ctx, signal, sessionId, prompt) {
       return new Promise(resolve => {
         signal.addEventListener('abort', () => {
-          this.sessions = [{ ...retainedSession, status: 'interrupted', availableActions: ['inspect', 'clear'], errorSnippet: 'Agent interrupted.' }];
           resolve({ agent: 'helper', prompt, status: 'interrupted', error: 'Agent interrupted.', sessionId, resumable: true });
         }, { once: true });
       });
@@ -874,7 +914,7 @@ test('subagents command resume cancellation aborts the child and reports interru
         return new Promise(resolve => {
           const component = factory({ requestRender() {} }, theme, {}, resolve);
           if (customCalls === 1) component.handleInput('r');
-          if (customCalls === 2) component.handleInput('\x1b');
+          if (customCalls === 2) component.handleInput('\x1b[27u');
         });
       },
     },
@@ -890,21 +930,19 @@ test('subagents command resume cancellation aborts the child and reports interru
 
 test('subagents command inspect view shows metadata and clears retained session immediately', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const retainedSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
-    promptPreview: 'Fix retained context', turns: 3, toolUses: 2, compactions: 1,
-    createdAt: 1_000, startedAt: 2_000, completedAt: 5_000, source: 'project', model: 'test/model', thinking: 'low',
-    tools: ['read', 'bash'], usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 } },
-    outputSnippet: 'Implemented the retained-session fix.', availableActions: ['inspect', 'clear'],
-    finalOutcome: { status: 'completed' },
-  };
+  const retainedSession = fakeAgent({
+    config: { resumable: true, tools: ['read', 'bash'] },
+    options: { prompt: 'Fix retained context', model: 'test/model', thinking: 'low' },
+    status: { kind: 'completed', startedAt: 2_000, completedAt: 5_000, response: 'Implemented the retained-session fix.' },
+    turns: 3, toolUses: 2, compactions: 1, createdAt: 1_000,
+    totalUsage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 } },
+  });
   const clearCalls = [];
   const fakeManager = {
     sessions: [retainedSession],
-    listSessions() { return this.sessions; },
     clear(sessionId) {
       clearCalls.push(sessionId);
-      this.sessions = this.sessions.filter(session => session.sessionId !== sessionId);
+      this.sessions = this.sessions.filter(session => session.id !== sessionId);
       return { cleared: 1, sessionId };
     },
   };
@@ -939,7 +977,7 @@ test('subagents command inspect view shows metadata and clears retained session 
   assert.match(inspectText, /Progress: 3 turns · 2 tool uses · 1 compaction/);
   assert.match(inspectText, /Usage: 3 tokens · \$0\.0100/);
   assert.match(inspectText, /Output: Implemented the retained-session fix/);
-  assert.match(inspectText, /Actions: inspect, clear/);
+  assert.match(inspectText, /Actions: inspect, resume, clear/);
   assert.deepEqual(clearCalls, ['s1']);
   assert.deepEqual(fakeManager.sessions, []);
   assert.match(notifications.at(-1)[0], /Cleared subagent session s1/);
@@ -984,21 +1022,9 @@ test('subagent tool lists retained sessions as serialized DTOs with clear action
   assert.equal(retained.model, 'test/model');
   assert.deepEqual(retained.tools, ['read']);
   assert.equal(retained.outputSnippet, 'The final answer from the child.');
-  assert.deepEqual(retained.availableActions, ['inspect', 'resume', 'clear']);
+  assert.equal(Object.prototype.hasOwnProperty.call(retained, 'availableActions'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(retained, 'config'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(retained, 'run'), false);
-});
-
-test('subagent tool call renderer falls back to simple text when themed rendering fails', async () => {
-  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  let registeredTool;
-  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
-
-  let component;
-  assert.doesNotThrow(() => {
-    component = registeredTool.renderCall({ action: 'start', tasks: [{ agent: 'helper', prompt: 'work' }] }, { fg() { throw new Error('theme failed'); } });
-  });
-  assert.match(component.render(80).join('\n'), /subagent start · 1 task/);
 });
 
 test('subagent tool result renderer falls back to simple text when themed rendering fails', async () => {
@@ -1054,7 +1080,7 @@ test('manager returns ordered per-run output and reports unknown agents and chil
     ['bad', { name: 'bad', description: 'd', systemPrompt: 's', source: 'project' }],
   ]) };
   const manager = new AgentManager(registry, 2, runner);
-  const results = await manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { agent: 'good', prompt: 'one', model: 'm1' },
     { agent: 'missing', prompt: 'two' },
     { agent: 'bad', prompt: 'three' },
@@ -1082,7 +1108,7 @@ test('manager marks runner rejections before start as terminal error in grouped 
   const manager = new AgentManager(registry, 1, runner);
   const updates = [];
 
-  const results = await manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { agent: 'helper', prompt: 'work' },
   ], update => updates.push(update));
 
@@ -1090,12 +1116,11 @@ test('manager marks runner rejections before start as terminal error in grouped 
   assert.match(results[0].error, /setup failed before start/);
   const final = updates.at(-1);
   assert.equal(final.active, false);
-  assert.equal(final.group.isError, true);
-  assert.deepEqual(final.group.statusCounts, { error: 1 });
-  assert.equal(final.sessions[0].status, 'error');
-  assert.equal(final.sessions[0].finalOutcome.status, 'error');
-  assert.match(final.sessions[0].finalOutcome.message, /setup failed before start/);
-  assert.deepEqual(manager.listSessions(), []);
+  assert.equal(final.agents.length, 1);
+  assert.equal(final.errors.length, 0);
+  assert.equal(final.agents[0].agent.status.kind, 'error');
+  assert.match(final.agents[0].agent.status.error, /setup failed before start/);
+  assert.deepEqual(manager.sessions, []);
 });
 
 test('manager returns skipped result and final group row for queued task whose signal aborted before it can start', async () => {
@@ -1118,7 +1143,7 @@ test('manager returns skipped result and final group row for queued task whose s
   const controller = new AbortController();
   const updates = [];
 
-  const pending = manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
+  const pending = manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
     { agent: 'helper', prompt: 'one' },
     { agent: 'helper', prompt: 'two' },
   ], update => updates.push(update));
@@ -1132,12 +1157,9 @@ test('manager returns skipped result and final group row for queued task whose s
   assert.equal(results[0].status, 'completed');
   assert.equal(results[1].status, 'skipped');
   assert.equal(results[1].resumable, false);
-  const final = updates.at(-1).group;
-  assert.deepEqual(final.statusCounts, { completed: 1, skipped: 1 });
-  assert.equal(final.isError, true);
-  assert.deepEqual(final.sessions.map(session => session.status), ['completed', 'skipped']);
-  assert.equal(final.sessions[1].finalOutcome.status, 'skipped');
-  assert.deepEqual(manager.listSessions(), []);
+  const final = updates.at(-1);
+  assert.deepEqual(final.agents.map(({ agent }) => agent.status.kind), ['completed', 'skipped']);
+  assert.deepEqual(manager.sessions, []);
 });
 
 test('manager does not expose skipped resumable tasks as sessions', async () => {
@@ -1158,7 +1180,7 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
   const manager = new AgentManager(registry, 1, runner);
   const controller = new AbortController();
 
-  const pending = manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
+  const pending = manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
     { agent: 'blocker', prompt: 'one' },
     { agent: 'chatty', prompt: 'two' },
   ]);
@@ -1170,7 +1192,7 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
   assert.equal(results[1].status, 'skipped');
   assert.equal(results[1].resumable, false);
   assert.equal(Object.prototype.hasOwnProperty.call(results[1], 'sessionId'), false);
-  assert.deepEqual(manager.listSessions(), []);
+  assert.deepEqual(manager.sessions, []);
   assert.deepEqual(manager.clear(), { cleared: 0 });
 });
 
@@ -1187,13 +1209,13 @@ test('manager does not expose or resume non-resumable completed sessions', async
   ]) };
   const manager = new AgentManager(registry, 1, runner);
 
-  const results = await manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { agent: 'oneshot', prompt: 'work' },
   ]);
 
   assert.equal(results[0].status, 'completed');
   assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
-  assert.deepEqual(manager.listSessions(), []);
+  assert.deepEqual(manager.sessions, []);
   await assert.rejects(
     manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, 'anything', 'follow up'),
     /Unknown resumable subagent session/,
@@ -1216,7 +1238,7 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   const manager = new AgentManager(registry, 2, runner);
   const controller = new AbortController();
 
-  const pending = manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
+  const pending = manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
     { agent: 'oneshot', prompt: 'one' },
     { agent: 'chatty', prompt: 'two' },
   ]);
@@ -1228,31 +1250,40 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
   assert.ok(results[1].sessionId);
 
-  const sessions = manager.listSessions();
-  assert.deepEqual(sessions.map(session => session.agent), ['chatty']);
-  assert.equal(sessions[0].status, 'interrupted');
-  assert.equal(sessions[0].finalOutcome.status, 'interrupted');
+  const sessions = manager.sessions;
+  assert.deepEqual(sessions.map(session => session.options.agent), ['chatty']);
+  assert.equal(sessions[0].status.kind, 'interrupted');
 
   await assert.rejects(
     manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, results[1].sessionId, 'follow up'),
     /while it is interrupted/,
   );
   assert.deepEqual(manager.clear(results[1].sessionId), { cleared: 1, sessionId: results[1].sessionId });
-  assert.deepEqual(manager.listSessions(), []);
+  assert.deepEqual(manager.sessions, []);
 });
 
 test('manager retains, resumes, lists, and clears completed resumable sessions', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  let runEmit;
+  let resumeEmit;
   const runner = async (_ctx, agent) => {
-    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    const session = {
+      messages: [],
+      subscribe(handler) { runEmit = handler; return () => { runEmit = undefined; }; },
+      async prompt() {},
+      abort() {},
+    };
     const response = `response:${agent.options.prompt}`;
     agent.start(session);
+    runEmit({ type: 'turn_end' });
     agent.complete(response);
     return { response, session };
   };
   const resumeRunner = async (_ctx, agent, prompt) => {
     agent.resume(agent.status.session);
     const session = agent.status.session;
+    resumeEmit = runEmit;
+    resumeEmit({ type: 'turn_end' });
     const response = `follow:${prompt}`;
     agent.complete(response);
     return { response, session };
@@ -1262,7 +1293,7 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
     ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
   ]) };
   const manager = new AgentManager(registry, 2, runner, resumeRunner);
-  const results = await manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { agent: 'chatty', prompt: 'one' },
   ]);
 
@@ -1270,7 +1301,7 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
   assert.equal(results[0].output, 'response:one');
   assert.ok(results[0].sessionId);
 
-  assert.deepEqual(manager.listSessions().map(session => session.sessionId), [results[0].sessionId]);
+  assert.deepEqual(manager.sessions.map(session => session.id), [results[0].sessionId]);
 
   const resumed = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, results[0].sessionId, 'two');
   assert.equal(resumed.status, 'completed');
@@ -1279,11 +1310,39 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
   assert.equal(resumed.sessionId, results[0].sessionId);
 
   assert.deepEqual(manager.clear(results[0].sessionId), { cleared: 1, sessionId: results[0].sessionId });
-  assert.deepEqual(manager.listSessions(), []);
+  assert.deepEqual(manager.sessions, []);
 });
 
-test('manager emits grouped progress DTO rows in input order including unknown agents', async () => {
+test('agent re-subscribes on resume so events during a resumed cycle update its state', async () => {
+  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  let emit;
+  const session = {
+    messages: [],
+    subscribe(handler) { emit = handler; return () => { emit = undefined; }; },
+    async prompt() {},
+    abort() {},
+  };
+  const agent = new Agent('id', 'gid', { name: 'a', description: 'd', systemPrompt: '', source: 'project', resumable: true }, { agent: 'a', prompt: 'p' }, () => {});
+
+  agent.start(session);
+  emit({ type: 'turn_end' });
+  assert.equal(agent.turns, 1);
+  agent.complete('done');
+  assert.equal(emit, undefined, 'subscription should be torn down on complete');
+
+  agent.resume(session);
+  assert.ok(emit, 'resume should re-subscribe');
+  emit({ type: 'turn_end' });
+  emit({ type: 'tool_execution_start', toolName: 'read' });
+  assert.equal(agent.turns, 2);
+  assert.equal(agent.toolUses, 1);
+  agent.complete('done2');
+  assert.equal(emit, undefined, 'subscription should be torn down on complete after resume');
+});
+
+test('manager emits grouped progress rows in input order including unknown agents', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
     agent.start(session);
@@ -1294,65 +1353,68 @@ test('manager emits grouped progress DTO rows in input order including unknown a
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
   ]) };
   const manager = new AgentManager(registry, 2, runner);
-  const updates = [];
+  const snapshots = [];
 
-  const results = await manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { agent: 'helper', prompt: 'one' },
     { agent: 'missing', prompt: 'two' },
     { agent: 'helper', prompt: 'three' },
-  ], update => updates.push(update));
+  ], update => snapshots.push({
+    agents: update.agents.map(({ agent, inputIndex }) => serializeAgent(agent, inputIndex)),
+    errors: update.errors.map(e => e.serialized),
+  }));
 
   assert.deepEqual(results.map(result => result.agent), ['helper', 'missing', 'helper']);
   assert.deepEqual(results.map(result => result.status), ['completed', 'error', 'completed']);
 
-  const initial = updates[0].group;
-  assert.equal(initial.sessions.length, 3);
-  assert.deepEqual(initial.sessions.map(session => session.agent), ['helper', 'missing', 'helper']);
-  assert.deepEqual(initial.sessions.map(session => session.status), ['queued', 'error', 'queued']);
-  assert.equal(initial.statusCounts.queued, 2);
-  assert.equal(initial.statusCounts.error, 1);
-  assert.equal(initial.isError, true);
-  assert.match(initial.sessions[1].finalOutcome.message, /Unknown agent: missing/);
+  const initial = snapshots[0];
+  assert.equal(initial.agents.length, 2);
+  assert.equal(initial.errors.length, 1);
+  assert.deepEqual(initial.agents.map(a => [a.agent, a.status, a.inputIndex]), [
+    ['helper', 'queued', 0],
+    ['helper', 'queued', 2],
+  ]);
+  assert.equal(initial.errors[0].inputIndex, 1);
+  assert.equal(initial.errors[0].agent, 'missing');
+  assert.match(initial.errors[0].errorSnippet, /Unknown agent: missing/);
 });
 
-test('manager emits serialized one-child progress DTOs without exposing Agent instances', async () => {
+test('manager emits live agent progress with the right transitions', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', model: 'test/model' }],
   ]) };
-  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  let emit;
+  const session = { messages: [], subscribe(handler) { emit = handler; return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
     agent.start(session);
-    agent.messageUpdated('working through the delegated task');
-    agent.toolStarted('read');
-    agent.turnEnded();
-    agent.toolEnded();
+    emit({ type: 'message_start' });
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'working through the delegated task' } });
+    emit({ type: 'tool_execution_start', toolName: 'read' });
+    emit({ type: 'turn_end' });
+    emit({ type: 'tool_execution_end' });
     agent.complete('done');
     return { response: 'done', session };
   };
   const manager = new AgentManager(registry, 1, runner);
-  const updates = [];
+  const snapshots = [];
 
-  const results = await manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { agent: 'helper', prompt: 'Summarize the project status for the parent agent.' },
-  ], update => updates.push(update));
+  ], update => snapshots.push(serializeAgent(update.agents[0].agent)));
 
   assert.equal(results[0].status, 'completed');
-  assert.ok(updates.length >= 4);
-  const queued = updates[0].sessions[0];
-  assert.equal(queued.status, 'queued');
-  assert.equal(queued.agent, 'helper');
-  assert.equal(queued.model, 'test/model');
-  assert.equal(queued.promptPreview, 'Summarize the project status for the parent agent.');
-  assert.equal(Object.prototype.hasOwnProperty.call(queued, 'config'), false);
+  assert.ok(snapshots.length >= 4);
+  assert.equal(snapshots[0].status, 'queued');
+  assert.equal(snapshots[0].agent, 'helper');
+  assert.equal(snapshots[0].promptPreview, 'Summarize the project status for the parent agent.');
 
-  assert.ok(updates.some(update => update.sessions[0].status === 'running'));
-  assert.ok(updates.some(update => update.sessions[0].activeTool === 'read'));
-  assert.ok(updates.some(update => update.sessions[0].turns === 1));
-  assert.ok(updates.some(update => update.sessions[0].messageSnippet === 'working through the delegated task'));
-  const final = updates.at(-1).sessions[0];
-  assert.equal(final.status, 'completed');
-  assert.equal(final.finalOutcome.status, 'completed');
+  assert.ok(snapshots.some(s => s.status === 'running'));
+  assert.ok(snapshots.some(s => s.activeTool === 'read'));
+  assert.ok(snapshots.some(s => s.turns === 1));
+  assert.ok(snapshots.some(s => s.messageSnippet === 'working through the delegated task'));
+  assert.equal(snapshots.at(-1).status, 'completed');
 });
 
 test('subagent tool returns one ordered final group for mixed success, unknown, and failed children', async () => {
@@ -1399,10 +1461,7 @@ test('subagent tool returns one ordered final group for mixed success, unknown, 
 
 test('subagent tool notifies invalid settings fallback without breaking execution', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const runningSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
-    promptPreview: 'work', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
-  };
+  const runningAgent = fakeAgent({ status: { kind: 'running', startedAt: 1 }, turns: 1 });
   const fakeRegistry = {
     agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project' }]]),
     async reload() {},
@@ -1410,8 +1469,8 @@ test('subagent tool notifies invalid settings fallback without breaking executio
   };
   const fakeManager = {
     sessions: [],
-    async spawn(_pi, _ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', sessions: [runningSession], active: true, updatedAt: 1 });
+    async spawn(_ctx, _signal, _options, onUpdate) {
+      onUpdate({ groupId: 'g1', createdAt: 1, agents: [{ agent: runningAgent, inputIndex: 0 }], errors: [], active: true, updatedAt: 1 });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1442,10 +1501,7 @@ test('subagent tool notifies invalid settings fallback without breaking executio
 
 test('subagent tool falls back to default UI settings when settings load rejects', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const runningSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
-    promptPreview: 'work', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
-  };
+  const runningAgent = fakeAgent({ status: { kind: 'running', startedAt: 1 }, turns: 1 });
   const fakeRegistry = {
     agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project' }]]),
     async reload() {},
@@ -1453,8 +1509,8 @@ test('subagent tool falls back to default UI settings when settings load rejects
   };
   const fakeManager = {
     sessions: [],
-    async spawn(_pi, _ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', sessions: [runningSession], active: true, updatedAt: 1 });
+    async spawn(_ctx, _signal, _options, onUpdate) {
+      onUpdate({ groupId: 'g1', createdAt: 1, agents: [{ agent: runningAgent, inputIndex: 0 }], errors: [], active: true, updatedAt: 1 });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1485,19 +1541,16 @@ test('subagent tool falls back to default UI settings when settings load rejects
 
 test('subagent tool keeps subagent surfaces working but hides widget when placement is off', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const runningSession = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
-    promptPreview: 'work', messageSnippet: 'working', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
-  };
+  const runningAgent = fakeAgent({ status: { kind: 'running', startedAt: 1 }, message: 'working', turns: 1 });
   const fakeRegistry = {
     agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project' }]]),
     async reload() {},
     summarizeAgent() { return 'helper (project)'; },
   };
   const fakeManager = {
-    sessions: [runningSession],
-    async spawn(_pi, _ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', sessions: [runningSession], active: true, updatedAt: 1 });
+    sessions: [runningAgent],
+    async spawn(_ctx, _signal, _options, onUpdate) {
+      onUpdate({ groupId: 'g1', createdAt: 1, agents: [{ agent: runningAgent, inputIndex: 0 }], errors: [], active: true, updatedAt: 1 });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1528,23 +1581,15 @@ test('subagent tool keeps subagent surfaces working but hides widget when placem
   assert.equal(widgets.every(call => call[0] === 'subagent' && call[1] === undefined), true);
 });
 
-test('subagent tool forwards live manager DTOs to onUpdate and widget UI', async () => {
+test('subagent tool forwards live manager updates to onUpdate and widget UI', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const runningSession = {
-    id: 's1',
-    sessionId: 's1',
-    groupId: 'g1',
-    agent: 'helper',
-    status: 'running',
-    resumable: false,
-    promptPreview: 'work',
-    messageSnippet: 'working',
-    activeTool: 'read',
+  const runningAgent = fakeAgent({
+    status: { kind: 'running', startedAt: 1 },
+    message: 'working',
+    tool: 'read',
     turns: 1,
     toolUses: 1,
-    createdAt: 1,
-    startedAt: 1,
-  };
+  });
   const fakeRegistry = {
     agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project' }]]),
     async reload() {},
@@ -1552,13 +1597,17 @@ test('subagent tool forwards live manager DTOs to onUpdate and widget UI', async
   };
   const fakeManager = {
     sessions: [],
-    async spawn(_pi, _ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', sessions: [runningSession], active: true, updatedAt: 1 });
+    async spawn(_ctx, _signal, _options, onUpdate) {
+      onUpdate({ groupId: 'g1', createdAt: 1, agents: [{ agent: runningAgent, inputIndex: 0 }], errors: [], active: true, updatedAt: 1 });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
+  const fakeSettingsStore = {
+    async load() { return { settings: { widgetPlacement: 'belowEditor' } }; },
+    async save() {},
+  };
   let registeredTool;
-  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, { agentRegistry: fakeRegistry, agentManager: fakeManager, settingsStore: fakeSettingsStore });
 
   const partials = [];
   const widgets = [];
@@ -1574,7 +1623,7 @@ test('subagent tool forwards live manager DTOs to onUpdate and widget UI', async
   assert.equal(result.isError, false);
   assert.equal(result.details.results[0].output, 'done');
   assert.equal(result.details.sessions[0].activeTool, 'read');
-  assert.equal(partials[0].details.sessions[0].activeTool, 'read');
+  assert.equal(partials[0].details.group.sessions[0].activeTool, 'read');
   assert.match(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], 'subagent');
   assert.match(widgets[0][1][0], /helper/);
@@ -1583,34 +1632,40 @@ test('subagent tool forwards live manager DTOs to onUpdate and widget UI', async
 
 test('manager throttles live message snippets while lifecycle updates are immediate', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
   ]) };
-  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  let emit;
+  const session = { messages: [], subscribe(handler) { emit = handler; return () => {}; }, async prompt() {}, abort() {} };
   let finish;
   const allowFinish = new Promise(resolve => { finish = resolve; });
   const runner = async (_ctx, agent) => {
     agent.start(session);
-    agent.messageUpdated('one');
-    agent.messageUpdated('two');
-    agent.messageUpdated('three');
+    emit({ type: 'message_start' });
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'one' } });
+    emit({ type: 'message_start' });
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'two' } });
+    emit({ type: 'message_start' });
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'three' } });
     await allowFinish;
     agent.complete('done');
     return { response: 'done', session };
   };
   const manager = new AgentManager(registry, 1, runner);
-  const updates = [];
-  const pending = manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+  const snapshots = [];
+  const pending = manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { agent: 'helper', prompt: 'work' },
-  ], update => updates.push(update));
+  ], update => snapshots.push(serializeAgent(update.agents[0].agent)));
 
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(updates.some(update => update.sessions[0].status === 'running'));
-  assert.equal(updates.filter(update => update.sessions[0].messageSnippet).length, 0);
+  assert.ok(snapshots.some(s => s.status === 'running'));
+  assert.equal(snapshots.filter(s => s.messageSnippet).length, 0);
 
   await new Promise(resolve => setTimeout(resolve, 130));
-  assert.equal(updates.filter(update => update.sessions[0].messageSnippet).length, 1);
-  assert.equal(updates.at(-1).sessions[0].messageSnippet, 'three');
+  const withMessage = snapshots.filter(s => s.messageSnippet);
+  assert.equal(withMessage.length, 1);
+  assert.equal(snapshots.at(-1).messageSnippet, 'three');
 
   finish();
   await pending;
@@ -1625,18 +1680,17 @@ test('subagent DTO render helpers collapse groups and expand every child row', a
     isError: true,
     sessions: [
       {
-        id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: false,
+        id: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: false,
         promptPreview: 'first', turns: 1, toolUses: 0, createdAt: 1_000, startedAt: 1_000, completedAt: 2_000,
-        finalOutcome: { status: 'completed' },
       },
       {
-        id: 's2', sessionId: 's2', groupId: 'g1', agent: 'worker', status: 'running', resumable: false,
+        id: 's2', groupId: 'g1', agent: 'worker', status: 'running', resumable: false,
         promptPreview: 'second', activeTool: 'bash', messageSnippet: 'checking logs', turns: 2, toolUses: 1, createdAt: 1_000, startedAt: 2_000,
       },
       {
-        id: 'g1:task-2', sessionId: 'g1:task-2', groupId: 'g1', agent: 'missing', status: 'error', resumable: false,
+        id: 'g1:task-2', groupId: 'g1', agent: 'missing', status: 'error', resumable: false,
         promptPreview: 'third', turns: 0, toolUses: 0, createdAt: 1_000, completedAt: 1_000,
-        finalOutcome: { status: 'error', message: 'Unknown agent: missing.' },
+        errorSnippet: 'Unknown agent: missing.',
       },
     ],
   };
@@ -1680,38 +1734,34 @@ test('subagent resume message keeps context concise while preserving structured 
   assert.equal(message.details.outputSnippet.includes('secret-tail'), false);
 });
 
-test('subagent DTO helpers allow resume only for completed resumable sessions', async () => {
+test('canResumeSubagentSession allows resume only for completed resumable agents', async () => {
   const { canResumeSubagentSession } = await import(`../dist/subagent-ui.js?t=${unique()}`);
-  const base = {
-    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', resumable: true,
-    promptPreview: 'work', turns: 0, toolUses: 0, compactions: 0, createdAt: 1,
-    availableActions: ['inspect'],
-  };
 
-  assert.equal(canResumeSubagentSession({ ...base, status: 'completed', availableActions: ['inspect', 'resume', 'clear'] }), true);
-  for (const status of ['queued', 'running', 'error', 'aborted', 'interrupted', 'skipped']) {
-    assert.equal(canResumeSubagentSession({ ...base, status, availableActions: ['inspect'] }), false, status);
+  assert.equal(canResumeSubagentSession(fakeAgent({ config: { resumable: true } })), true);
+  assert.equal(canResumeSubagentSession(fakeAgent({ config: { resumable: false } })), false);
+
+  const nonCompleted = [
+    { kind: 'queued' },
+    { kind: 'running', startedAt: 1 },
+    { kind: 'error', startedAt: 1, errorAt: 2, error: 'e', session: {} },
+    { kind: 'aborted', startedAt: 1, abortedAt: 2, session: {} },
+    { kind: 'interrupted', startedAt: 1, interruptedAt: 2, session: {} },
+    { kind: 'skipped', skippedAt: 1 },
+  ];
+  for (const status of nonCompleted) {
+    assert.equal(canResumeSubagentSession(fakeAgent({ config: { resumable: true }, status })), false, status.kind);
   }
-  assert.equal(canResumeSubagentSession({ ...base, status: 'completed', resumable: false, availableActions: ['inspect', 'clear'] }), false);
 });
 
-test('subagent DTO render helpers show compact operational progress and auto-hide empty widgets', async () => {
+test('format helpers render compact operational progress and auto-hide empty widgets', async () => {
   const { formatSubagentSessionLine, formatWidgetLines } = await import(`../dist/subagent-ui.js?t=${unique()}`);
-  const running = {
-    id: 's1',
-    sessionId: 's1',
-    groupId: 'g1',
-    agent: 'helper',
-    status: 'running',
-    resumable: false,
-    promptPreview: 'do work',
-    messageSnippet: 'reading source files',
-    activeTool: 'read',
+  const running = fakeAgent({
+    status: { kind: 'running', startedAt: 1_000 },
+    message: 'reading source files',
+    tool: 'read',
     turns: 2,
-    toolUses: 1,
     createdAt: 1_000,
-    startedAt: 1_000,
-  };
+  });
   const line = formatSubagentSessionLine(running, 4_000);
 
   assert.match(line, /helper/);
@@ -1722,9 +1772,11 @@ test('subagent DTO render helpers show compact operational progress and auto-hid
   assert.match(line, /reading source files/);
   assert.deepEqual(formatWidgetLines([running], 4_000), [line]);
 
-  const completed = { ...running, status: 'completed', completedAt: 5_000, finalOutcome: { status: 'completed' } };
+  const completed = fakeAgent({ status: { kind: 'completed', startedAt: 1_000, completedAt: 5_000, response: 'done' } });
   assert.deepEqual(formatWidgetLines([completed], 6_000), []);
-  assert.deepEqual(formatWidgetLines([{ ...completed, resumable: true }], 6_000).length, 1);
+
+  const completedResumable = fakeAgent({ config: { resumable: true }, status: { kind: 'completed', startedAt: 1_000, completedAt: 5_000, response: 'done' } });
+  assert.equal(formatWidgetLines([completedResumable], 6_000).length, 1);
 });
 
 test('run-agent skips before prompting when signal aborts during setup', async () => {

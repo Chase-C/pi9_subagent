@@ -1,5 +1,6 @@
+import type { Agent } from "./agent.js";
 import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentUiSettingsStore, type SubagentUiSettings, type SubagentUiSettingsLoadResult } from "./subagent-settings.js";
-import { formatWidgetLines, type SubagentSessionDto } from "./subagent-ui.js";
+import { formatWidgetLines } from "./subagent-ui.js";
 
 type SubagentWidgetContext = {
   hasUI?: boolean;
@@ -34,7 +35,7 @@ function notifySettingsWarning(ctx: SubagentWidgetContext, result: SubagentUiSet
 
 export function updateSubagentWidget(
   ctx: SubagentWidgetContext,
-  sessions: SubagentSessionDto[],
+  agents: Agent[],
   settings: SubagentUiSettings,
 ) {
   if (!ctx.hasUI || !ctx.ui?.setWidget) return;
@@ -43,7 +44,7 @@ export function updateSubagentWidget(
       ctx.ui.setWidget("subagent", undefined);
       return;
     }
-    const lines = formatWidgetLines(sessions);
+    const lines = formatWidgetLines(agents);
     ctx.ui.setWidget("subagent", lines.length > 0 ? lines : undefined, { placement: settings.widgetPlacement });
   } catch (error) {
     try {

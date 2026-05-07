@@ -24,10 +24,6 @@ export class Agent {
 
   private _status: AgentStatus = { kind: "queued" };
 
-  private _run: Promise<string>;
-  private _resolveRun!: (value: string) => void;
-  private _rejectRun!: (reason: any) => void;
-
   private _message: string = "";
   private _tool: string | undefined;
 
@@ -40,20 +36,16 @@ export class Agent {
 
   private _createdAt: number = Date.now();
 
+  private _unsubscribe?: () => void;
+
   constructor(
     readonly id: string,
     readonly groupId: string,
     readonly config: AgentConfig,
     readonly options: AgentOptions,
     readonly onUpdate: (agent: Agent, kind: AgentUpdateKind) => void,
-  ) {
-    this._run = new Promise<string>((resolve, reject) => {
-      this._resolveRun = resolve;
-      this._rejectRun = reject;
-    });
-  }
+  ) { }
 
-  get run() { return this._run }
   get status() { return this._status }
 
   get message() { return this._message }
@@ -68,11 +60,11 @@ export class Agent {
 
   get createdAt() { return this._createdAt }
 
-  trackRun(run: Promise<string>) {
-    run.then(
-      result => this._resolveRun(result),
-      err => this._rejectRun(err),
-    )
+  private _finishSubscription() {
+    if (this._unsubscribe) {
+      this._unsubscribe();
+      this._unsubscribe = undefined;
+    }
   }
 
   abort() {
@@ -80,6 +72,7 @@ export class Agent {
       throw new Error(`Cannot abort an agent that ${this._status.kind === "queued" ? "has not started" : "is not running"}.`);
     }
 
+    this._finishSubscription();
     this._status = { kind: "aborted", session: this._status.session, startedAt: this._status.startedAt, abortedAt: Date.now() };
     this.onUpdate(this, "status");
   }
@@ -89,6 +82,7 @@ export class Agent {
       throw new Error(`Cannot interrupt an agent that ${this._status.kind === "queued" ? "has not started" : "is not running"}.`);
     }
 
+    this._finishSubscription();
     this._status = { kind: "interrupted", session: this._status.session, startedAt: this._status.startedAt, interruptedAt: Date.now(), error };
     this.onUpdate(this, "status");
   }
@@ -98,6 +92,7 @@ export class Agent {
       throw new Error(`Cannot cancel an agent that is ${this._status.kind}.`);
     }
 
+    this._finishSubscription();
     this._status = { kind: "skipped", skippedAt: Date.now() };
     this.onUpdate(this, "status");
   }
@@ -107,6 +102,7 @@ export class Agent {
       throw new Error(`Cannot complete an agent that ${this._status.kind === "queued" ? "has not started" : "is not running"}.`);
     }
 
+    this._finishSubscription();
     this._status = { kind: "completed", session: this._status.session, startedAt: this._status.startedAt, completedAt: Date.now(), response: response };
     this.onUpdate(this, "status");
   }
@@ -116,6 +112,7 @@ export class Agent {
       throw new Error(`Cannot error an agent that ${this._status.kind === "queued" ? "has not started" : "is not running"}.`);
     }
 
+    this._finishSubscription();
     this._status = { kind: "error", session: this._status.session, startedAt: this._status.startedAt, errorAt: Date.now(), error };
     this.onUpdate(this, "status");
   }
@@ -125,6 +122,7 @@ export class Agent {
       throw new Error(`Cannot fail a queued agent that is ${this._status.kind}.`);
     }
 
+    this._finishSubscription();
     this._status = { kind: "error", errorAt: Date.now(), error };
     this.onUpdate(this, "status");
   }
@@ -134,6 +132,7 @@ export class Agent {
       throw new Error(`Cannot start an agent that is already ${this._status.kind}.`);
     }
 
+    this._subscribe(session);
     this._status = { kind: "running", session: session, startedAt: Date.now() };
     this.onUpdate(this, "status");
   }
@@ -143,40 +142,43 @@ export class Agent {
       throw new Error(`Cannot resume an agent that is ${this._status.kind}.`);
     }
 
+    this._subscribe(session);
     this._status = { kind: "running", session: session, startedAt: Date.now() };
     this.onUpdate(this, "status");
   }
 
-  compacted() {
-    this._compactions += 1;
-    this.onUpdate(this, "compaction");
-  }
-
-  messageUpdated(message: string) {
-    this._message = message;
-    this.onUpdate(this, "message");
-  }
-
-  toolStarted(tool: string) {
-    this._tool = tool;
-    this._toolUses += 1;
-    this.onUpdate(this, "tool");
-  }
-
-  toolEnded() {
-    this._tool = undefined;
-    this.onUpdate(this, "tool");
-  }
-
-  turnEnded() {
-    this._turns += 1;
-    this.onUpdate(this, "turn");
-  }
-
-  usageUpdated(usage: Usage) {
-    this._usage = usage;
-    this._totalUsage = CombineUsage(this._totalUsage, usage);
-    this.onUpdate(this, "usage");
+  private _subscribe(session: AgentSession) {
+    this._unsubscribe = session.subscribe(event => {
+      if (event.type === "compaction_end" && !event.aborted && event.result) {
+        this._compactions += 1;
+        this.onUpdate(this, "compaction");
+      }
+      else if (event.type === "message_start") {
+        this._message = "";
+      }
+      else if (event.type === "message_end" && event.message.role === "assistant") {
+        this._usage = event.message.usage;
+        this._totalUsage = CombineUsage(this._totalUsage, event.message.usage);
+        this.onUpdate(this, "usage");
+      }
+      else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        this._message += event.assistantMessageEvent.delta;
+        this.onUpdate(this, "message");
+      }
+      else if (event.type === "tool_execution_start") {
+        this._tool = event.toolName;
+        this._toolUses += 1;
+        this.onUpdate(this, "tool");
+      }
+      else if (event.type === "tool_execution_end") {
+        this._tool = undefined;
+        this.onUpdate(this, "tool");
+      }
+      else if (event.type === "turn_end") {
+        this._turns += 1;
+        this.onUpdate(this, "turn");
+      }
+    });
   }
 }
 

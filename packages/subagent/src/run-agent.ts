@@ -117,7 +117,6 @@ async function PromptAgent(
   }
 
   signal?.addEventListener("abort", onAbort, { once: true });
-  const { getMessage, unsubscribe } = SubscribeToSession(session, agent);
 
   try {
     await session.prompt(prompt);
@@ -132,7 +131,7 @@ async function PromptAgent(
       throw new Error(finalMessage.errorMessage || "Agent failed.");
     }
 
-    const response = getMessage() || finalMessage.response;
+    const response = agent.message || finalMessage.response;
 
     agent.complete(response);
     return { response, session };
@@ -144,7 +143,6 @@ async function PromptAgent(
     }
     throw error;
   } finally {
-    unsubscribe();
     signal?.removeEventListener("abort", onAbort);
   }
 }
@@ -196,43 +194,6 @@ function SelectModel(
   }
 
   return parentModel;
-}
-
-function SubscribeToSession(
-  session: AgentSession,
-  agent: Agent,
-) {
-  let message = "";
-  const unsubscribe = session.subscribe(event => {
-    if (event.type === "compaction_end" && !event.aborted && event.result) {
-      agent.compacted();
-    }
-    else if (event.type === "message_start") {
-      message = "";
-    }
-    else if (event.type === "message_end" && event.message.role === "assistant") {
-      const message = event.message;
-      if (message.role === "assistant") {
-        agent.usageUpdated(message.usage);
-      }
-    }
-    else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      message += event.assistantMessageEvent.delta;
-      agent.messageUpdated(message);
-
-    }
-    else if (event.type === "tool_execution_start") {
-      agent.toolStarted(event.toolName);
-    }
-    else if (event.type === "tool_execution_end") {
-      agent.toolEnded();
-    }
-    else if (event.type === "turn_end") {
-      agent.turnEnded();
-    }
-  });
-
-  return { getMessage: () => message, unsubscribe };
 }
 
 function GetFinalAssistantMessage(

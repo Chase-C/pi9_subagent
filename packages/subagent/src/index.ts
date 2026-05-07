@@ -1,19 +1,20 @@
 import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
-import { AgentManager, AgentOptions } from "./agent-manager.js";
+import type { Agent } from "./agent.js";
+import { AgentManager, AgentOptions, type AgentManagerGroupUpdate } from "./agent-manager.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { SubagentParams } from "./schema.js";
 import { SubagentUiSettingsStore } from "./subagent-settings.js";
 import { registerSubagentsCommand } from "./subagents-command.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./subagent-widget.js";
 import {
-  agentConfigToDefinitionDto,
-  createSubagentGroupDto,
   createSubagentTextComponent,
   formatSubagentResumeMessageContent,
   formatSubagentToolLines,
-  type SubagentGroupDto,
+  listAgentDefinitions,
+  serializeAgent,
+  serializeGroup,
 } from "./subagent-ui.js";
 
 const MAX_TASKS = 8;
@@ -36,10 +37,6 @@ function validateString(value: unknown, name: string) {
   return undefined;
 }
 
-function listAgentDefinitions(agentRegistry: AgentRegistry) {
-  return Array.from(agentRegistry.agents.values()).map(agentConfigToDefinitionDto);
-}
-
 function toolResult(details: Record<string, unknown>, isError = false) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }],
@@ -56,8 +53,22 @@ function errorResult(message: string, details: Record<string, unknown> = { }) {
   };
 }
 
-function partialToolResult(group: SubagentGroupDto, active: boolean) {
-  const details = { group, sessions: group.sessions, active };
+function liveAgents(update: AgentManagerGroupUpdate): Agent[] {
+  return update.agents.map(entry => entry.agent);
+}
+
+function snapshotGroup(update: AgentManagerGroupUpdate) {
+  const sessions = [
+    ...update.agents.map(entry => serializeAgent(entry.agent, entry.inputIndex)),
+    ...update.errors.map(entry => entry.serialized),
+  ];
+  sessions.sort((a, b) => (a.inputIndex ?? 0) - (b.inputIndex ?? 0));
+  return serializeGroup(update.groupId, update.createdAt, sessions);
+}
+
+function partialToolResult(update: AgentManagerGroupUpdate) {
+  const group = snapshotGroup(update);
+  const details = { group, active: update.active };
   return {
     content: [{ type: "text" as const, text: formatSubagentToolLines(details, true).join("\n") }],
     details,
@@ -83,15 +94,11 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 
   registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry);
   try {
-    (pi as ExtensionAPI & { registerMessageRenderer?: ExtensionAPI["registerMessageRenderer"] }).registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
+    pi.registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
       const content = typeof message.content === "string"
         ? message.content
         : formatSubagentResumeMessageContent(message.details as any);
-      try {
-        return new Text(theme?.fg ? theme.fg("customMessageText", content) : content, 0, 0);
-      } catch {
-        return new Text(content, 0, 0);
-      }
+      return new Text(theme?.fg ? theme.fg("customMessageText", content) : content, 0, 0);
     });
   } catch { }
 
@@ -131,11 +138,7 @@ Execution notes:
       const count = Array.isArray(args?.tasks) ? args.tasks.length : undefined;
       const suffix = count ? ` · ${count} task${count === 1 ? "" : "s"}` : "";
       const line = `subagent ${action}${suffix}`;
-      try {
-        return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
-      } catch {
-        return new Text(line, 0, 0);
-      }
+      return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
     },
     renderResult(result: any, options: any, theme: any) {
       try {
@@ -159,7 +162,7 @@ Execution notes:
           return toolResult({ agents });
         }
         if (type === "sessions") {
-          const sessions = agentManager.sessions;
+          const sessions = agentManager.sessions.map(agent => serializeAgent(agent));
           return toolResult({ sessions });
         }
         return errorResult('For action=list, type must be "agents" or "sessions".');
@@ -174,16 +177,16 @@ Execution notes:
 
         const options = params.tasks as Array<AgentOptions>;
         const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
-        let lastGroup: SubagentGroupDto | undefined;
-        const results = await agentManager.spawn(pi, ctx, signal, options, update => {
-          const group = update.group ?? createSubagentGroupDto(update.groupId ?? "subagent", Date.now(), update.sessions);
-          lastGroup = group;
-          onUpdate?.(partialToolResult(group, update.active));
-          updateSubagentWidget(ctx, update.sessions, uiSettings);
+        let lastGroup: ReturnType<typeof snapshotGroup> | undefined;
+        const results = await agentManager.spawn(ctx, signal, options, update => {
+          const partial = partialToolResult(update);
+          lastGroup = partial.details.group;
+          onUpdate?.(partial);
+          updateSubagentWidget(ctx, liveAgents(update), uiSettings);
         });
         updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
         const isError = results.some(result => result.status !== "completed");
-        const sessions = lastGroup?.sessions ?? agentManager.sessions;
+        const sessions = lastGroup?.sessions ?? agentManager.sessions.map(agent => serializeAgent(agent));
         return toolResult({ results, group: lastGroup, sessions }, isError);
       }
 
@@ -195,15 +198,16 @@ Execution notes:
 
         try {
           const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
-          let lastGroup: SubagentGroupDto | undefined;
+          let lastGroup: ReturnType<typeof snapshotGroup> | undefined;
           const result = await agentManager.resume(ctx, signal, params.sessionId!, params.prompt!, update => {
-            const group = update.group ?? createSubagentGroupDto(update.groupId ?? "subagent", Date.now(), update.sessions);
-            lastGroup = group;
-            onUpdate?.(partialToolResult(group, update.active));
-            updateSubagentWidget(ctx, update.sessions, uiSettings);
+            const partial = partialToolResult(update);
+            lastGroup = partial.details.group;
+            onUpdate?.(partial);
+            updateSubagentWidget(ctx, liveAgents(update), uiSettings);
           });
           updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
-          return toolResult({ result, group: lastGroup, sessions: lastGroup?.sessions ?? agentManager.sessions }, result.status !== "completed");
+          const sessions = lastGroup?.sessions ?? agentManager.sessions.map(agent => serializeAgent(agent));
+          return toolResult({ result, group: lastGroup, sessions }, result.status !== "completed");
         } catch (error) {
           return errorResult(error instanceof Error ? error.message : String(error), { sessionId: params.sessionId });
         }

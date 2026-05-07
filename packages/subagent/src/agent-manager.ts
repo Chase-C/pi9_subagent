@@ -1,20 +1,29 @@
 import { randomUUID } from "node:crypto";
 
 import { ModelThinkingLevel } from "@mariozechner/pi-ai";
-import { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { Agent, type AgentUpdateKind } from "./agent.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { ResumeAgent, RunAgent, type RunResult } from "./run-agent.js";
 import {
-  agentToSessionDto,
-  activeOrRetainedSessions,
-  createSubagentErrorSessionDto,
-  createSubagentGroupDto,
-  type SubagentGroupDto,
-  type SubagentGroupUpdateDto,
-  type SubagentSessionDto,
+  activeOrRetainedAgents,
+  serializeUnknownAgentError,
 } from "./subagent-ui.js";
+
+export type ErrorEntry = {
+  serialized: ReturnType<typeof serializeUnknownAgentError>;
+  inputIndex: number;
+};
+
+export interface AgentManagerGroupUpdate {
+  groupId: string;
+  createdAt: number;
+  agents: Array<{ agent: Agent; inputIndex: number }>;
+  errors: ErrorEntry[];
+  active: boolean;
+  updatedAt: number;
+}
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
 
@@ -37,21 +46,13 @@ export interface AgentRunResult {
   resumable?: boolean;
 }
 
-export interface AgentRunSuccess {
-  kind: "completed";
-  sessionId: string;
-  agent: string;
-  prompt: string;
-  output: string;
-}
-
-export type AgentManagerUpdateListener = (update: SubagentGroupUpdateDto) => void;
+export type AgentManagerUpdateListener = (update: AgentManagerGroupUpdate) => void;
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<RunResult>;
 export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<RunResult>;
 
 type SubagentGroupEntry =
   | { kind: "agent"; agent: Agent; inputIndex: number }
-  | { kind: "session"; session: SubagentSessionDto };
+  | { kind: "error"; serialized: ReturnType<typeof serializeUnknownAgentError>; inputIndex: number };
 
 interface SubagentGroupState {
   id: string;
@@ -78,12 +79,8 @@ export class AgentManager {
     return this._agents.filter(a => a.status.kind == "running").length;
   }
 
-  get sessions() {
-    return this.listSessions();
-  }
-
-  listSessions(): SubagentSessionDto[] {
-    return activeOrRetainedSessions(this._agents.map(agentToSessionDto));
+  get sessions(): Agent[] {
+    return activeOrRetainedAgents(this._agents);
   }
 
   subscribe(groupId: string, listener: AgentManagerUpdateListener): () => void {
@@ -129,14 +126,11 @@ export class AgentManager {
   }
 
   async spawn(
-    pi: ExtensionAPI,
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
     options: Array<AgentOptions>,
     onUpdate?: AgentManagerUpdateListener,
   ): Promise<Array<AgentRunResult>> {
-    (pi)
-
     const groupId = randomUUID();
     const groupCreatedAt = Date.now();
     const unsubscribe = onUpdate ? this.subscribe(groupId, onUpdate) : undefined;
@@ -151,8 +145,9 @@ export class AgentManager {
       if (!config) {
         const error = `Unknown agent: ${opts.agent}. Available agents:\n${available()}`;
         entries.push({
-          kind: "session",
-          session: createSubagentErrorSessionDto(`${groupId}:task-${inputIndex}`, groupId, opts, error, groupCreatedAt, inputIndex),
+          kind: "error",
+          serialized: serializeUnknownAgentError(`${groupId}:task-${inputIndex}`, groupId, opts, error, groupCreatedAt, inputIndex),
+          inputIndex,
         });
         return Promise.resolve({
           agent: opts.agent,
@@ -248,9 +243,6 @@ export class AgentManager {
 
         const run = this._runAgent(ctx, agent, signal)
           .then(({ response }) => response);
-
-        agent.trackRun(run);
-        agent.run.catch(() => { });
 
         run.then(
           output => {
@@ -355,32 +347,29 @@ export class AgentManager {
     const listeners = this._listeners.get(groupId);
     if (!listeners || listeners.size === 0) return;
 
-    const group = this._groupDto(groupId);
-    const sessions = group.sessions;
-    const update: SubagentGroupUpdateDto = {
-      groupId,
-      group,
-      sessions,
-      active: sessions.some(session => session.status === "queued" || session.status === "running"),
-      updatedAt: Date.now(),
-    };
-
+    const update = this._buildUpdate(groupId);
     for (const listener of listeners) listener(update);
   }
 
-  private _groupDto(groupId: string): SubagentGroupDto {
+  private _buildUpdate(groupId: string): AgentManagerGroupUpdate {
     const group = this._groups.get(groupId);
-    if (!group) {
-      const sessions = this._agents
-        .filter(agent => agent.groupId === groupId)
-        .map(agentToSessionDto);
-      return createSubagentGroupDto(groupId, Date.now(), sessions);
+    const agents: AgentManagerGroupUpdate["agents"] = [];
+    const errors: ErrorEntry[] = [];
+    let createdAt: number;
+
+    if (group) {
+      createdAt = group.createdAt;
+      for (const entry of group.entries) {
+        if (entry.kind === "error") errors.push({ serialized: entry.serialized, inputIndex: entry.inputIndex });
+        else agents.push({ agent: entry.agent, inputIndex: entry.inputIndex });
+      }
+    } else {
+      createdAt = Date.now();
+      const groupAgents = this._agents.filter(agent => agent.groupId === groupId);
+      groupAgents.forEach((agent, i) => agents.push({ agent, inputIndex: i }));
     }
 
-    const sessions = group.entries.map(entry => {
-      if (entry.kind === "session") return entry.session;
-      return { ...agentToSessionDto(entry.agent), inputIndex: entry.inputIndex };
-    });
-    return createSubagentGroupDto(group.id, group.createdAt, sessions);
+    const active = agents.some(({ agent }) => agent.status.kind === "queued" || agent.status.kind === "running");
+    return { groupId, createdAt, agents, errors, active, updatedAt: Date.now() };
   }
 }
