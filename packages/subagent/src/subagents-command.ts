@@ -356,7 +356,13 @@ async function resumeSessionFromCommand(
     return;
   }
 
-  const prompt = await (ctx.ui as any).editor(`Resume subagent ${action.agent}`, "");
+  let prompt: unknown;
+  try {
+    prompt = await (ctx.ui as any).editor(`Resume subagent ${action.agent}`, "");
+  } catch (error) {
+    notify(ctx, `Subagent resume editor UI failed: ${errorMessage(error)}`, "warning");
+    return;
+  }
   if (typeof prompt !== "string" || prompt.trim() === "") {
     notify(ctx, "Subagent resume cancelled: no follow-up prompt provided.", "info");
     return;

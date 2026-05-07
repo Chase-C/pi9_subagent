@@ -538,6 +538,49 @@ test('/subagents command handles resume when editor UI is unavailable', async ()
   assert.match(notifications.at(-1)[0], /Resume UI is unavailable/);
 });
 
+test('/subagents command handles resume when editor UI throws', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const retainedSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
+    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
+    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
+    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
+    finalOutcome: { status: 'completed' },
+  };
+  let resumeCalls = 0;
+  const fakeManager = {
+    sessions: [retainedSession],
+    listSessions() { return this.sessions; },
+    resume() { resumeCalls += 1; throw new Error('resume should not start'); },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager });
+
+  const notifications = [];
+  await assert.doesNotReject(() => commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify: (...args) => notifications.push(args),
+      editor() { throw new Error('editor unavailable'); },
+      custom(factory) {
+        const theme = { fg: (_color, text) => text, bold: text => text };
+        const component = factory({ requestRender() {} }, theme, {}, () => {});
+        component.handleInput('r');
+        return Promise.resolve({ action: 'resume', sessionId: 's1', agent: 'helper' });
+      },
+    },
+  }));
+
+  assert.equal(resumeCalls, 0);
+  assert.match(notifications.at(-1)[0], /editor|UI/i);
+  assert.match(notifications.at(-1)[0], /editor unavailable/);
+  assert.equal(notifications.at(-1)[1], 'warning');
+});
+
 test('subagents command resumes completed retained session with editor loader and visible concise message', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const retainedSession = {
