@@ -40,7 +40,7 @@ export class AgentRegistry {
         if ("error" in result) {
           continue;
         } else {
-          agents.set(result.name, result);
+          agents.set(result.name, { ...result, sourcePath: path });
         }
       }
     }

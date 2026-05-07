@@ -2,6 +2,7 @@ import type { Usage } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 
 import type { Agent } from "./agent.js";
+import type { AgentConfig } from "./agent-config.js";
 
 const PROMPT_PREVIEW_LENGTH = 120;
 const MESSAGE_SNIPPET_LENGTH = 200;
@@ -11,6 +12,17 @@ const RESUME_MESSAGE_SNIPPET_LENGTH = 80;
 export interface SubagentFinalOutcomeDto {
   status: "completed" | "error" | "aborted" | "skipped" | "interrupted";
   message?: string;
+}
+
+export interface SubagentDefinitionDto {
+  name: string;
+  description: string;
+  source: "user" | "project";
+  model?: string;
+  thinking?: string;
+  tools?: string[];
+  resumable: boolean;
+  sourcePath?: string;
 }
 
 export interface SubagentSessionDto {
@@ -218,6 +230,38 @@ export function formatSubagentSessionSummary(session: SubagentSessionDto): strin
     `session:${session.sessionId}`,
   ].filter(Boolean);
   return [session.agent, session.status, ...badges, `“${session.promptPreview}”`].join(" · ");
+}
+
+export function agentConfigToDefinitionDto(agent: AgentConfig): SubagentDefinitionDto {
+  return {
+    name: agent.name,
+    description: agent.description,
+    source: agent.source,
+    model: agent.model,
+    thinking: agent.thinking,
+    tools: agent.tools,
+    resumable: agent.resumable,
+    sourcePath: agent.sourcePath,
+  };
+}
+
+export function formatSubagentDefinitionSummary(agent: SubagentDefinitionDto): string {
+  const badges = [agent.source, agent.resumable ? "resumable" : undefined].filter(Boolean);
+  return [agent.name, ...badges, agent.description].join(" · ");
+}
+
+export function formatSubagentDefinitionInspect(agent: SubagentDefinitionDto): string[] {
+  const lines = [
+    `Name: ${agent.name}`,
+    `Description: ${agent.description}`,
+    `Source: ${agent.source}`,
+    `Model: ${agent.model ?? "default"}`,
+    `Thinking: ${agent.thinking ?? "default"}`,
+    `Tools: ${agent.tools?.length ? agent.tools.join(", ") : "default"}`,
+    `Resumable: ${agent.resumable}`,
+  ];
+  if (agent.sourcePath) lines.push(`Path: ${agent.sourcePath}`);
+  return lines;
 }
 
 export function formatSubagentSessionInspect(session: SubagentSessionDto, now = Date.now()): string[] {

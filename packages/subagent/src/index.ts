@@ -8,6 +8,7 @@ import { SubagentUiSettingsStore } from "./subagent-settings.js";
 import { registerSubagentsCommand } from "./subagents-command.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./subagent-widget.js";
 import {
+  agentConfigToDefinitionDto,
   createSubagentGroupDto,
   createSubagentTextComponent,
   formatSubagentResumeMessageContent,
@@ -36,15 +37,7 @@ function validateString(value: unknown, name: string) {
 }
 
 function listAgentDefinitions(agentRegistry: AgentRegistry) {
-  return Array.from(agentRegistry.agents.values()).map(agent => ({
-    name: agent.name,
-    description: agent.description,
-    source: agent.source,
-    model: agent.model,
-    thinking: agent.thinking,
-    tools: agent.tools,
-    resumable: agent.resumable,
-  }));
+  return Array.from(agentRegistry.agents.values()).map(agentConfigToDefinitionDto);
 }
 
 function toolResult(details: Record<string, unknown>, isError = false) {
@@ -76,7 +69,7 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
   const settingsStore = dependencies.settingsStore ?? new SubagentUiSettingsStore();
 
-  registerSubagentsCommand(pi, agentManager, settingsStore);
+  registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry);
   (pi as ExtensionAPI & { registerMessageRenderer?: ExtensionAPI["registerMessageRenderer"] }).registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
     const content = typeof message.content === "string"
       ? message.content

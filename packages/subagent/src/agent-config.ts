@@ -12,6 +12,7 @@ export interface AgentConfig {
   resumable: boolean;
   systemPrompt: string;
   source: AgentSource;
+  sourcePath?: string;
 }
 
 const requiredFields = [ "name", "description" ];
@@ -31,9 +32,10 @@ export function BuildAgentConfig(
       resumable: parseBoolean(frontmatter.resumable, "resumable") ?? false,
       systemPrompt: body.trim(),
       source,
+      sourcePath: undefined,
     }
 
-    const missingFields = requiredFields.filter((field) => result[field as keyof AgentConfig] == null);
+    const missingFields = requiredFields.filter((field) => result[field as keyof typeof result] == null);
     if (missingFields.length > 0) {
       return { error: new Error(`Missing required fields: ${missingFields.join(", ")}`) }
     }

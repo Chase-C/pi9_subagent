@@ -131,6 +131,8 @@ test('tool list action returns agent definitions or resumable sessions by type',
   assert.ok(helper);
   assert.equal(helper.resumable, true);
   assert.deepEqual(helper.tools, ['read', 'bash']);
+  assert.equal(helper.sourcePath, join(projectAgents, 'helper.md'));
+  assert.equal(Object.prototype.hasOwnProperty.call(helper, 'systemPrompt'), false);
 
   const sessions = await registeredTool.execute('tool-call', {
     action: 'list',
@@ -280,6 +282,67 @@ test('/subagents settings persists the latest rapid placement change before comm
   await handlerPromise;
 
   assert.equal(persisted, 'off');
+});
+
+test('subagents command opens agents browser by default when sessions are empty', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const reloadCalls = [];
+  const fakeRegistry = {
+    agents: new Map([
+      ['helper', { name: 'helper', description: 'Helps with implementation', source: 'project', resumable: true, model: 'test/model', thinking: 'high', tools: ['read', 'bash'], sourcePath: '/repo/.pi/agents/helper.md' }],
+      ['reviewer', { name: 'reviewer', description: 'Reviews changes', source: 'user', resumable: false }],
+    ]),
+    async reload(cwd) { reloadCalls.push(cwd); },
+    summarizeAgent() { return ''; },
+  };
+  const fakeManager = {
+    sessions: [],
+    listSessions() { return this.sessions; },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
+
+  let listText = '';
+  let inspectText = '';
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  await commands.get('subagents').handler('', {
+    cwd: '/repo',
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory) {
+        const component = factory({ requestRender() {} }, theme, {}, () => {});
+        listText = component.render(120).join('\n');
+        component.handleInput('\r');
+        inspectText = component.render(120).join('\n');
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.deepEqual(reloadCalls, ['/repo']);
+  assert.match(listText, /Subagent Agents/);
+  assert.match(listText, /helper/);
+  assert.match(listText, /Helps with implementation/);
+  assert.match(listText, /project/);
+  assert.match(listText, /resumable/);
+  assert.match(listText, /reviewer/);
+  assert.match(listText, /settings/);
+  assert.match(listText, /close/);
+  assert.doesNotMatch(listText, /launch|start/i);
+  assert.match(inspectText, /Agent Definition/);
+  assert.match(inspectText, /Name: helper/);
+  assert.match(inspectText, /Description: Helps with implementation/);
+  assert.match(inspectText, /Source: project/);
+  assert.match(inspectText, /Model: test\/model/);
+  assert.match(inspectText, /Thinking: high/);
+  assert.match(inspectText, /Tools: read, bash/);
+  assert.match(inspectText, /Resumable: true/);
+  assert.match(inspectText, /Path: \/repo\/\.pi\/agents\/helper\.md/);
+  assert.doesNotMatch(inspectText, /launch|start/i);
 });
 
 test('subagents command opens a sessions view from serialized DTOs', async () => {

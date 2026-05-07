@@ -2,6 +2,7 @@ import { getSettingsListTheme, type ExtensionAPI, type ExtensionCommandContext }
 import { SettingsList, type Component, type SettingItem, type TUI } from "@mariozechner/pi-tui";
 
 import { AgentManager } from "./agent-manager.js";
+import { AgentRegistry } from "./agent-registry.js";
 import {
   SubagentUiSettingsStore,
   type SubagentUiSettings,
@@ -9,12 +10,16 @@ import {
 } from "./subagent-settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./subagent-widget.js";
 import {
+  agentConfigToDefinitionDto,
   canClearSubagentSession,
   canResumeSubagentSession,
   createSubagentResumeMessage,
+  formatSubagentDefinitionInspect,
+  formatSubagentDefinitionSummary,
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
   formatSubagentToolLines,
+  type SubagentDefinitionDto,
   type SubagentSessionDto,
 } from "./subagent-ui.js";
 
@@ -23,7 +28,12 @@ function listManagedSessions(agentManager: AgentManager): SubagentSessionDto[] {
   return maybeManager.listSessions?.() ?? maybeManager.sessions ?? [];
 }
 
-type SubagentsCommandResult = { action: "resume"; sessionId: string; agent: string };
+function listAgentDefinitions(agentRegistry: AgentRegistry): SubagentDefinitionDto[] {
+  return Array.from(agentRegistry.agents.values()).map(agentConfigToDefinitionDto);
+}
+
+type SubagentResumeCommandResult = { action: "resume"; sessionId: string; agent: string };
+type SubagentsCommandResult = SubagentResumeCommandResult | { action: "settings" };
 
 type SubagentSessionsTheme = {
   fg?: (color: "accent" | "dim", text: string) => string;
@@ -82,6 +92,82 @@ function getSubagentSettingsListTheme(theme: SubagentSessionsTheme) {
       cursor: "> ",
       hint: (text: string) => theme.fg?.("dim", text) ?? text,
     };
+  }
+}
+
+class SubagentAgentsComponent implements Component {
+  private selected = 0;
+  private mode: "list" | "inspect" = "list";
+
+  constructor(
+    private readonly agents: SubagentDefinitionDto[],
+    private readonly tui: Pick<TUI, "requestRender">,
+    private readonly theme: SubagentSessionsTheme,
+    private readonly done: (result?: SubagentsCommandResult) => void,
+  ) { }
+
+  invalidate(): void { }
+
+  render(_width: number): string[] {
+    if (this.agents.length === 0) return [this.accent("Subagent Agents"), "No configured subagent agents.", this.dim(agentListHelp())];
+
+    this.selected = clamp(this.selected, 0, this.agents.length - 1);
+    if (this.mode === "inspect") {
+      const agent = this.agents[this.selected];
+      return [
+        this.accent("Agent Definition"),
+        ...formatSubagentDefinitionInspect(agent).map(line => `  ${line}`),
+        this.dim(agentInspectHelp()),
+      ];
+    }
+
+    return [
+      this.accent("Subagent Agents"),
+      ...this.agents.map((agent, index) => {
+        const prefix = index === this.selected ? "> " : "  ";
+        const line = `${prefix}${formatSubagentDefinitionSummary(agent)}`;
+        return index === this.selected ? this.accent(line) : line;
+      }),
+      this.dim(agentListHelp()),
+    ];
+  }
+
+  handleInput(data: string): void {
+    if (isCancelKey(data)) {
+      this.done();
+      return;
+    }
+    if (data === "s" || data === "S") {
+      this.done({ action: "settings" });
+      return;
+    }
+    if (this.mode === "inspect" && (data === "b" || data === "B")) {
+      this.mode = "list";
+      this.tui.requestRender();
+      return;
+    }
+    if (isEnterKey(data) && this.agents.length > 0) {
+      this.mode = "inspect";
+      this.tui.requestRender();
+      return;
+    }
+    if (this.mode === "list" && isUpKey(data)) {
+      this.selected = clamp(this.selected - 1, 0, Math.max(0, this.agents.length - 1));
+      this.tui.requestRender();
+      return;
+    }
+    if (this.mode === "list" && isDownKey(data)) {
+      this.selected = clamp(this.selected + 1, 0, Math.max(0, this.agents.length - 1));
+      this.tui.requestRender();
+    }
+  }
+
+  private accent(text: string) {
+    return this.theme.fg?.("accent", this.theme.bold?.(text) ?? text) ?? text;
+  }
+
+  private dim(text: string) {
+    return this.theme.fg?.("dim", text) ?? text;
   }
 }
 
@@ -208,6 +294,14 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function agentListHelp() {
+  return "↑↓ select · enter inspect · s settings · esc close";
+}
+
+function agentInspectHelp() {
+  return "b back · s settings · esc close";
+}
+
 function listHelp(session: SubagentSessionDto | undefined) {
   const actions = ["↑↓ select", "enter inspect"];
   if (session && canResumeSubagentSession(session)) actions.push("r resume");
@@ -242,7 +336,7 @@ function isDownKey(data: string) {
 async function resumeSessionFromCommand(
   pi: ExtensionAPI,
   agentManager: AgentManager,
-  action: SubagentsCommandResult,
+  action: SubagentResumeCommandResult,
   ctx: ExtensionCommandContext,
   settingsStore: Pick<SubagentUiSettingsStore, "load">,
 ) {
@@ -311,7 +405,7 @@ class SubagentResumeLoader implements Component {
   }
 }
 
-function normalizeResumeOutcome(action: SubagentsCommandResult, prompt: string, outcome: { result?: unknown; error?: unknown }) {
+function normalizeResumeOutcome(action: SubagentResumeCommandResult, prompt: string, outcome: { result?: unknown; error?: unknown }) {
   if (outcome?.result && typeof outcome.result === "object") return outcome.result as {
     agent: string;
     prompt: string;
@@ -366,6 +460,7 @@ export function registerSubagentsCommand(
   pi: ExtensionAPI,
   agentManager: AgentManager,
   settingsStore: Pick<SubagentUiSettingsStore, "load" | "save"> = new SubagentUiSettingsStore(),
+  agentRegistry?: AgentRegistry,
 ) {
   (pi as ExtensionAPI & { registerCommand?: ExtensionAPI["registerCommand"] }).registerCommand?.("subagents", {
     description: "Manage active and retained subagent sessions",
@@ -377,7 +472,24 @@ export function registerSubagentsCommand(
 
       const sessions = listManagedSessions(agentManager);
       if (sessions.length === 0) {
-        ctx.ui.notify("No active or retained subagent sessions.", "info");
+        if (!agentRegistry) {
+          ctx.ui.notify("No active or retained subagent sessions.", "info");
+          return;
+        }
+
+        await agentRegistry.reload(ctx.cwd);
+        const agents = listAgentDefinitions(agentRegistry);
+        if (!ctx.hasUI || !ctx.ui?.custom) {
+          ctx.ui.notify(agents.length
+            ? agents.map(formatSubagentDefinitionSummary).join("\n")
+            : "No configured subagent agents.", "info");
+          return;
+        }
+
+        const action = await ctx.ui.custom<SubagentsCommandResult | undefined>((tui, theme, _keybindings, done) => {
+          return new SubagentAgentsComponent(agents, tui, theme, result => done(result));
+        });
+        if (action?.action === "settings") await openSubagentSettings(ctx, agentManager, settingsStore);
         return;
       }
 
