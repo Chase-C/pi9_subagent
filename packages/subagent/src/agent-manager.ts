@@ -310,8 +310,8 @@ export class AgentManager {
   private _releaseNonResumableCompleted(groupId: string) {
     this._agents = this._agents.filter(agent => {
       if (agent.groupId !== groupId) return true;
-      if (agent.config.resumable) return true;
-      return agent.status.kind === "queued" || agent.status.kind === "running";
+      if (agent.status.kind === "queued" || agent.status.kind === "running") return true;
+      return Boolean(agent.config.resumable && "session" in agent.status && agent.status.session);
     });
   }
 

@@ -252,6 +252,7 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
   assert.equal(results[1].resumable, false);
   assert.equal(Object.prototype.hasOwnProperty.call(results[1], 'sessionId'), false);
   assert.deepEqual(manager.listSessions(), []);
+  assert.deepEqual(manager.clear(), { cleared: 0 });
 });
 
 test('manager does not expose or resume non-resumable completed sessions', async () => {
