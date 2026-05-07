@@ -1,18 +1,18 @@
-import { defineTool, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
 import { AgentManager, AgentOptions } from "./agent-manager.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { SubagentParams } from "./schema.js";
+import { SubagentUiSettingsStore } from "./subagent-settings.js";
 import { registerSubagentsCommand } from "./subagents-command.js";
+import { loadSubagentUiSettings, updateSubagentWidget } from "./subagent-widget.js";
 import {
   createSubagentGroupDto,
   createSubagentTextComponent,
   formatSubagentResumeMessageContent,
   formatSubagentToolLines,
-  formatWidgetLines,
   type SubagentGroupDto,
-  type SubagentSessionDto,
 } from "./subagent-ui.js";
 
 const MAX_TASKS = 8;
@@ -20,6 +20,7 @@ const MAX_TASKS = 8;
 interface SubagentExtensionDependencies {
   agentRegistry?: AgentRegistry;
   agentManager?: AgentManager;
+  settingsStore?: Pick<SubagentUiSettingsStore, "load" | "save">;
 }
 
 function validateTasks(tasks: SubagentParams["tasks"] | undefined) {
@@ -70,23 +71,12 @@ function partialToolResult(group: SubagentGroupDto, active: boolean) {
   };
 }
 
-function updateSubagentWidget(ctx: ExtensionContext, sessions: SubagentSessionDto[]) {
-  if (!ctx.hasUI || !ctx.ui?.setWidget) return;
-  try {
-    const lines = formatWidgetLines(sessions);
-    ctx.ui.setWidget("subagent", lines.length > 0 ? lines : undefined, { placement: "belowEditor" });
-  } catch (error) {
-    try {
-      ctx.ui.notify(`Subagent UI update failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
-    } catch { }
-  }
-}
-
 export default function subagentExtension(pi: ExtensionAPI, dependencies: SubagentExtensionDependencies = {}) {
   const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
+  const settingsStore = dependencies.settingsStore ?? new SubagentUiSettingsStore();
 
-  registerSubagentsCommand(pi, agentManager);
+  registerSubagentsCommand(pi, agentManager, settingsStore);
   (pi as ExtensionAPI & { registerMessageRenderer?: ExtensionAPI["registerMessageRenderer"] }).registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
     const content = typeof message.content === "string"
       ? message.content
@@ -164,14 +154,15 @@ Execution notes:
         }
 
         const options = params.tasks as Array<AgentOptions>;
+        const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
         let lastGroup: SubagentGroupDto | undefined;
         const results = await agentManager.spawn(pi, ctx, signal, options, update => {
           const group = update.group ?? createSubagentGroupDto(update.groupId ?? "subagent", Date.now(), update.sessions);
           lastGroup = group;
           onUpdate?.(partialToolResult(group, update.active));
-          updateSubagentWidget(ctx, update.sessions);
+          updateSubagentWidget(ctx, update.sessions, uiSettings);
         });
-        updateSubagentWidget(ctx, agentManager.sessions);
+        updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
         const isError = results.some(result => result.status !== "completed");
         const sessions = lastGroup?.sessions ?? agentManager.sessions;
         return toolResult({ results, group: lastGroup, sessions }, isError);
@@ -184,14 +175,15 @@ Execution notes:
         if (promptError) return errorResult(promptError);
 
         try {
+          const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
           let lastGroup: SubagentGroupDto | undefined;
           const result = await agentManager.resume(ctx, signal, params.sessionId!, params.prompt!, update => {
             const group = update.group ?? createSubagentGroupDto(update.groupId ?? "subagent", Date.now(), update.sessions);
             lastGroup = group;
             onUpdate?.(partialToolResult(group, update.active));
-            updateSubagentWidget(ctx, update.sessions);
+            updateSubagentWidget(ctx, update.sessions, uiSettings);
           });
-          updateSubagentWidget(ctx, agentManager.sessions);
+          updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
           return toolResult({ result, group: lastGroup, sessions: lastGroup?.sessions ?? agentManager.sessions }, result.status !== "completed");
         } catch (error) {
           return errorResult(error instanceof Error ? error.message : String(error), { sessionId: params.sessionId });

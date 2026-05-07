@@ -1,7 +1,13 @@
-import { type ExtensionAPI, type ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { type Component, type TUI } from "@mariozechner/pi-tui";
+import { getSettingsListTheme, type ExtensionAPI, type ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import { SettingsList, type Component, type SettingItem, type TUI } from "@mariozechner/pi-tui";
 
 import { AgentManager } from "./agent-manager.js";
+import {
+  SubagentUiSettingsStore,
+  type SubagentUiSettings,
+  type WidgetPlacement,
+} from "./subagent-settings.js";
+import { loadSubagentUiSettings, updateSubagentWidget } from "./subagent-widget.js";
 import {
   canClearSubagentSession,
   canResumeSubagentSession,
@@ -9,7 +15,6 @@ import {
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
   formatSubagentToolLines,
-  formatWidgetLines,
   type SubagentSessionDto,
 } from "./subagent-ui.js";
 
@@ -24,6 +29,61 @@ type SubagentSessionsTheme = {
   fg?: (color: "accent" | "dim", text: string) => string;
   bold?: (text: string) => string;
 };
+
+class SubagentSettingsComponent implements Component {
+  private readonly settingsList: SettingsList;
+
+  constructor(
+    settings: SubagentUiSettings,
+    theme: SubagentSessionsTheme,
+    onChange: (placement: WidgetPlacement) => void,
+    done: () => void,
+  ) {
+    const items: SettingItem[] = [{
+      id: "widgetPlacement",
+      label: "Widget placement",
+      currentValue: settings.widgetPlacement,
+      values: ["belowEditor", "aboveEditor", "off"],
+      description: "Values: belowEditor, aboveEditor, off. off hides only the progress widget.",
+    }];
+    this.settingsList = new SettingsList(
+      items,
+      6,
+      getSubagentSettingsListTheme(theme),
+      (_id, newValue) => onChange(newValue as WidgetPlacement),
+      done,
+    );
+    this.theme = theme;
+  }
+
+  private readonly theme: SubagentSessionsTheme;
+
+  invalidate(): void { this.settingsList.invalidate(); }
+
+  render(width: number): string[] {
+    return [this.accent("Subagent Settings"), "", ...this.settingsList.render(width)];
+  }
+
+  handleInput(data: string): void { this.settingsList.handleInput(data); }
+
+  private accent(text: string) {
+    return this.theme.fg?.("accent", this.theme.bold?.(text) ?? text) ?? text;
+  }
+}
+
+function getSubagentSettingsListTheme(theme: SubagentSessionsTheme) {
+  try {
+    return getSettingsListTheme();
+  } catch {
+    return {
+      label: (text: string, selected: boolean) => selected ? (theme.bold?.(text) ?? text) : text,
+      value: (text: string) => text,
+      description: (text: string) => theme.fg?.("dim", text) ?? text,
+      cursor: "> ",
+      hint: (text: string) => theme.fg?.("dim", text) ?? text,
+    };
+  }
+}
 
 class SubagentSessionsComponent implements Component {
   private selected = 0;
@@ -184,6 +244,7 @@ async function resumeSessionFromCommand(
   agentManager: AgentManager,
   action: SubagentsCommandResult,
   ctx: ExtensionCommandContext,
+  settingsStore: Pick<SubagentUiSettingsStore, "load">,
 ) {
   const prompt = await ctx.ui.editor(`Resume subagent ${action.agent}`, "");
   if (typeof prompt !== "string" || prompt.trim() === "") {
@@ -191,6 +252,7 @@ async function resumeSessionFromCommand(
     return;
   }
 
+  const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
   const outcome = await ctx.ui.custom<{ result?: unknown; error?: unknown }>((tui, theme, _keybindings, done) => {
     const loader = createResumeLoader(tui, theme, `Resuming subagent ${action.agent}...`);
     let settled = false;
@@ -201,7 +263,7 @@ async function resumeSessionFromCommand(
     };
 
     agentManager.resume(ctx, loader.signal, action.sessionId, prompt, update => {
-      updateSubagentCommandWidget(ctx, update.sessions);
+      updateSubagentWidget(ctx, update.sessions, uiSettings);
     }).then(
       result => finish({ result }),
       error => finish({ error }),
@@ -211,7 +273,7 @@ async function resumeSessionFromCommand(
   });
 
   const result = normalizeResumeOutcome(action, prompt, outcome);
-  updateSubagentCommandWidget(ctx, listManagedSessions(agentManager));
+  updateSubagentWidget(ctx, listManagedSessions(agentManager), uiSettings);
   pi.sendMessage?.(createSubagentResumeMessage(result));
   ctx.ui.notify(result.status === "completed"
     ? `Subagent session ${action.sessionId} resumed.`
@@ -271,22 +333,45 @@ function normalizeResumeOutcome(action: SubagentsCommandResult, prompt: string, 
   };
 }
 
-function updateSubagentCommandWidget(ctx: ExtensionCommandContext, sessions: SubagentSessionDto[]) {
-  if (!ctx.hasUI || !ctx.ui?.setWidget) return;
-  try {
-    const lines = formatWidgetLines(sessions);
-    ctx.ui.setWidget("subagent", lines.length > 0 ? lines : undefined, { placement: "belowEditor" });
-  } catch (error) {
-    try {
-      ctx.ui.notify(`Subagent UI update failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
-    } catch { }
+async function openSubagentSettings(
+  ctx: ExtensionCommandContext,
+  agentManager: AgentManager,
+  settingsStore: Pick<SubagentUiSettingsStore, "load" | "save">,
+) {
+  let settings = await loadSubagentUiSettings(ctx, settingsStore);
+  if (!ctx.hasUI || !ctx.ui?.custom) {
+    ctx.ui.notify(`Subagent widget placement: ${settings.widgetPlacement}`, "info");
+    return;
   }
+
+  await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => new SubagentSettingsComponent(
+    settings,
+    theme,
+    placement => {
+      settings = { widgetPlacement: placement };
+      updateSubagentWidget(ctx, listManagedSessions(agentManager), settings);
+      void settingsStore.save(settings).then(
+        () => ctx.ui.notify(`Subagent widget placement set to ${placement}.`, "info"),
+        error => ctx.ui.notify(`Failed to save subagent settings: ${error instanceof Error ? error.message : String(error)}`, "warning"),
+      );
+    },
+    () => done(undefined),
+  ));
 }
 
-export function registerSubagentsCommand(pi: ExtensionAPI, agentManager: AgentManager) {
+export function registerSubagentsCommand(
+  pi: ExtensionAPI,
+  agentManager: AgentManager,
+  settingsStore: Pick<SubagentUiSettingsStore, "load" | "save"> = new SubagentUiSettingsStore(),
+) {
   (pi as ExtensionAPI & { registerCommand?: ExtensionAPI["registerCommand"] }).registerCommand?.("subagents", {
     description: "Manage active and retained subagent sessions",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      if (args.trim() === "settings") {
+        await openSubagentSettings(ctx, agentManager, settingsStore);
+        return;
+      }
+
       const sessions = listManagedSessions(agentManager);
       if (sessions.length === 0) {
         ctx.ui.notify("No active or retained subagent sessions.", "info");
@@ -308,7 +393,7 @@ export function registerSubagentsCommand(pi: ExtensionAPI, agentManager: AgentMa
         );
       });
 
-      if (action?.action === "resume") await resumeSessionFromCommand(pi, agentManager, action, ctx);
+      if (action?.action === "resume") await resumeSessionFromCommand(pi, agentManager, action, ctx, settingsStore);
     },
   });
 }

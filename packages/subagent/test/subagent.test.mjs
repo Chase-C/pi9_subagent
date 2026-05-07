@@ -6,6 +6,42 @@ import { join } from 'node:path';
 
 const unique = () => `${Date.now()}-${Math.random()}`;
 
+test('subagent UI settings default to below editor when file is missing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-settings-default-'));
+  const { SubagentUiSettingsStore } = await import(`../dist/subagent-settings.js?t=${unique()}`);
+  const store = new SubagentUiSettingsStore(join(root, 'subagent', 'settings.json'));
+
+  const result = await store.load();
+
+  assert.deepEqual(result.settings, { widgetPlacement: 'belowEditor' });
+  assert.equal(result.warning, undefined);
+});
+
+test('subagent UI settings save and reload widget placement globally', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-settings-save-'));
+  const settingsPath = join(root, 'subagent', 'settings.json');
+  const { SubagentUiSettingsStore } = await import(`../dist/subagent-settings.js?t=${unique()}`);
+
+  await new SubagentUiSettingsStore(settingsPath).save({ widgetPlacement: 'aboveEditor' });
+  const result = await new SubagentUiSettingsStore(settingsPath).load();
+
+  assert.deepEqual(result.settings, { widgetPlacement: 'aboveEditor' });
+  assert.equal(result.warning, undefined);
+});
+
+test('subagent UI settings fall back to defaults for invalid config', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-settings-invalid-'));
+  const settingsPath = join(root, 'subagent', 'settings.json');
+  await mkdir(join(root, 'subagent'), { recursive: true });
+  await writeFile(settingsPath, JSON.stringify({ widgetPlacement: 'besideEditor' }));
+  const { SubagentUiSettingsStore } = await import(`../dist/subagent-settings.js?t=${unique()}`);
+
+  const result = await new SubagentUiSettingsStore(settingsPath).load();
+
+  assert.deepEqual(result.settings, { widgetPlacement: 'belowEditor' });
+  assert.match(result.warning, /widgetPlacement/);
+});
+
 test('registry loads markdown files from ctx cwd project dir and keys by frontmatter name', async () => {
   const root = await mkdtemp(join(tmpdir(), 'subagent-registry-'));
   const projectAgents = join(root, '.pi', 'agents');
@@ -134,6 +170,55 @@ test('tool resume action returns full output only once in JSON details', async (
   assert.equal(result.details.result.output, fullOutput);
   assert.equal((result.content[0].text.match(new RegExp(fullOutput, 'g')) ?? []).length, 1);
   assert.equal(result.details.message?.details?.result?.output, undefined);
+});
+
+test('/subagents settings exposes placement values, saves changes, and updates active widget', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const runningSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
+    promptPreview: 'Fix issue', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
+  };
+  const fakeManager = {
+    sessions: [runningSession],
+    listSessions() { return this.sessions; },
+  };
+  let current = 'belowEditor';
+  const saved = [];
+  const fakeSettingsStore = {
+    async load() { return { settings: { widgetPlacement: current } }; },
+    async save(settings) { current = settings.widgetPlacement; saved.push(settings); },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager, settingsStore: fakeSettingsStore });
+
+  let rendered = '';
+  const widgets = [];
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  await commands.get('subagents').handler('settings', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget: (...args) => widgets.push(args),
+      custom(factory) {
+        const component = factory({ requestRender() {} }, theme, {}, () => {});
+        rendered = component.render(120).join('\n');
+        component.handleInput('\r');
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.match(rendered, /Subagent Settings/);
+  assert.match(rendered, /Widget placement/);
+  assert.match(rendered, /belowEditor/);
+  assert.match(rendered, /Values: belowEditor, aboveEditor, off/);
+  assert.deepEqual(saved, [{ widgetPlacement: 'aboveEditor' }]);
+  assert.equal(widgets.at(-1)[0], 'subagent');
+  assert.deepEqual(widgets.at(-1)[2], { placement: 'aboveEditor' });
 });
 
 test('subagents command opens a sessions view from serialized DTOs', async () => {
@@ -797,6 +882,94 @@ test('subagent tool returns one ordered final group for mixed success, unknown, 
   assert.equal(result.details.group.statusCounts.completed, 1);
   assert.equal(result.details.group.statusCounts.error, 2);
   assert.equal(result.details.group.isError, true);
+});
+
+test('subagent tool notifies invalid settings fallback without breaking execution', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const runningSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
+    promptPreview: 'work', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
+  };
+  const fakeRegistry = {
+    agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project' }]]),
+    async reload() {},
+    summarizeAgent() { return 'helper (project)'; },
+  };
+  const fakeManager = {
+    sessions: [],
+    async spawn(_pi, _ctx, _signal, _options, onUpdate) {
+      onUpdate({ groupId: 'g1', sessions: [runningSession], active: true, updatedAt: 1 });
+      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
+    },
+  };
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: fakeRegistry,
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { widgetPlacement: 'belowEditor' }, warning: 'Invalid subagent UI settings.' }; } },
+  });
+
+  const notifications = [];
+  const widgets = [];
+  const result = await registeredTool.execute('tool-call', {
+    action: 'start',
+    tasks: [{ agent: 'helper', prompt: 'work' }],
+  }, undefined, undefined, {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: { setWidget: (...args) => widgets.push(args), notify: (...args) => notifications.push(args) },
+  });
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.results[0].output, 'done');
+  assert.match(notifications[0][0], /Invalid subagent UI settings/);
+  assert.equal(notifications[0][1], 'warning');
+  assert.deepEqual(widgets[0][2], { placement: 'belowEditor' });
+});
+
+test('subagent tool keeps subagent surfaces working but hides widget when placement is off', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const runningSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
+    promptPreview: 'work', messageSnippet: 'working', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
+  };
+  const fakeRegistry = {
+    agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project' }]]),
+    async reload() {},
+    summarizeAgent() { return 'helper (project)'; },
+  };
+  const fakeManager = {
+    sessions: [runningSession],
+    async spawn(_pi, _ctx, _signal, _options, onUpdate) {
+      onUpdate({ groupId: 'g1', sessions: [runningSession], active: true, updatedAt: 1 });
+      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
+    },
+  };
+  const fakeSettingsStore = {
+    async load() { return { settings: { widgetPlacement: 'off' } }; },
+  };
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: fakeRegistry,
+    agentManager: fakeManager,
+    settingsStore: fakeSettingsStore,
+  });
+
+  const widgets = [];
+  const result = await registeredTool.execute('tool-call', {
+    action: 'start',
+    tasks: [{ agent: 'helper', prompt: 'work' }],
+  }, undefined, undefined, {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: { setWidget: (...args) => widgets.push(args), notify() {} },
+  });
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.results[0].output, 'done');
+  assert.equal(result.details.sessions[0].agent, 'helper');
+  assert.ok(widgets.length > 0);
+  assert.equal(widgets.every(call => call[0] === 'subagent' && call[1] === undefined), true);
 });
 
 test('subagent tool forwards live manager DTOs to onUpdate and widget UI', async () => {
