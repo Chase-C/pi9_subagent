@@ -4,6 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { AgentManager, AgentOptions } from "./agent-manager.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { SubagentParams } from "./schema.js";
+import { registerSubagentsCommand } from "./subagents-command.js";
 import {
   createSubagentGroupDto,
   createSubagentTextComponent,
@@ -83,6 +84,8 @@ function updateSubagentWidget(ctx: ExtensionContext, sessions: SubagentSessionDt
 export default function subagentExtension(pi: ExtensionAPI, dependencies: SubagentExtensionDependencies = {}) {
   const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
+
+  registerSubagentsCommand(pi, agentManager);
 
   pi.registerTool(defineTool({
     name: "subagent",

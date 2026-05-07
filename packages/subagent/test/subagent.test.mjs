@@ -104,6 +104,163 @@ test('tool list action returns agent definitions or resumable sessions by type',
   assert.deepEqual(sessions.details.sessions, []);
 });
 
+test('subagents command opens a sessions view from serialized DTOs', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const fakeRegistry = {
+    agents: new Map(),
+    async reload() {},
+    summarizeAgent() { return ''; },
+  };
+  const fakeManager = {
+    sessions: [
+      {
+        id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
+        promptPreview: 'Fix issue by updating the API', turns: 3, toolUses: 2, compactions: 1,
+        createdAt: 1_000, startedAt: 2_000, completedAt: 5_000, source: 'project', model: 'test/model', thinking: 'low',
+        tools: ['read', 'bash'], outputSnippet: 'Implemented the fix.', availableActions: ['inspect', 'clear'],
+        finalOutcome: { status: 'completed' },
+      },
+    ],
+    listSessions() { return this.sessions; },
+  };
+  const commands = new Map();
+
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
+
+  const command = commands.get('subagents');
+  assert.ok(command);
+
+  let rendered = [];
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const ctx = {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory) {
+        const component = factory({ requestRender() {} }, theme, {}, () => {});
+        rendered = component.render(100);
+        return Promise.resolve(null);
+      },
+    },
+  };
+
+  await command.handler('', ctx);
+
+  const text = rendered.join('\n');
+  assert.match(text, /Subagent Sessions/);
+  assert.match(text, /helper/);
+  assert.match(text, /completed/);
+  assert.match(text, /resumable/);
+  assert.match(text, /session:s1/);
+  assert.match(text, /Fix issue by updating the API/);
+  assert.doesNotMatch(text, /"config"/);
+});
+
+test('subagents command inspect view shows metadata and clears retained session immediately', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const retainedSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
+    promptPreview: 'Fix retained context', turns: 3, toolUses: 2, compactions: 1,
+    createdAt: 1_000, startedAt: 2_000, completedAt: 5_000, source: 'project', model: 'test/model', thinking: 'low',
+    tools: ['read', 'bash'], usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 } },
+    outputSnippet: 'Implemented the retained-session fix.', availableActions: ['inspect', 'clear'],
+    finalOutcome: { status: 'completed' },
+  };
+  const clearCalls = [];
+  const fakeManager = {
+    sessions: [retainedSession],
+    listSessions() { return this.sessions; },
+    clear(sessionId) {
+      clearCalls.push(sessionId);
+      this.sessions = this.sessions.filter(session => session.sessionId !== sessionId);
+      return { cleared: 1, sessionId };
+    },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager });
+
+  let inspectText = '';
+  const notifications = [];
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  await commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify: (...args) => notifications.push(args),
+      custom(factory) {
+        const component = factory({ requestRender() {} }, theme, {}, () => {});
+        component.handleInput('\r');
+        inspectText = component.render(120).join('\n');
+        component.handleInput('c');
+        return Promise.resolve(null);
+      },
+    },
+  });
+
+  assert.match(inspectText, /Status: completed · resumable/);
+  assert.match(inspectText, /Agent: helper \(project\)/);
+  assert.match(inspectText, /Model: test\/model · thinking:low/);
+  assert.match(inspectText, /Tools: read, bash/);
+  assert.match(inspectText, /Progress: 3 turns · 2 tool uses · 1 compaction/);
+  assert.match(inspectText, /Usage: 3 tokens · \$0\.0100/);
+  assert.match(inspectText, /Output: Implemented the retained-session fix/);
+  assert.match(inspectText, /Actions: inspect, clear/);
+  assert.deepEqual(clearCalls, ['s1']);
+  assert.deepEqual(fakeManager.sessions, []);
+  assert.match(notifications.at(-1)[0], /Cleared subagent session s1/);
+});
+
+test('subagent tool lists retained sessions as serialized DTOs with clear action', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent) => {
+    agent.start(session);
+    agent.complete('The final answer from the child.');
+    return { response: 'The final answer from the child.', session };
+  };
+  const fakeRegistry = {
+    agents: new Map([
+      ['chatty', { name: 'chatty', description: 'Keeps context', systemPrompt: 's', source: 'project', resumable: true, model: 'test/model', tools: ['read'] }],
+    ]),
+    async reload() {},
+    summarizeAgent() { return 'chatty (project)'; },
+  };
+  const manager = new AgentManager(fakeRegistry, 1, runner);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, { agentRegistry: fakeRegistry, agentManager: manager });
+
+  await registeredTool.execute('tool-call', {
+    action: 'start',
+    tasks: [{ agent: 'chatty', prompt: 'Remember this work.' }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false, modelRegistry: { getAll: () => [] } });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'list',
+    type: 'sessions',
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.sessions.length, 1);
+  const retained = result.details.sessions[0];
+  assert.equal(retained.agent, 'chatty');
+  assert.equal(retained.status, 'completed');
+  assert.equal(retained.source, 'project');
+  assert.equal(retained.model, 'test/model');
+  assert.deepEqual(retained.tools, ['read']);
+  assert.equal(retained.outputSnippet, 'The final answer from the child.');
+  assert.deepEqual(retained.availableActions, ['inspect', 'clear']);
+  assert.equal(Object.prototype.hasOwnProperty.call(retained, 'config'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(retained, 'run'), false);
+});
+
 test('tool execution returns structured failed run for unknown agents', async () => {
   const root = await mkdtemp(join(tmpdir(), 'subagent-unknown-'));
   let registeredTool;

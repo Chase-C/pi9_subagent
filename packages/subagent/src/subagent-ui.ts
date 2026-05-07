@@ -1,9 +1,11 @@
+import type { Usage } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 
 import type { Agent } from "./agent.js";
 
 const PROMPT_PREVIEW_LENGTH = 120;
 const MESSAGE_SNIPPET_LENGTH = 200;
+const OUTPUT_SNIPPET_LENGTH = 200;
 
 export interface SubagentFinalOutcomeDto {
   status: "completed" | "error" | "aborted" | "skipped" | "interrupted";
@@ -19,15 +21,23 @@ export interface SubagentSessionDto {
   resumable: boolean;
   promptPreview: string;
   messageSnippet?: string;
+  outputSnippet?: string;
+  errorSnippet?: string;
   activeTool?: string;
   turns: number;
   toolUses: number;
+  compactions: number;
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
+  source?: string;
   model?: string;
+  thinking?: string;
+  tools?: string[];
+  usage?: Usage;
   inputIndex?: number;
   finalOutcome?: SubagentFinalOutcomeDto;
+  availableActions: string[];
 }
 
 export interface SubagentGroupDto {
@@ -83,11 +93,14 @@ export function createSubagentErrorSessionDto(
     promptPreview: compact(task.prompt, PROMPT_PREVIEW_LENGTH),
     turns: 0,
     toolUses: 0,
+    compactions: 0,
     createdAt,
     completedAt: createdAt,
     model: task.model,
     inputIndex,
+    errorSnippet: compact(error, OUTPUT_SNIPPET_LENGTH),
     finalOutcome: { status: "error", message: error },
+    availableActions: ["inspect"],
   };
 }
 
@@ -105,26 +118,39 @@ export function agentToSessionDto(agent: Agent): SubagentSessionDto {
     activeTool: agent.tool,
     turns: agent.turns,
     toolUses: agent.toolUses,
+    compactions: agent.compactions,
     createdAt: agent.createdAt,
+    source: agent.config.source,
     model: agent.options.model ?? agent.config.model,
+    thinking: agent.options.thinking ?? agent.config.thinking,
+    tools: agent.config.tools,
+    usage: agent.totalUsage,
+    availableActions: ["inspect"],
   };
+
+  if (!isActiveStatus(status.kind) && dto.resumable) dto.availableActions.push("clear");
 
   if ("startedAt" in status) dto.startedAt = status.startedAt;
 
   if (status.kind === "completed") {
     dto.completedAt = status.completedAt;
+    dto.outputSnippet = compact(status.response, OUTPUT_SNIPPET_LENGTH);
     dto.finalOutcome = { status: "completed" };
   } else if (status.kind === "error") {
     dto.completedAt = status.errorAt;
+    dto.errorSnippet = compact(status.error, OUTPUT_SNIPPET_LENGTH);
     dto.finalOutcome = { status: "error", message: status.error };
   } else if (status.kind === "skipped") {
     dto.completedAt = status.skippedAt;
+    dto.errorSnippet = "Agent skipped.";
     dto.finalOutcome = { status: "skipped", message: "Agent skipped." };
   } else if (status.kind === "interrupted") {
     dto.completedAt = status.interruptedAt;
+    dto.errorSnippet = compact(status.error ?? "Agent interrupted.", OUTPUT_SNIPPET_LENGTH);
     dto.finalOutcome = { status: "interrupted", message: status.error ?? "Agent interrupted." };
   } else if (status.kind === "aborted") {
     dto.completedAt = status.abortedAt;
+    dto.errorSnippet = "Agent aborted.";
     dto.finalOutcome = { status: "aborted", message: "Agent aborted." };
   }
 
@@ -165,6 +191,42 @@ export function formatSubagentGroupLine(group: SubagentGroupDto): string {
   const active = group.sessions.some(session => isActiveStatus(session.status));
   const outcome = group.isError ? "error" : active ? "running" : "completed";
   return [`${group.sessions.length} subagents`, ...counts, ...extraCounts, `outcome:${outcome}`].join(" · ");
+}
+
+export function formatSubagentSessionSummary(session: SubagentSessionDto): string {
+  const badges = [
+    session.resumable ? "resumable" : undefined,
+    `session:${session.sessionId}`,
+  ].filter(Boolean);
+  return [session.agent, session.status, ...badges, `“${session.promptPreview}”`].join(" · ");
+}
+
+export function formatSubagentSessionInspect(session: SubagentSessionDto, now = Date.now()): string[] {
+  const elapsed = formatElapsed((session.startedAt ?? session.createdAt), session.completedAt ?? now);
+  const lines = [
+    `Session ${session.sessionId}`,
+    `Status: ${session.status}${session.resumable ? " · resumable" : ""}`,
+    `Agent: ${session.agent}${session.source ? ` (${session.source})` : ""}`,
+  ];
+
+  if (session.model || session.thinking) {
+    lines.push(`Model: ${session.model ?? "default"}${session.thinking ? ` · thinking:${session.thinking}` : ""}`);
+  }
+  lines.push(`Tools: ${session.tools?.length ? session.tools.join(", ") : "default"}`);
+  lines.push(`Prompt: ${session.promptPreview}`);
+  if (session.activeTool) lines.push(`Active tool: ${session.activeTool}`);
+  lines.push(`Progress: ${session.turns} turn${session.turns === 1 ? "" : "s"} · ${session.toolUses} tool use${session.toolUses === 1 ? "" : "s"} · ${session.compactions} compaction${session.compactions === 1 ? "" : "s"}`);
+  if (session.usage) lines.push(`Usage: ${formatUsage(session.usage)}`);
+  lines.push(`Timestamps: created ${formatTimestamp(session.createdAt)}${session.startedAt ? ` · started ${formatTimestamp(session.startedAt)}` : ""}${session.completedAt ? ` · completed ${formatTimestamp(session.completedAt)}` : ""} · elapsed ${elapsed}`);
+  if (session.outputSnippet) lines.push(`Output: ${session.outputSnippet}`);
+  if (session.errorSnippet) lines.push(`Error: ${session.errorSnippet}`);
+  if (session.messageSnippet) lines.push(`Message: ${session.messageSnippet}`);
+  lines.push(`Actions: ${session.availableActions.length ? session.availableActions.join(", ") : "none"}`);
+  return lines;
+}
+
+export function canClearSubagentSession(session: SubagentSessionDto): boolean {
+  return session.availableActions.includes("clear") && !isActiveStatus(session.status);
 }
 
 export function formatSubagentSessionLine(session: SubagentSessionDto, now = Date.now()): string {
@@ -247,6 +309,16 @@ function formatElapsed(from: number, to: number) {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return `${minutes}m${rest.toString().padStart(2, "0")}s`;
+}
+
+function formatTimestamp(value: number) {
+  return new Date(value).toISOString();
+}
+
+function formatUsage(usage: Usage) {
+  const tokens = `${usage.totalTokens} tokens`;
+  const cost = usage.cost?.total ? ` · $${usage.cost.total.toFixed(4)}` : "";
+  return `${tokens}${cost}`;
 }
 
 function colorLine(line: string, theme: any) {
