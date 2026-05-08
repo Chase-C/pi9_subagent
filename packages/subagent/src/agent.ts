@@ -4,6 +4,7 @@ import { AgentSession } from "@mariozechner/pi-coding-agent";
 import { AgentConfig, AgentSource } from "./agent-config.js";
 import type { AgentOptions } from "./agent-options.js";
 import type { AgentRunResult } from "./run-agent.js";
+import { MESSAGE_SNIPPET_LENGTH, OUTPUT_SNIPPET_LENGTH, compact } from "./serialize.js";
 
 const DefaultUsage: Usage = {
   input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -15,14 +16,18 @@ export type AgentStatus =
   | { kind: "running"; session: AgentSession; startedAt: number }
   | { kind: "done"; result: AgentRunResult; ran?: { session: AgentSession; startedAt: number }; completedAt: number };
 
-export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
+export type AgentViewStatus =
+  | { readonly kind: "queued" }
+  | { readonly kind: "running"; readonly startedAt: number }
+  | {
+      readonly kind: "done";
+      readonly outcome: AgentRunResult["status"];
+      readonly completedAt: number;
+      readonly startedAt?: number;
+      readonly snippet?: string;
+    };
 
-export interface AgentPromptRun {
-  readonly prompt: string;
-  readonly startedAt: number;
-  readonly completedAt?: number;
-  readonly status?: AgentRunResult["status"];
-}
+export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
 
 export interface AgentToolUse {
   readonly id: string;
@@ -32,36 +37,40 @@ export interface AgentToolUse {
   readonly isError?: boolean;
 }
 
+export interface AgentViewConfig {
+  readonly name: string;
+  readonly description?: string;
+  readonly source: AgentSource | undefined;
+  readonly sourcePath?: string;
+  readonly model: string | undefined;
+  readonly thinking: ModelThinkingLevel | undefined;
+  readonly tools: readonly string[] | undefined;
+  readonly resumable: boolean;
+}
+
+export interface AgentActivityView {
+  readonly messageSnippet?: string;
+  readonly turns: number;
+  readonly compactions: number;
+  readonly toolHistory: readonly AgentToolUse[];
+}
+
 export interface AgentView {
   readonly id: string;
   readonly groupId: string;
-  readonly agentName: string;
-  readonly prompt: string;
-  readonly prompts?: readonly AgentPromptRun[];
-  readonly status: AgentStatus;
-  readonly source: AgentSource | undefined;
-  readonly resolvedModel: string | undefined;
-  readonly resolvedThinking: ModelThinkingLevel | undefined;
-  readonly tools: string[] | undefined;
-  readonly resumable: boolean;
-  readonly message: string;
-  readonly activeTools?: readonly string[];
-  readonly turns: number;
-  readonly toolUses: number;
-  readonly toolHistory?: readonly AgentToolUse[];
-  readonly compactions: number;
+  readonly inputIndex?: number;
   readonly createdAt: number;
-  readonly totalUsage: Usage | undefined;
+  readonly config: AgentViewConfig;
+  readonly status: AgentViewStatus;
+  readonly activity: AgentActivityView;
+  readonly usage: Usage | undefined;
 }
 
-export class Agent implements AgentView {
+export class Agent {
 
   private _status: AgentStatus = { kind: "queued" };
 
   private _message: string = "";
-
-  private _pendingPrompt: string | undefined;
-  private _promptRuns = new Array<AgentPromptRun>();
 
   private _turns: number = 0;
   private _toolHistory = new Array<AgentToolUse>();
@@ -79,27 +88,18 @@ export class Agent implements AgentView {
     readonly id: string,
     readonly groupId: string,
     readonly config: AgentConfig,
-    options: AgentOptions,
-    readonly onUpdate: (agent: Agent, kind: AgentUpdateKind) => void,
-  ) {
-    this.agentName = options.agent;
-    this.modelOverride = options.model;
-    this.thinkingOverride = options.thinking;
-    this.cwd = options.cwd;
-    this._pendingPrompt = options.prompt;
-  }
+    private readonly options: AgentOptions,
+    private readonly onUpdate: (agent: Agent, kind: AgentUpdateKind) => void,
+  ) { }
 
-  readonly agentName: string;
-  readonly modelOverride: string | undefined;
-  readonly thinkingOverride: ModelThinkingLevel | undefined;
-  readonly cwd: string | undefined;
+  get agentName() { return this.options.agent }
+  get modelOverride() { return this.options.model }
+  get thinkingOverride() { return this.options.thinking }
+  get cwd() { return this.options.cwd }
 
   get status() { return this._status }
-  get hasPendingPrompt() { return this._pendingPrompt !== undefined }
 
   get message() { return this._message }
-  get prompts(): readonly AgentPromptRun[] { return this._promptRuns }
-  get prompt() { return this._pendingPrompt ?? this._promptRuns.at(-1)?.prompt ?? "" }
   get activeTools() { return this._toolHistory.filter(tool => tool.completedAt === undefined).map(tool => tool.name) }
   get toolHistory(): readonly AgentToolUse[] { return this._toolHistory }
 
@@ -107,15 +107,12 @@ export class Agent implements AgentView {
   get toolUses() { return this._toolHistory.length }
   get compactions() { return this._compactions }
 
-  get usage() { return this._usage }
   get totalUsage() { return this._totalUsage }
 
   get createdAt() { return this._createdAt }
 
-  get source() { return this.config.source }
   get resolvedModel() { return this.modelOverride ?? this.config.model }
   get resolvedThinking() { return this.thinkingOverride ?? this.config.thinking }
-  get tools() { return this.config.tools }
 
   get resumable(): boolean {
     if (!this.config.resumable) return false;
@@ -123,18 +120,31 @@ export class Agent implements AgentView {
     return Boolean(this._status.ran);
   }
 
-  preparePrompt(prompt: string) {
-    this._pendingPrompt = prompt;
-  }
-
-  discardPendingPrompt() {
-    this._pendingPrompt = undefined;
-  }
-
-  finishPrompt(status: AgentRunResult["status"]) {
-    const i = this._activeRunIndex();
-    if (i < 0) return;
-    this._promptRuns[i] = { ...this._promptRuns[i], completedAt: Date.now(), status };
+  toView(inputIndex?: number): AgentView {
+    return {
+      id: this.id,
+      groupId: this.groupId,
+      ...(inputIndex !== undefined ? { inputIndex } : {}),
+      createdAt: this._createdAt,
+      config: {
+        name: this.agentName,
+        description: this.config.description,
+        source: this.config.source,
+        sourcePath: this.config.sourcePath,
+        model: this.resolvedModel,
+        thinking: this.resolvedThinking,
+        tools: this.config.tools,
+        resumable: this.resumable,
+      },
+      status: this._viewStatus(),
+      activity: {
+        messageSnippet: this._message ? compact(this._message, MESSAGE_SNIPPET_LENGTH) : undefined,
+        turns: this._turns,
+        compactions: this._compactions,
+        toolHistory: this._toolHistory.map(tool => ({ ...tool })),
+      },
+      usage: this._totalUsage,
+    };
   }
 
   attach(session: AgentSession) {
@@ -144,31 +154,35 @@ export class Agent implements AgentView {
     if (!canAttach) {
       throw new Error(`Cannot attach a session to an agent that is ${this._describe()}.`);
     }
-    if (this._pendingPrompt !== undefined) {
-      this._promptRuns.push({ prompt: this._pendingPrompt, startedAt: Date.now() });
-      this._pendingPrompt = undefined;
-    }
     this._subscribe(session);
     this._status = { kind: "running", session, startedAt: Date.now() };
     this.onUpdate(this, "status");
   }
 
   finalize(result: AgentRunResult) {
-    if (this._status.kind === "done" && !this.hasPendingPrompt) return;
+    if (this._status.kind === "done") return;
     this._finishSubscription();
     const previousStatus = this._status;
     const ran = previousStatus.kind === "running"
       ? { session: previousStatus.session, startedAt: previousStatus.startedAt }
-      : previousStatus.kind === "done"
-        ? previousStatus.ran
-        : undefined;
-    if (previousStatus.kind === "done" && this._pendingPrompt !== undefined) {
-      const now = Date.now();
-      this._promptRuns.push({ prompt: this._pendingPrompt, startedAt: now, completedAt: now, status: result.status });
-      this._pendingPrompt = undefined;
-    }
+      : undefined;
     this._status = { kind: "done", result, ran, completedAt: Date.now() };
     this.onUpdate(this, "status");
+  }
+
+  private _viewStatus(): AgentViewStatus {
+    if (this._status.kind === "queued") return { kind: "queued" };
+    if (this._status.kind === "running") return { kind: "running", startedAt: this._status.startedAt };
+
+    const result = this._status.result;
+    const rawSnippet = result.status === "completed" ? result.output : result.error ?? result.status;
+    return {
+      kind: "done",
+      outcome: result.status,
+      completedAt: this._status.completedAt,
+      ...(this._status.ran ? { startedAt: this._status.ran.startedAt } : {}),
+      ...(rawSnippet ? { snippet: compact(rawSnippet, OUTPUT_SNIPPET_LENGTH) } : {}),
+    };
   }
 
   private _describe(): string {
@@ -181,13 +195,6 @@ export class Agent implements AgentView {
       this._unsubscribe();
       this._unsubscribe = undefined;
     }
-  }
-
-  private _activeRunIndex() {
-    for (let i = this._promptRuns.length - 1; i >= 0; i--) {
-      if (this._promptRuns[i].completedAt === undefined) return i;
-    }
-    return -1;
   }
 
   private _startToolUse(event: { toolCallId?: string; toolName: string }) {

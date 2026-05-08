@@ -15,7 +15,6 @@ import {
 } from "./format.js";
 import {
   listAgentDefinitions,
-  serializeAgent,
   serializeGroup,
 } from "./serialize.js";
 
@@ -56,12 +55,12 @@ function errorResult(message: string, details: Record<string, unknown> = { }) {
 }
 
 function liveAgents(update: AgentManagerGroupUpdate): AgentView[] {
-  return update.entries.map(({ entry }) => entry);
+  return update.sessions ?? update.entries?.map(({ entry }) => entry) ?? [];
 }
 
 function snapshotGroup(update: AgentManagerGroupUpdate) {
-  const sessions = update.entries
-    .map(({ entry, inputIndex }) => serializeAgent(entry, inputIndex))
+  const sessions = (update.sessions ?? update.entries?.map(({ entry, inputIndex }) => ({ ...entry, inputIndex })) ?? [])
+    .slice()
     .sort((a, b) => (a.inputIndex ?? 0) - (b.inputIndex ?? 0));
   return serializeGroup(update.groupId, update.createdAt, sessions);
 }
@@ -162,8 +161,7 @@ Execution notes:
           return toolResult({ agents });
         }
         if (type === "sessions") {
-          const sessions = agentManager.sessions.map(agent => serializeAgent(agent));
-          return toolResult({ sessions });
+          return toolResult({ sessions: agentManager.sessions });
         }
         return errorResult('For action=list, type must be "agents" or "sessions".');
       }

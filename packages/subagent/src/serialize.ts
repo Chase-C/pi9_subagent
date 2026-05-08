@@ -1,6 +1,6 @@
 import type { Usage } from "@mariozechner/pi-ai";
 
-import type { AgentPromptRun, AgentStatus, AgentToolUse, AgentView } from "./agent.js";
+import type { AgentToolUse, AgentView, AgentViewStatus } from "./agent.js";
 import type { AgentConfig } from "./agent-config.js";
 import type { AgentRegistry } from "./agent-registry.js";
 
@@ -8,94 +8,23 @@ export const PROMPT_PREVIEW_LENGTH = 120;
 export const MESSAGE_SNIPPET_LENGTH = 200;
 export const OUTPUT_SNIPPET_LENGTH = 200;
 
-export interface AgentRow {
-  id: string;
-  groupId: string;
-  agent: string;
-  status: string;
-  resumable: boolean;
-  promptPreview: string;
-  prompts?: AgentPromptRun[];
-  messageSnippet?: string;
-  outputSnippet?: string;
-  errorSnippet?: string;
-  activeTool?: string;
-  activeTools?: string[];
-  turns: number;
-  toolUses: number;
-  toolHistory?: AgentToolUse[];
-  compactions: number;
-  createdAt: number;
-  startedAt?: number;
-  completedAt?: number;
-  source?: string;
-  model?: string;
-  thinking?: string;
-  tools?: string[];
-  usage?: Usage;
-  inputIndex?: number;
-}
-
-export interface AgentRowGroup {
+export interface AgentGroupView {
   id: string;
   createdAt: number;
   statusCounts: Record<string, number>;
-  sessions: AgentRow[];
+  sessions: AgentView[];
   isError: boolean;
-}
-
-export function serializeAgent(entry: AgentView, inputIndex?: number): AgentRow {
-  const status = entry.status;
-  const activeTools = cloneActiveTools(entry);
-  return {
-    id: entry.id,
-    groupId: entry.groupId,
-    agent: entry.agentName,
-    status: effectiveStatus(status),
-    resumable: entry.resumable,
-    promptPreview: compact(entry.prompt, PROMPT_PREVIEW_LENGTH),
-    prompts: clonePrompts(entry),
-    messageSnippet: entry.message ? compact(entry.message, MESSAGE_SNIPPET_LENGTH) : undefined,
-    activeTool: activeTools?.at(-1),
-    activeTools,
-    turns: entry.turns,
-    toolUses: entry.toolUses,
-    toolHistory: cloneToolHistory(entry),
-    compactions: entry.compactions,
-    createdAt: entry.createdAt,
-    startedAt: getStartedAt(status),
-    completedAt: getCompletedAt(status),
-    outputSnippet: getOutputSnippet(status),
-    errorSnippet: getErrorSnippet(status),
-    source: entry.source,
-    model: entry.resolvedModel,
-    thinking: entry.resolvedThinking,
-    tools: entry.tools,
-    usage: entry.totalUsage,
-    inputIndex,
-  };
-}
-
-function clonePrompts(entry: AgentView): AgentPromptRun[] | undefined {
-  return entry.prompts?.map(run => ({ ...run }));
-}
-
-function cloneActiveTools(entry: AgentView): string[] | undefined {
-  return entry.activeTools?.slice();
-}
-
-function cloneToolHistory(entry: AgentView): AgentToolUse[] | undefined {
-  return entry.toolHistory?.map(tool => ({ ...tool }));
 }
 
 export function serializeGroup(
   id: string,
   createdAt: number,
-  sessions: AgentRow[],
-): AgentRowGroup {
+  sessions: AgentView[],
+): AgentGroupView {
   const statusCounts: Record<string, number> = {};
   for (const session of sessions) {
-    statusCounts[session.status] = (statusCounts[session.status] ?? 0) + 1;
+    const status = effectiveStatus(session.status);
+    statusCounts[status] = (statusCounts[status] ?? 0) + 1;
   }
 
   return {
@@ -103,7 +32,10 @@ export function serializeGroup(
     createdAt,
     statusCounts,
     sessions,
-    isError: sessions.some(session => !isActiveStatusKind(session.status) && session.status !== "completed"),
+    isError: sessions.some(session => {
+      const status = effectiveStatus(session.status);
+      return !isActiveStatusKind(status) && status !== "completed";
+    }),
   };
 }
 
@@ -124,43 +56,47 @@ export function listAgentDefinitions(agentRegistry: AgentRegistry) {
   return Array.from(agentRegistry.agents.values()).map(serializeAgentConfig);
 }
 
-export function activeOrRetainedAgents<T extends AgentView>(agents: T[]): T[] {
+export function activeOrRetainedAgents<T extends { status: { kind: string }; resumable: boolean }>(agents: T[]): T[] {
   return agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable);
 }
 
 export function canResumeSubagentSession(agent: AgentView): boolean {
-  return agent.resumable && agent.status.kind === "done" && agent.status.result.status === "completed";
+  return agent.config.resumable && agent.status.kind === "done" && agent.status.outcome === "completed";
 }
 
 export function canClearSubagentSession(agent: AgentView): boolean {
-  return agent.resumable && !isActiveStatusKind(agent.status.kind);
+  return agent.config.resumable && !isActiveStatusKind(agent.status.kind);
 }
 
-export function effectiveStatus(status: AgentStatus): string {
-  return status.kind === "done" ? status.result.status : status.kind;
+export function effectiveStatus(status: AgentViewStatus): string {
+  return status.kind === "done" ? status.outcome : status.kind;
 }
 
-export function getStartedAt(status: AgentStatus): number | undefined {
+export function getStartedAt(status: AgentViewStatus): number | undefined {
   if (status.kind === "running") return status.startedAt;
-  if (status.kind === "done") return status.ran?.startedAt;
+  if (status.kind === "done") return status.startedAt;
   return undefined;
 }
 
-export function getCompletedAt(status: AgentStatus): number | undefined {
+export function getCompletedAt(status: AgentViewStatus): number | undefined {
   return status.kind === "done" ? status.completedAt : undefined;
 }
 
-export function getOutputSnippet(status: AgentStatus): string | undefined {
-  if (status.kind === "done" && status.result.status === "completed" && status.result.output) {
-    return compact(status.result.output, OUTPUT_SNIPPET_LENGTH);
-  }
-  return undefined;
+export function getSnippet(status: AgentViewStatus): string | undefined {
+  return status.kind === "done" ? status.snippet : undefined;
 }
 
-export function getErrorSnippet(status: AgentStatus): string | undefined {
-  if (status.kind !== "done") return undefined;
-  if (status.result.status === "completed") return undefined;
-  return compact(status.result.error ?? status.result.status, OUTPUT_SNIPPET_LENGTH);
+export function getSnippetLabel(status: AgentViewStatus): "Output" | "Error" | undefined {
+  if (status.kind !== "done" || !status.snippet) return undefined;
+  return status.outcome === "completed" ? "Output" : "Error";
+}
+
+export function getActiveTools(agent: AgentView): string[] {
+  return activeToolsFromHistory(agent.activity.toolHistory);
+}
+
+export function getToolUseCount(agent: AgentView): number {
+  return agent.activity.toolHistory.length;
 }
 
 export function isActiveStatusKind(status: string): boolean {
@@ -172,3 +108,11 @@ export function compact(value: string, maxLength: number) {
   if (normalized.length <= maxLength) return normalized;
   return normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd() + "…";
 }
+
+function activeToolsFromHistory(history: readonly AgentToolUse[]): string[] {
+  return history
+    .filter(tool => tool.completedAt === undefined)
+    .map(tool => tool.name);
+}
+
+export type { Usage };

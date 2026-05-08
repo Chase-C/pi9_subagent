@@ -14,12 +14,14 @@ import {
   interruptedRun,
   type AgentRunResult,
 } from "./run-agent.js";
+import { TaskQueue } from "./task-queue.js";
 
 export { type AgentRunResult } from "./run-agent.js";
 
 export interface AgentManagerGroupUpdate {
   groupId: string;
   createdAt: number;
+  sessions: AgentView[];
   entries: Array<{ entry: AgentView; inputIndex: number }>;
   active: boolean;
   updatedAt: number;
@@ -30,13 +32,19 @@ const MESSAGE_UPDATE_THROTTLE_MS = 100;
 export type { AgentOptions } from "./agent-options.js";
 
 export type AgentManagerUpdateListener = (update: AgentManagerGroupUpdate) => void;
-export type AgentRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<AgentRunResult>;
+export type AgentRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
 export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
+
+interface SubagentGroupEntry {
+  agent?: Agent;
+  view?: AgentView;
+  inputIndex: number;
+}
 
 interface SubagentGroupState {
   id: string;
   createdAt: number;
-  entries: Array<{ entry: AgentView; inputIndex: number }>;
+  entries: SubagentGroupEntry[];
 }
 
 function unknownEntry(
@@ -45,7 +53,7 @@ function unknownEntry(
   groupId: string,
   inputIndex: number,
   createdAt: number,
-): AgentView {
+): { view: AgentView; result: AgentRunResult } {
   const result: AgentRunResult = {
     agent: opts.agent,
     prompt: opts.prompt,
@@ -55,46 +63,55 @@ function unknownEntry(
     resumable: false,
   };
   return {
-    id: `${groupId}:task-${inputIndex}`,
-    groupId,
-    agentName: opts.agent,
-    prompt: opts.prompt,
-    status: { kind: "done", result, completedAt: createdAt },
-    source: undefined,
-    resolvedModel: opts.model,
-    resolvedThinking: undefined,
-    tools: undefined,
-    resumable: false,
-    message: "",
-    turns: 0,
-    toolUses: 0,
-    compactions: 0,
-    createdAt,
-    totalUsage: undefined,
+    result,
+    view: {
+      id: `${groupId}:task-${inputIndex}`,
+      groupId,
+      inputIndex,
+      createdAt,
+      config: {
+        name: opts.agent,
+        model: opts.model,
+        thinking: opts.thinking,
+        source: undefined,
+        tools: undefined,
+        resumable: false,
+      },
+      status: {
+        kind: "done",
+        outcome: "error",
+        completedAt: createdAt,
+        snippet: error,
+      },
+      activity: {
+        turns: 0,
+        compactions: 0,
+        toolHistory: [],
+      },
+      usage: undefined,
+    },
   };
 }
 
 export class AgentManager {
 
   private _agents = new Array<Agent>();
-  private _queue = new Array<() => void>();
+  private _queue: TaskQueue;
   private _listeners = new Map<string, Set<AgentManagerUpdateListener>>();
   private _messageTimers = new Map<string, NodeJS.Timeout>();
   private _groups = new Map<string, SubagentGroupState>();
 
   constructor(
     readonly registry: AgentRegistry,
-    readonly maxRunning: number = 4,
+    maxRunning: number = 4,
     private readonly _runAgent: AgentRunner = RunAgent,
     private readonly _resumeAgent: AgentResumeRunner = ResumeAgent,
-  ) { }
-
-  get numRunning() {
-    return this._agents.filter(a => a.status.kind == "running").length;
+  ) {
+    this._queue = new TaskQueue(maxRunning);
   }
 
-  get sessions(): Agent[] {
-    return activeOrRetainedAgents(this._agents);
+  get sessions(): AgentView[] {
+    return activeOrRetainedAgents(this._agents).map(agent => agent.toView());
   }
 
   subscribe(groupId: string, listener: AgentManagerUpdateListener): () => void {
@@ -119,7 +136,7 @@ export class AgentManager {
         cleared = 1;
         this._agents = this._agents.filter(a => a.id !== sessionId);
         if (agent.status.kind === "running") {
-          finalizeRun(agent, { status: "aborted", error: "Agent aborted." });
+          finalizeRun(agent, "", { status: "aborted", error: "Agent aborted." });
         } else {
           this._emitGroupUpdate(agent.groupId);
         }
@@ -153,27 +170,24 @@ export class AgentManager {
       .map((agent) => `${agent.name} (${agent.source})`)
       .join("\n");
 
-    const entries: Array<{ entry: AgentView; inputIndex: number }> = [];
+    const entries: SubagentGroupEntry[] = [];
     const resultPromises = options.map((opts, inputIndex) => {
       const config = this.registry.agents.get(opts.agent);
       if (!config) {
         const error = `Unknown agent: ${opts.agent}. Available agents:\n${available()}`;
-        const entry = unknownEntry(opts, error, groupId, inputIndex, groupCreatedAt);
-        entries.push({ entry, inputIndex });
-        return Promise.resolve(
-          (entry.status as { kind: "done"; result: AgentRunResult }).result,
-        );
+        const { view, result } = unknownEntry(opts, error, groupId, inputIndex, groupCreatedAt);
+        entries.push({ view, inputIndex });
+        return Promise.resolve(result);
       }
 
       const agent = new Agent(randomUUID(), groupId, config, opts, this._agentUpdate.bind(this));
-      entries.push({ entry: agent, inputIndex });
+      entries.push({ agent, inputIndex });
       this._agents.push(agent);
-      return this._enqueue(ctx, signal, agent);
+      return this._enqueue(ctx, signal, agent, opts.prompt);
     });
 
     this._groups.set(groupId, { id: groupId, createdAt: groupCreatedAt, entries });
     this._emitGroupUpdate(groupId);
-    this._flushQueue();
     try {
       const results = await Promise.all(resultPromises);
       this._releaseNonResumableCompleted(groupId);
@@ -202,25 +216,23 @@ export class AgentManager {
     }
 
     const unsubscribe = onUpdate ? this.subscribe(agent.groupId, onUpdate) : undefined;
-    agent.preparePrompt(prompt);
+    const originalStatus = agent.status;
     try {
       return await this._resumeAgent(ctx, agent, prompt, signal);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (agent.status.kind === "done" && agent.status.result.status === "completed" && agent.hasPendingPrompt) {
-        const result: AgentRunResult = {
+      if (agent.status === originalStatus) {
+        return {
           agent: agent.agentName,
-          prompt: agent.prompt,
+          prompt,
           status: "error",
           error: message,
           model: agent.modelOverride ?? agent.config.model,
           resumable: agent.resumable,
           sessionId: agent.id,
         };
-        agent.discardPendingPrompt();
-        return result;
       }
-      return errorRun(agent, message);
+      return errorRun(agent, prompt, message);
     } finally {
       this._flushPendingMessageUpdate(agent.groupId);
       unsubscribe?.();
@@ -240,38 +252,21 @@ export class AgentManager {
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
     agent: Agent,
+    prompt: string,
   ): Promise<AgentRunResult> {
-    const skipped = () => finalizeRun(agent, { status: "skipped", error: "Agent skipped." });
-    return new Promise(resolve => {
-      if (signal?.aborted) {
-        resolve(skipped());
-        return;
-      }
-
-      this._queue.push(() => {
+    const skipped = () => finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped." });
+    return this._queue.enqueue(async () => {
+      if (signal?.aborted) return skipped();
+      try {
+        return await this._runAgent(ctx, agent, prompt, signal);
+      } catch (error) {
+        if (agent.status.kind === "done") return agent.status.result;
+        const message = error instanceof Error ? error.message : String(error);
         if (signal?.aborted) {
-          resolve(skipped());
-          this._flushQueue();
-          return;
+          return agent.status.kind === "queued" ? skipped() : interruptedRun(agent, prompt, message);
         }
-
-        this._runAgent(ctx, agent, signal)
-          .catch(error => {
-            if (agent.status.kind === "done") {
-              resolve(agent.status.result);
-              return;
-            }
-            const message = error instanceof Error ? error.message : String(error);
-            if (signal?.aborted) {
-              resolve(agent.status.kind === "queued"
-                ? skipped()
-                : interruptedRun(agent, message));
-            } else {
-              resolve(errorRun(agent, message));
-            }
-          })
-          .finally(() => this._flushQueue());
-      });
+        return errorRun(agent, prompt, message);
+      }
     });
   }
 
@@ -281,15 +276,6 @@ export class AgentManager {
       if (agent.status.kind !== "done") return true;
       return Boolean(agent.config.resumable && agent.status.kind === "done" && agent.status.ran);
     });
-  }
-
-  private _flushQueue() {
-    const startNum = this.maxRunning - this.numRunning;
-    for (let i = 0; i < startNum; i++) {
-      const queued = this._queue.shift();
-      if (!queued) return;
-      queued();
-    }
   }
 
   private _scheduleMessageUpdate(groupId: string) {
@@ -324,20 +310,21 @@ export class AgentManager {
 
   private _buildUpdate(groupId: string): AgentManagerGroupUpdate {
     const group = this._groups.get(groupId);
-    let entries: Array<{ entry: AgentView; inputIndex: number }>;
+    let sessions: AgentView[];
     let createdAt: number;
 
     if (group) {
       createdAt = group.createdAt;
-      entries = group.entries;
+      sessions = group.entries.map(({ agent, view, inputIndex }) => agent ? agent.toView(inputIndex) : view!);
     } else {
       createdAt = Date.now();
-      entries = this._agents
+      sessions = this._agents
         .filter(agent => agent.groupId === groupId)
-        .map((agent, i) => ({ entry: agent, inputIndex: i }));
+        .map((agent, i) => agent.toView(i));
     }
 
-    const active = entries.some(({ entry }) => entry.status.kind === "queued" || entry.status.kind === "running");
-    return { groupId, createdAt, entries, active, updatedAt: Date.now() };
+    const entries = sessions.map((entry, i) => ({ entry, inputIndex: entry.inputIndex ?? i }));
+    const active = sessions.some(session => session.status.kind === "queued" || session.status.kind === "running");
+    return { groupId, createdAt, sessions, entries, active, updatedAt: Date.now() };
   }
 }

@@ -1,7 +1,7 @@
 import { getSettingsListTheme, type ExtensionAPI, type ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { SettingsList, matchesKey, truncateToWidth, visibleWidth, type Component, type KeybindingsManager, type SettingItem, type TUI } from "@mariozechner/pi-tui";
 
-import type { Agent } from "./agent.js";
+import type { AgentView } from "./agent.js";
 import { AgentManager } from "./agent-manager.js";
 import { AgentRegistry } from "./agent-registry.js";
 import {
@@ -21,7 +21,6 @@ import {
 import {
   canClearSubagentSession,
   canResumeSubagentSession,
-  serializeAgent,
 } from "./serialize.js";
 import type { AgentConfig } from "./agent-config.js";
 
@@ -264,18 +263,18 @@ class SubagentSessionsComponent implements Component {
     const session = this.sessions[this.selected];
     if (!session) return;
     if (!canResumeSubagentSession(session)) {
-      const detail = session.status.kind === "done" ? session.status.result.status : session.status.kind;
+      const detail = session.status.kind === "done" ? session.status.outcome : session.status.kind;
       this.notify(`Subagent session ${session.id} is ${detail} and cannot be resumed.`, "warning");
       return;
     }
-    this.done({ action: "resume", sessionId: session.id, agent: session.agentName });
+    this.done({ action: "resume", sessionId: session.id, agent: session.config.name });
   }
 
   private clearSelected() {
     const session = this.sessions[this.selected];
     if (!session) return;
     if (!canClearSubagentSession(session)) {
-      const detail = session.status.kind === "done" ? session.status.result.status : session.status.kind;
+      const detail = session.status.kind === "done" ? session.status.outcome : session.status.kind;
       this.notify(`Subagent session ${session.id} is ${detail} and cannot be cleared.`, "warning");
       return;
     }
@@ -323,14 +322,14 @@ function agentInspectHelp() {
   return "b back · s settings · esc close";
 }
 
-function listHelp(session: Agent | undefined) {
+function listHelp(session: AgentView | undefined) {
   const actions = ["↑↓ select", "enter inspect"];
   if (session && canResumeSubagentSession(session)) actions.push("r resume");
   actions.push("c clear retained", "esc close");
   return actions.join(" · ");
 }
 
-function inspectHelp(session: Agent) {
+function inspectHelp(session: AgentView) {
   const actions = [];
   if (canResumeSubagentSession(session)) actions.push("r resume");
   if (canClearSubagentSession(session)) actions.push("c clear");
@@ -399,7 +398,7 @@ async function resumeSessionFromCommand(
       };
 
       agentManager.resume(ctx, loader.signal, action.sessionId, prompt, update => {
-        updateSubagentWidget(ctx, update.entries.map(e => e.entry), uiSettings);
+        updateSubagentWidget(ctx, update.sessions, uiSettings);
       }).then(
         result => finish({ result }),
         error => finish({ error }),
@@ -551,8 +550,7 @@ export function registerSubagentsCommand(
       }
 
       if (!ctx.hasUI || !ctx.ui?.custom) {
-        const serialized = sessions.map(agent => serializeAgent(agent));
-        notify(ctx, formatSubagentToolLines({ sessions: serialized }, true).join("\n"), "info");
+        notify(ctx, formatSubagentToolLines({ sessions }, true).join("\n"), "info");
         return;
       }
 

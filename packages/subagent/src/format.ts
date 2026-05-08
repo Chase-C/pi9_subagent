@@ -4,8 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { AgentView } from "./agent.js";
 import type { AgentConfig } from "./agent-config.js";
 import {
-  AgentRow,
-  AgentRowGroup,
+  AgentGroupView,
   MESSAGE_SNIPPET_LENGTH,
   OUTPUT_SNIPPET_LENGTH,
   PROMPT_PREVIEW_LENGTH,
@@ -13,16 +12,19 @@ import {
   canResumeSubagentSession,
   compact,
   effectiveStatus,
+  getActiveTools,
   getCompletedAt,
-  getErrorSnippet,
-  getOutputSnippet,
+  getSnippet,
+  getSnippetLabel,
   getStartedAt,
+  getToolUseCount,
   isActiveStatusKind,
-  serializeAgent,
   serializeGroup,
 } from "./serialize.js";
 
 const RESUME_MESSAGE_SNIPPET_LENGTH = 80;
+
+type Theme = { fg?: (color: string, text: string) => string } | undefined;
 
 export interface SubagentResumeMessageDetails {
   sessionId: string;
@@ -62,10 +64,10 @@ export function formatAgentConfigInspect(config: AgentConfig): string[] {
 
 export function formatSubagentSessionSummary(agent: AgentView): string {
   const badges = [
-    agent.resumable ? "resumable" : undefined,
+    agent.config.resumable ? "resumable" : undefined,
     `session:${agent.id}`,
   ].filter(Boolean);
-  return [agent.agentName, effectiveStatus(agent.status), ...badges, `"${compact(agent.prompt, PROMPT_PREVIEW_LENGTH)}"`].join(" · ");
+  return [agent.config.name, effectiveStatus(agent.status), ...badges].join(" · ");
 }
 
 export function formatSubagentSessionInspect(agent: AgentView, now = Date.now()): string[] {
@@ -73,35 +75,32 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
   const startedAt = getStartedAt(status);
   const completedAt = getCompletedAt(status);
   const elapsed = formatElapsed(startedAt ?? agent.createdAt, completedAt ?? now);
-  const resumable = agent.resumable;
-  const model = agent.resolvedModel;
-  const thinking = agent.resolvedThinking;
+  const activeTools = getActiveTools(agent);
 
   const lines = [
     `Session ${agent.id}`,
-    `Status: ${effectiveStatus(status)}${resumable ? " · resumable" : ""}`,
-    `Agent: ${agent.agentName}${agent.source ? ` (${agent.source})` : ""}`,
+    `Status: ${effectiveStatus(status)}${agent.config.resumable ? " · resumable" : ""}`,
+    `Agent: ${agent.config.name}${agent.config.source ? ` (${agent.config.source})` : ""}`,
   ];
 
-  if (model || thinking) {
-    lines.push(`Model: ${model ?? "default"}${thinking ? ` · thinking:${thinking}` : ""}`);
+  if (agent.config.description) lines.push(`Description: ${agent.config.description}`);
+  if (agent.config.model || agent.config.thinking) {
+    lines.push(`Model: ${agent.config.model ?? "default"}${agent.config.thinking ? ` · thinking:${agent.config.thinking}` : ""}`);
   }
-  lines.push(`Tools: ${agent.tools?.length ? agent.tools.join(", ") : "default"}`);
-  lines.push(`Prompt: ${compact(agent.prompt, PROMPT_PREVIEW_LENGTH)}`);
-  const prompts = agent.prompts;
-  if (prompts && prompts.length > 1) lines.push(`Prompts: ${prompts.length} sent · latest ${compact(prompts.at(-1)?.prompt ?? "", PROMPT_PREVIEW_LENGTH)}`);
-  if (agent.activeTools?.length) {
-    lines.push(`Active tool${agent.activeTools.length === 1 ? "" : "s"}: ${agent.activeTools.join(", ")}`);
+  lines.push(`Tools: ${agent.config.tools?.length ? agent.config.tools.join(", ") : "default"}`);
+  if (agent.config.sourcePath) lines.push(`Path: ${agent.config.sourcePath}`);
+  if (activeTools.length) {
+    lines.push(`Active tool${activeTools.length === 1 ? "" : "s"}: ${activeTools.join(", ")}`);
   }
-  lines.push(`Progress: ${agent.turns} turn${agent.turns === 1 ? "" : "s"} · ${agent.toolUses} tool use${agent.toolUses === 1 ? "" : "s"} · ${agent.compactions} compaction${agent.compactions === 1 ? "" : "s"}`);
-  if (agent.totalUsage) lines.push(`Usage: ${formatUsage(agent.totalUsage)}`);
+  const toolUses = getToolUseCount(agent);
+  lines.push(`Progress: ${agent.activity.turns} turn${agent.activity.turns === 1 ? "" : "s"} · ${toolUses} tool use${toolUses === 1 ? "" : "s"} · ${agent.activity.compactions} compaction${agent.activity.compactions === 1 ? "" : "s"}`);
+  if (agent.usage) lines.push(`Usage: ${formatUsage(agent.usage)}`);
   lines.push(`Timestamps: created ${formatTimestamp(agent.createdAt)}${startedAt ? ` · started ${formatTimestamp(startedAt)}` : ""}${completedAt ? ` · completed ${formatTimestamp(completedAt)}` : ""} · elapsed ${elapsed}`);
 
-  const outputSnippet = getOutputSnippet(status);
-  const errorSnippet = getErrorSnippet(status);
-  if (outputSnippet) lines.push(`Output: ${outputSnippet}`);
-  if (errorSnippet) lines.push(`Error: ${errorSnippet}`);
-  if (agent.message) lines.push(`Message: ${compact(agent.message, MESSAGE_SNIPPET_LENGTH)}`);
+  const snippet = getSnippet(status);
+  const label = getSnippetLabel(status);
+  if (snippet && label) lines.push(`${label}: ${snippet}`);
+  if (agent.activity.messageSnippet) lines.push(`Message: ${compact(agent.activity.messageSnippet, MESSAGE_SNIPPET_LENGTH)}`);
 
   const actions = ["inspect"];
   if (canResumeSubagentSession(agent)) actions.push("resume");
@@ -111,11 +110,11 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
 }
 
 export function formatSubagentSessionLine(agent: AgentView, now = Date.now()): string {
-  return formatRowSessionLine(serializeAgent(agent), now);
+  return formatViewSessionLine(agent, now);
 }
 
 export function formatWidgetLines(agents: AgentView[], now = Date.now()): string[] {
-  const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable);
+  const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || a.config.resumable);
   if (visible.length === 0) return [];
   if (visible.length === 1) return [formatSubagentSessionLine(visible[0], now)];
 
@@ -131,18 +130,18 @@ export function formatSubagentToolLines(
 ): string[] {
   const group = extractGroup(details);
   if (group) {
-    if (!expanded) return [formatRowGroupLine(group)];
-    return group.sessions.map(row => formatRowSessionLine(row, now));
+    if (!expanded) return [formatViewGroupLine(group)];
+    return group.sessions.map(row => formatViewSessionLine(row, now));
   }
 
   const sessions = extractSessions(details);
   if (sessions.length === 0) return ["No subagent sessions."];
 
   if (!expanded && sessions.length > 1) {
-    return [formatRowGroupLine(serializeGroup("subagent", Date.now(), sessions))];
+    return [formatViewGroupLine(serializeGroup("subagent", Date.now(), sessions))];
   }
 
-  return sessions.map(row => formatRowSessionLine(row, now));
+  return sessions.map(row => formatViewSessionLine(row, now));
 }
 
 export function createSubagentResumeMessage(result: {
@@ -191,7 +190,7 @@ export function formatSubagentResumeMessageContent(details: SubagentResumeMessag
 export function createSubagentTextComponent(
   details: unknown,
   expanded: boolean,
-  theme: any,
+  theme: Theme,
   now = Date.now(),
 ) {
   const lines = formatSubagentToolLines(details, expanded, now);
@@ -199,7 +198,7 @@ export function createSubagentTextComponent(
   return new Text(text, 0, 0);
 }
 
-function formatRowGroupLine(group: AgentRowGroup): string {
+function formatViewGroupLine(group: AgentGroupView): string {
   const knownStatuses = ["queued", "running", "completed", "error", "interrupted", "skipped", "aborted"];
   const counts = knownStatuses
     .filter(status => group.statusCounts[status])
@@ -208,46 +207,49 @@ function formatRowGroupLine(group: AgentRowGroup): string {
     .filter(status => !knownStatuses.includes(status))
     .sort()
     .map(status => `${group.statusCounts[status]} ${status}`);
-  const active = group.sessions.some(session => isActiveStatusKind(session.status));
+  const active = group.sessions.some(session => isActiveStatusKind(effectiveStatus(session.status)));
   const outcome = group.isError ? "error" : active ? "running" : "completed";
   return [`${group.sessions.length} subagents`, ...counts, ...extraCounts, `outcome:${outcome}`].join(" · ");
 }
 
-function formatRowSessionLine(row: AgentRow, now: number): string {
-  const elapsed = formatElapsed((row.startedAt ?? row.createdAt), row.completedAt ?? now);
+function formatViewSessionLine(row: AgentView, now: number): string {
+  const elapsed = formatElapsed((getStartedAt(row.status) ?? row.createdAt), getCompletedAt(row.status) ?? now);
+  const status = effectiveStatus(row.status);
+  const toolUses = getToolUseCount(row);
   const parts = [
-    row.agent,
-    row.status,
-    `${row.turns} turn${row.turns === 1 ? "" : "s"}`,
+    row.config.name,
+    status,
+    `${row.activity.turns} turn${row.activity.turns === 1 ? "" : "s"}`,
+    `${toolUses} tool${toolUses === 1 ? "" : "s"}`,
     elapsed,
   ];
 
-  const activeTool = row.activeTools?.at(-1) ?? row.activeTool;
+  const activeTool = getActiveTools(row).at(-1);
   if (activeTool) parts.push(`tool:${activeTool}`);
-  if (row.messageSnippet) parts.push(`"${row.messageSnippet}"`);
+  if (row.activity.messageSnippet) parts.push(`"${row.activity.messageSnippet}"`);
 
-  if (!isActiveStatusKind(row.status)) {
-    if (row.status === "completed") {
+  if (!isActiveStatusKind(status)) {
+    if (status === "completed") {
       parts.push(`outcome:completed`);
     } else {
-      parts.push(`outcome:${row.status}:${row.errorSnippet ?? row.status}`);
+      parts.push(`outcome:${status}:${getSnippet(row.status) ?? status}`);
     }
   }
 
   return parts.join(" · ");
 }
 
-function extractGroup(details: unknown): AgentRowGroup | undefined {
+function extractGroup(details: unknown): AgentGroupView | undefined {
   if (!details || typeof details !== "object") return undefined;
   const record = details as { group?: unknown };
-  if (record.group && typeof record.group === "object") return record.group as AgentRowGroup;
+  if (record.group && typeof record.group === "object") return record.group as AgentGroupView;
   return undefined;
 }
 
-function extractSessions(details: unknown): AgentRow[] {
+function extractSessions(details: unknown): AgentView[] {
   if (!details || typeof details !== "object") return [];
   const record = details as { sessions?: unknown };
-  if (Array.isArray(record.sessions)) return record.sessions as AgentRow[];
+  if (Array.isArray(record.sessions)) return record.sessions as AgentView[];
   return [];
 }
 
@@ -269,7 +271,7 @@ function formatUsage(usage: Usage) {
   return `${tokens}${cost}`;
 }
 
-function colorLine(line: string, theme: any) {
+function colorLine(line: string, theme: Theme) {
   if (!theme?.fg) return line;
   if (line.includes("status:error") || line.includes("outcome:error")) return theme.fg("error", line);
   if (line.includes("status:aborted") || line.includes("outcome:aborted")) return theme.fg("warning", line);
