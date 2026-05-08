@@ -1,8 +1,7 @@
 import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
-import type { AgentView } from "./agent.js";
-import { AgentManager, type AgentOptions, type AgentManagerGroupUpdate } from "./agent-manager.js";
+import { AgentManager, type AgentOptions, type SubagentBatchUpdate } from "./agent-manager.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { SubagentParams } from "./schema.js";
 import { SubagentUiSettingsStore } from "./subagent-settings.js";
@@ -54,19 +53,8 @@ function errorResult(message: string, details: Record<string, unknown> = { }) {
   };
 }
 
-function liveAgents(update: AgentManagerGroupUpdate): AgentView[] {
-  return update.sessions ?? update.entries?.map(({ entry }) => entry) ?? [];
-}
-
-function snapshotGroup(update: AgentManagerGroupUpdate) {
-  const sessions = (update.sessions ?? update.entries?.map(({ entry, inputIndex }) => ({ ...entry, inputIndex })) ?? [])
-    .slice()
-    .sort((a, b) => (a.inputIndex ?? 0) - (b.inputIndex ?? 0));
-  return serializeGroup(update.groupId, update.createdAt, sessions);
-}
-
-function partialToolResult(update: AgentManagerGroupUpdate) {
-  const group = snapshotGroup(update);
+function partialToolResult(update: SubagentBatchUpdate) {
+  const group = serializeGroup(update.sessions);
   const details = { group, active: update.active };
   return {
     content: [{ type: "text" as const, text: formatSubagentToolLines(details, true).join("\n") }],
@@ -175,12 +163,12 @@ Execution notes:
 
         const options = params.tasks as Array<AgentOptions>;
         const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
-        let lastGroup: ReturnType<typeof snapshotGroup> | undefined;
+        let lastGroup: ReturnType<typeof serializeGroup> | undefined;
         const results = await agentManager.spawn(ctx, signal, options, update => {
           const partial = partialToolResult(update);
           lastGroup = partial.details.group;
           onUpdate?.(partial);
-          updateSubagentWidget(ctx, liveAgents(update), uiSettings);
+          updateSubagentWidget(ctx, update.sessions, uiSettings);
         });
         updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
         const isError = results.some(result => result.status !== "completed");
@@ -195,12 +183,12 @@ Execution notes:
 
         try {
           const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
-          let lastGroup: ReturnType<typeof snapshotGroup> | undefined;
+          let lastGroup: ReturnType<typeof serializeGroup> | undefined;
           const result = await agentManager.resume(ctx, signal, params.sessionId!, params.prompt!, update => {
             const partial = partialToolResult(update);
             lastGroup = partial.details.group;
             onUpdate?.(partial);
-            updateSubagentWidget(ctx, liveAgents(update), uiSettings);
+            updateSubagentWidget(ctx, update.sessions, uiSettings);
           });
           updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
           return toolResult({ result, group: lastGroup }, result.status !== "completed");

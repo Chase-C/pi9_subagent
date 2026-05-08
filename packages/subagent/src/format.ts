@@ -138,7 +138,7 @@ export function formatSubagentToolLines(
   if (sessions.length === 0) return ["No subagent sessions."];
 
   if (!expanded && sessions.length > 1) {
-    return [formatViewGroupLine(serializeGroup("subagent", Date.now(), sessions))];
+    return [formatViewGroupLine(serializeGroup(sessions))];
   }
 
   return sessions.map(row => formatViewSessionLine(row, now));

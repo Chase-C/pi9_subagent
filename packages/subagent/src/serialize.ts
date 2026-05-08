@@ -9,18 +9,12 @@ export const MESSAGE_SNIPPET_LENGTH = 200;
 export const OUTPUT_SNIPPET_LENGTH = 200;
 
 export interface AgentGroupView {
-  id: string;
-  createdAt: number;
   statusCounts: Record<string, number>;
   sessions: AgentView[];
   isError: boolean;
 }
 
-export function serializeGroup(
-  id: string,
-  createdAt: number,
-  sessions: AgentView[],
-): AgentGroupView {
+export function serializeGroup(sessions: AgentView[]): AgentGroupView {
   const statusCounts: Record<string, number> = {};
   for (const session of sessions) {
     const status = effectiveStatus(session.status);
@@ -28,8 +22,6 @@ export function serializeGroup(
   }
 
   return {
-    id,
-    createdAt,
     statusCounts,
     sessions,
     isError: sessions.some(session => {

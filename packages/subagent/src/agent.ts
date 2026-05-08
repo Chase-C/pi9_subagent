@@ -57,7 +57,6 @@ export interface AgentActivityView {
 
 export interface AgentView {
   readonly id: string;
-  readonly groupId: string;
   readonly inputIndex?: number;
   readonly createdAt: number;
   readonly config: AgentViewConfig;
@@ -123,7 +122,6 @@ export class Agent {
   toView(inputIndex?: number): AgentView {
     return {
       id: this.id,
-      groupId: this.groupId,
       ...(inputIndex !== undefined ? { inputIndex } : {}),
       createdAt: this._createdAt,
       config: {

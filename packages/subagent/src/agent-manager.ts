@@ -18,33 +18,30 @@ import { TaskQueue } from "./task-queue.js";
 
 export { type AgentRunResult } from "./run-agent.js";
 
-export interface AgentManagerGroupUpdate {
-  groupId: string;
-  createdAt: number;
+export interface SubagentBatchUpdate {
   sessions: AgentView[];
-  entries: Array<{ entry: AgentView; inputIndex: number }>;
   active: boolean;
-  updatedAt: number;
 }
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
 
 export type { AgentOptions } from "./agent-options.js";
 
-export type AgentManagerUpdateListener = (update: AgentManagerGroupUpdate) => void;
+export type AgentManagerUpdateListener = (update: SubagentBatchUpdate) => void;
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
 export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
 
-interface SubagentGroupEntry {
+interface BatchEntry {
   agent?: Agent;
   view?: AgentView;
   inputIndex: number;
 }
 
-interface SubagentGroupState {
-  id: string;
-  createdAt: number;
-  entries: SubagentGroupEntry[];
+interface SpawnBatch {
+  groupId: string;
+  entries: BatchEntry[];
+  listener?: AgentManagerUpdateListener;
+  pendingMessageTimer?: NodeJS.Timeout;
 }
 
 function unknownEntry(
@@ -66,7 +63,6 @@ function unknownEntry(
     result,
     view: {
       id: `${groupId}:task-${inputIndex}`,
-      groupId,
       inputIndex,
       createdAt,
       config: {
@@ -97,9 +93,7 @@ export class AgentManager {
 
   private _agents = new Array<Agent>();
   private _queue: TaskQueue;
-  private _listeners = new Map<string, Set<AgentManagerUpdateListener>>();
-  private _messageTimers = new Map<string, NodeJS.Timeout>();
-  private _groups = new Map<string, SubagentGroupState>();
+  private _activeBatches = new Map<string, SpawnBatch>();
 
   constructor(
     readonly registry: AgentRegistry,
@@ -114,20 +108,6 @@ export class AgentManager {
     return activeOrRetainedAgents(this._agents).map(agent => agent.toView());
   }
 
-  subscribe(groupId: string, listener: AgentManagerUpdateListener): () => void {
-    let listeners = this._listeners.get(groupId);
-    if (!listeners) {
-      listeners = new Set();
-      this._listeners.set(groupId, listeners);
-    }
-    listeners.add(listener);
-    return () => {
-      const current = this._listeners.get(groupId);
-      current?.delete(listener);
-      if (current?.size === 0) this._listeners.delete(groupId);
-    };
-  }
-
   clear(sessionId?: string): { cleared: number; sessionId?: string } {
     if (sessionId) {
       const agent = this._agents.find(a => a.id === sessionId);
@@ -138,7 +118,7 @@ export class AgentManager {
         if (agent.status.kind === "running") {
           finalizeRun(agent, "", { status: "aborted", error: "Agent aborted." });
         } else {
-          this._emitGroupUpdate(agent.groupId);
+          this._emitBatchUpdate(agent.groupId);
         }
       }
 
@@ -151,7 +131,7 @@ export class AgentManager {
 
     const cleared = this._agents.length - retained.length;
     this._agents = retained;
-    for (const agent of retained) this._emitGroupUpdate(agent.groupId);
+    for (const agent of retained) this._emitBatchUpdate(agent.groupId);
 
     return { cleared };
   }
@@ -164,13 +144,15 @@ export class AgentManager {
   ): Promise<Array<AgentRunResult>> {
     const groupId = randomUUID();
     const groupCreatedAt = Date.now();
-    const unsubscribe = onUpdate ? this.subscribe(groupId, onUpdate) : undefined;
     const available = () => Array
       .from(this.registry.agents.values())
       .map((agent) => `${agent.name} (${agent.source})`)
       .join("\n");
 
-    const entries: SubagentGroupEntry[] = [];
+    const entries: BatchEntry[] = [];
+    const batch: SpawnBatch = { groupId, entries, listener: onUpdate };
+    this._activeBatches.set(groupId, batch);
+
     const resultPromises = options.map((opts, inputIndex) => {
       const config = this.registry.agents.get(opts.agent);
       if (!config) {
@@ -186,16 +168,14 @@ export class AgentManager {
       return this._enqueue(ctx, signal, agent, opts.prompt);
     });
 
-    this._groups.set(groupId, { id: groupId, createdAt: groupCreatedAt, entries });
-    this._emitGroupUpdate(groupId);
+    this._emitBatchUpdate(groupId);
     try {
       const results = await Promise.all(resultPromises);
       this._releaseNonResumableCompleted(groupId);
       return results;
     } finally {
-      this._flushPendingMessageUpdate(groupId);
-      unsubscribe?.();
-      this._groups.delete(groupId);
+      this._flushPendingMessageUpdate(batch);
+      this._activeBatches.delete(groupId);
     }
   }
 
@@ -215,7 +195,13 @@ export class AgentManager {
       throw new Error(`Cannot resume subagent session ${sessionId} while it is ${detail}.`);
     }
 
-    const unsubscribe = onUpdate ? this.subscribe(agent.groupId, onUpdate) : undefined;
+    const batch: SpawnBatch = {
+      groupId: agent.groupId,
+      entries: [{ agent, inputIndex: 0 }],
+      listener: onUpdate,
+    };
+    this._activeBatches.set(agent.groupId, batch);
+
     const originalStatus = agent.status;
     try {
       return await this._resumeAgent(ctx, agent, prompt, signal);
@@ -234,18 +220,20 @@ export class AgentManager {
       }
       return errorRun(agent, prompt, message);
     } finally {
-      this._flushPendingMessageUpdate(agent.groupId);
-      unsubscribe?.();
+      this._flushPendingMessageUpdate(batch);
+      this._activeBatches.delete(agent.groupId);
     }
   }
 
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
+    const batch = this._activeBatches.get(agent.groupId);
+    if (!batch) return;
     if (kind === "message") {
-      this._scheduleMessageUpdate(agent.groupId);
+      this._scheduleMessageUpdate(batch);
       return;
     }
-    this._clearPendingMessageUpdate(agent.groupId);
-    this._emitGroupUpdate(agent.groupId);
+    this._clearPendingMessageUpdate(batch);
+    this._emitBatchUpdate(agent.groupId);
   }
 
   private _enqueue(
@@ -278,53 +266,38 @@ export class AgentManager {
     });
   }
 
-  private _scheduleMessageUpdate(groupId: string) {
-    if (this._messageTimers.has(groupId)) return;
-    const timer = setTimeout(() => {
-      this._messageTimers.delete(groupId);
-      this._emitGroupUpdate(groupId);
+  private _scheduleMessageUpdate(batch: SpawnBatch) {
+    if (batch.pendingMessageTimer) return;
+    batch.pendingMessageTimer = setTimeout(() => {
+      batch.pendingMessageTimer = undefined;
+      this._emitBatchUpdate(batch.groupId);
     }, MESSAGE_UPDATE_THROTTLE_MS);
-    this._messageTimers.set(groupId, timer);
   }
 
-  private _flushPendingMessageUpdate(groupId: string) {
-    if (!this._clearPendingMessageUpdate(groupId)) return;
-    this._emitGroupUpdate(groupId);
+  private _flushPendingMessageUpdate(batch: SpawnBatch) {
+    if (!this._clearPendingMessageUpdate(batch)) return;
+    this._emitBatchUpdate(batch.groupId);
   }
 
-  private _clearPendingMessageUpdate(groupId: string) {
-    const timer = this._messageTimers.get(groupId);
-    if (!timer) return false;
-    clearTimeout(timer);
-    this._messageTimers.delete(groupId);
+  private _clearPendingMessageUpdate(batch: SpawnBatch): boolean {
+    if (!batch.pendingMessageTimer) return false;
+    clearTimeout(batch.pendingMessageTimer);
+    batch.pendingMessageTimer = undefined;
     return true;
   }
 
-  private _emitGroupUpdate(groupId: string) {
-    const listeners = this._listeners.get(groupId);
-    if (!listeners || listeners.size === 0) return;
-
-    const update = this._buildUpdate(groupId);
-    for (const listener of listeners) listener(update);
+  private _emitBatchUpdate(groupId: string) {
+    const batch = this._activeBatches.get(groupId);
+    if (!batch?.listener) return;
+    batch.listener(this._buildBatchUpdate(batch));
   }
 
-  private _buildUpdate(groupId: string): AgentManagerGroupUpdate {
-    const group = this._groups.get(groupId);
-    let sessions: AgentView[];
-    let createdAt: number;
-
-    if (group) {
-      createdAt = group.createdAt;
-      sessions = group.entries.map(({ agent, view, inputIndex }) => agent ? agent.toView(inputIndex) : view!);
-    } else {
-      createdAt = Date.now();
-      sessions = this._agents
-        .filter(agent => agent.groupId === groupId)
-        .map((agent, i) => agent.toView(i));
-    }
-
-    const entries = sessions.map((entry, i) => ({ entry, inputIndex: entry.inputIndex ?? i }));
-    const active = sessions.some(session => session.status.kind === "queued" || session.status.kind === "running");
-    return { groupId, createdAt, sessions, entries, active, updatedAt: Date.now() };
+  private _buildBatchUpdate(batch: SpawnBatch): SubagentBatchUpdate {
+    const sessions = batch.entries
+      .slice()
+      .sort((a, b) => a.inputIndex - b.inputIndex)
+      .map(({ agent, view, inputIndex }) => agent ? agent.toView(inputIndex) : view!);
+    const active = sessions.some(s => s.status.kind === "queued" || s.status.kind === "running");
+    return { sessions, active };
   }
 }

@@ -11,51 +11,77 @@ const ZERO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalToke
 
 const TERMINAL_RESULT_KINDS = ['completed', 'error', 'interrupted', 'aborted', 'skipped'];
 
-function fakeAgent({ config: configOverrides, options: optionsOverrides, status: statusOverride, ...rest } = {}) {
-  const config = { name: 'helper', description: '', systemPrompt: '', source: 'project', resumable: false, ...configOverrides };
-  const options = { agent: config.name, prompt: 'Fix issue', ...optionsOverrides };
+function fakeAgent({ config: configOverrides, options: optionsOverrides, status: statusOverride, activity: activityOverride, ...rest } = {}) {
+  const cfg = { name: 'helper', description: '', source: 'project', resumable: false, ...configOverrides };
+  const options = { agent: cfg.name, prompt: 'Fix issue', ...optionsOverrides };
   const baseStatus = statusOverride ?? { kind: 'completed', startedAt: 1, completedAt: 2, response: 'done' };
 
-  let status;
+  let viewStatus;
+  let ranSession;
   if (TERMINAL_RESULT_KINDS.includes(baseStatus.kind)) {
-    const resultStatus = baseStatus.kind;
-    const result = {
-      agent: options.agent,
-      prompt: options.prompt,
-      status: resultStatus,
-      model: options.model ?? config.model,
-      resumable: false,
-    };
-    if (resultStatus === 'completed') result.output = baseStatus.response ?? 'done';
-    else result.error = baseStatus.error ?? `Agent ${resultStatus}.`;
+    const outcome = baseStatus.kind;
     const completedAt = baseStatus.completedAt ?? baseStatus.errorAt ?? baseStatus.skippedAt ?? baseStatus.interruptedAt ?? baseStatus.abortedAt ?? 2;
-    let session;
-    if ('session' in baseStatus) session = baseStatus.session;
-    else if (resultStatus === 'completed' || resultStatus === 'interrupted') session = {};
-    const ran = session ? { session, startedAt: baseStatus.startedAt ?? 0 } : undefined;
-    status = { kind: 'done', result, ran, completedAt };
-  } else if (baseStatus.kind === 'running' && !('session' in baseStatus)) {
-    status = { ...baseStatus, session: {} };
+    const startedAt = baseStatus.startedAt;
+    const snippet = outcome === 'completed'
+      ? (baseStatus.response ?? 'done')
+      : (baseStatus.error ?? `Agent ${outcome}.`);
+    viewStatus = {
+      kind: 'done',
+      outcome,
+      completedAt,
+      ...(startedAt !== undefined ? { startedAt } : {}),
+      ...(snippet ? { snippet } : {}),
+    };
+    if ('session' in baseStatus) ranSession = baseStatus.session;
+    else if (outcome === 'completed' || outcome === 'interrupted') ranSession = {};
+  } else if (baseStatus.kind === 'running') {
+    viewStatus = { kind: 'running', startedAt: baseStatus.startedAt ?? 1 };
+  } else if (baseStatus.kind === 'queued') {
+    viewStatus = { kind: 'queued' };
   } else {
-    status = baseStatus;
+    viewStatus = baseStatus;
+    if (baseStatus.kind === 'done' && baseStatus.ran) ranSession = baseStatus.ran.session;
   }
 
-  const resumable = config.resumable && (status.kind !== 'done' || Boolean(status.ran));
+  const resumable = cfg.resumable && (viewStatus.kind !== 'done' || Boolean(ranSession));
+  const messageSnippet = rest.messageSnippet ?? rest.message;
+  const turns = rest.turns ?? 0;
+  const compactions = rest.compactions ?? 0;
+  let toolHistory;
+  if (activityOverride?.toolHistory) {
+    toolHistory = activityOverride.toolHistory;
+  } else if (rest.activeTools?.length) {
+    toolHistory = rest.activeTools.map((name, i) => ({ id: `${name}-${i}`, name, startedAt: 1 }));
+  } else if (rest.toolUses) {
+    toolHistory = Array.from({ length: rest.toolUses }, (_, i) => ({
+      id: `tool-${i}`, name: `tool-${i}`, startedAt: 1, completedAt: 2,
+    }));
+  } else {
+    toolHistory = [];
+  }
+
   return {
-    id: 's1', groupId: 'g1',
-    agentName: options.agent,
-    prompt: options.prompt,
-    message: '',
-    turns: 0, toolUses: 0,
-    compactions: 0,
-    totalUsage: ZERO_USAGE, createdAt: 1,
-    source: config.source,
-    resolvedModel: options.model ?? config.model,
-    resolvedThinking: options.thinking ?? config.thinking,
-    tools: config.tools,
-    resumable,
-    ...rest,
-    config, status,
+    id: rest.id ?? 's1',
+    ...(rest.inputIndex !== undefined ? { inputIndex: rest.inputIndex } : {}),
+    createdAt: rest.createdAt ?? 1,
+    config: {
+      name: cfg.name,
+      description: cfg.description,
+      source: cfg.source,
+      sourcePath: cfg.sourcePath,
+      model: options.model ?? cfg.model,
+      thinking: options.thinking ?? cfg.thinking,
+      tools: cfg.tools,
+      resumable,
+    },
+    status: viewStatus,
+    activity: {
+      ...(messageSnippet ? { messageSnippet } : {}),
+      turns,
+      compactions,
+      toolHistory,
+    },
+    usage: rest.totalUsage ?? rest.usage ?? ZERO_USAGE,
   };
 }
 
@@ -637,7 +663,6 @@ test('subagents command opens a sessions view from serialized DTOs', async () =>
   assert.match(text, /completed/);
   assert.match(text, /resumable/);
   assert.match(text, /session:s1/);
-  assert.match(text, /Fix issue by updating the API/);
   assert.doesNotMatch(text, /"config"/);
 });
 
@@ -1061,15 +1086,13 @@ test('subagent tool lists retained sessions as serialized DTOs with clear action
   assert.equal(result.isError, false);
   assert.equal(result.details.sessions.length, 1);
   const retained = result.details.sessions[0];
-  assert.equal(retained.agent, 'chatty');
-  assert.equal(retained.status, 'completed');
-  assert.equal(retained.source, 'project');
-  assert.equal(retained.model, 'test/model');
-  assert.deepEqual(retained.tools, ['read']);
-  assert.equal(retained.outputSnippet, 'The final answer from the child.');
-  assert.equal(Object.prototype.hasOwnProperty.call(retained, 'availableActions'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(retained, 'config'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(retained, 'run'), false);
+  assert.equal(retained.config.name, 'chatty');
+  assert.equal(retained.status.kind, 'done');
+  assert.equal(retained.status.outcome, 'completed');
+  assert.equal(retained.config.source, 'project');
+  assert.equal(retained.config.model, 'test/model');
+  assert.deepEqual(retained.config.tools, ['read']);
+  assert.equal(retained.status.snippet, 'The final answer from the child.');
 });
 
 test('subagent tool result renderer falls back to simple text when themed rendering fails', async () => {
@@ -1083,7 +1106,7 @@ test('subagent tool result renderer falls back to simple text when themed render
       content: [{ type: 'text', text: 'plain fallback helper output' }],
       details: {
         sessions: [{
-          id: 's1', groupId: 'g1', inputIndex: 0, createdAt: 1,
+          id: 's1', inputIndex: 0, createdAt: 1,
           config: { name: 'helper', description: 'Helper', source: 'project', model: undefined, thinking: undefined, tools: undefined, resumable: false },
           status: { kind: 'done', outcome: 'completed', completedAt: 2 },
           activity: { turns: 1, compactions: 0, toolHistory: [] },
@@ -1166,10 +1189,10 @@ test('manager marks runner rejections before start as terminal error in grouped 
   assert.match(results[0].error, /setup failed before start/);
   const final = updates.at(-1);
   assert.equal(final.active, false);
-  assert.equal(final.entries.length, 1);
-  assert.equal(final.entries[0].entry.status.kind, 'done');
-  assert.equal(final.entries[0].entry.status.result.status, 'error');
-  assert.match(final.entries[0].entry.status.result.error, /setup failed before start/);
+  assert.equal(final.sessions.length, 1);
+  assert.equal(final.sessions[0].status.kind, 'done');
+  assert.equal(final.sessions[0].status.outcome, 'error');
+  assert.match(final.sessions[0].status.snippet, /setup failed before start/);
   assert.deepEqual(manager.sessions, []);
 });
 
@@ -1208,7 +1231,7 @@ test('manager returns skipped result and final group row for queued task whose s
   assert.equal(results[1].status, 'skipped');
   assert.equal(results[1].resumable, false);
   const final = updates.at(-1);
-  assert.deepEqual(final.entries.map(({ entry }) => entry.status.result.status), ['completed', 'skipped']);
+  assert.deepEqual(final.sessions.map(s => s.status.kind === 'done' ? s.status.outcome : s.status.kind), ['completed', 'skipped']);
   assert.deepEqual(manager.sessions, []);
 });
 
@@ -1275,7 +1298,7 @@ test('manager does not expose or resume non-resumable completed sessions', async
 test('manager retains only resumable interrupted sessions inspect-clear only after parent cancellation settles', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const { interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const runner = async (_ctx, agent, signal) => {
+  const runner = async (_ctx, agent, prompt, signal) => {
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
     agent.attach(session);
     await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
@@ -1301,9 +1324,9 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   assert.ok(results[1].sessionId);
 
   const sessions = manager.sessions;
-  assert.deepEqual(sessions.map(session => session.agentName), ['chatty']);
+  assert.deepEqual(sessions.map(session => session.config.name), ['chatty']);
   assert.equal(sessions[0].status.kind, 'done');
-  assert.equal(sessions[0].status.result.status, 'interrupted');
+  assert.equal(sessions[0].status.outcome, 'interrupted');
 
   await assert.rejects(
     manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, results[1].sessionId, 'follow up'),
@@ -1592,8 +1615,8 @@ test('subagent tool returns one ordered final group for mixed success, unknown, 
   assert.deepEqual(result.details.results.map(run => run.agent), ['helper', 'missing', 'flaky']);
   assert.equal(result.details.results[0].output, 'done:first');
   assert.deepEqual(result.details.results.map(run => run.status), ['completed', 'error', 'error']);
-  assert.deepEqual(result.details.group.sessions.map(session => session.agent), ['helper', 'missing', 'flaky']);
-  assert.deepEqual(result.details.group.sessions.map(session => session.status), ['completed', 'error', 'error']);
+  assert.deepEqual(result.details.group.sessions.map(s => s.config.name), ['helper', 'missing', 'flaky']);
+  assert.deepEqual(result.details.group.sessions.map(s => s.status.kind === 'done' ? s.status.outcome : s.status.kind), ['completed', 'error', 'error']);
   assert.equal(result.details.group.statusCounts.completed, 1);
   assert.equal(result.details.group.statusCounts.error, 2);
   assert.equal(result.details.group.isError, true);
@@ -1610,7 +1633,7 @@ test('subagent tool notifies invalid settings fallback without breaking executio
   const fakeManager = {
     sessions: [],
     async spawn(_ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', createdAt: 1, entries: [{ entry: runningAgent, inputIndex: 0 }], active: true, updatedAt: 1 });
+      onUpdate({ sessions: [runningAgent], active: true });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1650,7 +1673,7 @@ test('subagent tool falls back to default UI settings when settings load rejects
   const fakeManager = {
     sessions: [],
     async spawn(_ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', createdAt: 1, entries: [{ entry: runningAgent, inputIndex: 0 }], active: true, updatedAt: 1 });
+      onUpdate({ sessions: [runningAgent], active: true });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1690,7 +1713,7 @@ test('subagent tool keeps subagent surfaces working but hides widget when placem
   const fakeManager = {
     sessions: [runningAgent],
     async spawn(_ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', createdAt: 1, entries: [{ entry: runningAgent, inputIndex: 0 }], active: true, updatedAt: 1 });
+      onUpdate({ sessions: [runningAgent], active: true });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1716,7 +1739,7 @@ test('subagent tool keeps subagent surfaces working but hides widget when placem
 
   assert.equal(result.isError, false);
   assert.equal(result.details.results[0].output, 'done');
-  assert.equal(result.details.group.sessions[0].agent, 'helper');
+  assert.equal(result.details.group.sessions[0].config.name, 'helper');
   assert.ok(widgets.length > 0);
   assert.equal(widgets.every(call => call[0] === 'subagent' && call[1] === undefined), true);
 });
@@ -1738,7 +1761,7 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
   const fakeManager = {
     sessions: [],
     async spawn(_ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', createdAt: 1, entries: [{ entry: runningAgent, inputIndex: 0 }], active: true, updatedAt: 1 });
+      onUpdate({ sessions: [runningAgent], active: true });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1762,8 +1785,8 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
 
   assert.equal(result.isError, false);
   assert.equal(result.details.results[0].output, 'done');
-  assert.equal(result.details.group.sessions[0].activeTools?.at(-1), 'read');
-  assert.equal(partials[0].details.group.sessions[0].activeTools?.at(-1), 'read');
+  assert.equal(result.details.group.sessions[0].activity.toolHistory.at(-1)?.name, 'read');
+  assert.equal(partials[0].details.group.sessions[0].activity.toolHistory.at(-1)?.name, 'read');
   assert.match(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], 'subagent');
   assert.match(widgets[0][1][0], /helper/);
@@ -1798,13 +1821,13 @@ test('manager throttles live message snippets while lifecycle updates are immedi
   ], update => snapshots.push(update.sessions[0]));
 
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(snapshots.some(s => s.status === 'running'));
-  assert.equal(snapshots.filter(s => s.messageSnippet).length, 0);
+  assert.ok(snapshots.some(s => s.status.kind === 'running'));
+  assert.equal(snapshots.filter(s => s.activity.messageSnippet).length, 0);
 
   await new Promise(resolve => setTimeout(resolve, 130));
-  const withMessage = snapshots.filter(s => s.messageSnippet);
+  const withMessage = snapshots.filter(s => s.activity.messageSnippet);
   assert.equal(withMessage.length, 1);
-  assert.equal(snapshots.at(-1).messageSnippet, 'three');
+  assert.equal(snapshots.at(-1).activity.messageSnippet, 'three');
 
   finish();
   await pending;
@@ -1813,34 +1836,32 @@ test('manager throttles live message snippets while lifecycle updates are immedi
 test('subagent DTO render helpers collapse groups and expand every child row', async () => {
   const { formatSubagentToolLines } = await import(`../dist/format.js?t=${unique()}`);
   const group = {
-    id: 'g1',
-    createdAt: 1_000,
     statusCounts: { completed: 1, running: 2, error: 1 },
     isError: true,
     sessions: [
       {
-        id: 's1', groupId: 'g1', inputIndex: 0, createdAt: 1_000,
+        id: 's1', inputIndex: 0, createdAt: 1_000,
         config: { name: 'helper', source: 'project', model: undefined, thinking: undefined, tools: undefined, resumable: false },
         status: { kind: 'done', outcome: 'completed', startedAt: 1_000, completedAt: 2_000 },
         activity: { turns: 1, compactions: 0, toolHistory: [] },
         usage: undefined,
       },
       {
-        id: 's2', groupId: 'g1', inputIndex: 1, createdAt: 1_000,
+        id: 's2', inputIndex: 1, createdAt: 1_000,
         config: { name: 'worker', source: 'project', model: undefined, thinking: undefined, tools: undefined, resumable: false },
         status: { kind: 'running', startedAt: 2_000 },
         activity: { messageSnippet: 'checking logs', turns: 2, compactions: 0, toolHistory: [{ id: 'bash-1', name: 'bash', startedAt: 2_500 }] },
         usage: undefined,
       },
       {
-        id: 'g1:task-2', groupId: 'g1', inputIndex: 2, createdAt: 1_000,
+        id: 'g1:task-2', inputIndex: 2, createdAt: 1_000,
         config: { name: 'missing', source: undefined, model: undefined, thinking: undefined, tools: undefined, resumable: false },
         status: { kind: 'done', outcome: 'error', completedAt: 1_000, snippet: 'Unknown agent: missing.' },
         activity: { turns: 0, compactions: 0, toolHistory: [] },
         usage: undefined,
       },
       {
-        id: 's4', groupId: 'g1', inputIndex: 3, createdAt: 1_000,
+        id: 's4', inputIndex: 3, createdAt: 1_000,
         config: { name: 'worker2', source: 'project', model: undefined, thinking: undefined, tools: undefined, resumable: false },
         status: { kind: 'running', startedAt: 2_000 },
         activity: { messageSnippet: 'searching', turns: 1, compactions: 0, toolHistory: [{ id: 'grep-1', name: 'grep', startedAt: 2_500 }] },
