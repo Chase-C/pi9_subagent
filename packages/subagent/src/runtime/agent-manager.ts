@@ -151,7 +151,12 @@ export class AgentManager {
     this._emitBatchUpdate(groupId);
     try {
       const results = await Promise.all(resultPromises);
-      this._releaseNonResumableCompleted(groupId);
+      this._agents = this._agents.filter(agent => {
+        if (agent.groupId !== groupId) return true;
+        if (agent.status.kind !== "done") return true;
+        return Boolean(agent.config.resumable && agent.status.kind === "done" && agent.status.ran);
+      });
+
       return results;
     } finally {
       this._flushPendingMessageUpdate(batch);
@@ -209,7 +214,13 @@ export class AgentManager {
     const batch = this._activeBatches.get(agent.groupId);
     if (!batch) return;
     if (kind === "message") {
-      this._scheduleMessageUpdate(batch);
+      if (!batch.pendingMessageTimer) {
+        batch.pendingMessageTimer = setTimeout(() => {
+          batch.pendingMessageTimer = undefined;
+          this._emitBatchUpdate(batch.groupId);
+        }, MESSAGE_UPDATE_THROTTLE_MS);
+      }
+
       return;
     }
     this._clearPendingMessageUpdate(batch);
@@ -238,22 +249,6 @@ export class AgentManager {
     });
   }
 
-  private _releaseNonResumableCompleted(groupId: string) {
-    this._agents = this._agents.filter(agent => {
-      if (agent.groupId !== groupId) return true;
-      if (agent.status.kind !== "done") return true;
-      return Boolean(agent.config.resumable && agent.status.kind === "done" && agent.status.ran);
-    });
-  }
-
-  private _scheduleMessageUpdate(batch: SpawnBatch) {
-    if (batch.pendingMessageTimer) return;
-    batch.pendingMessageTimer = setTimeout(() => {
-      batch.pendingMessageTimer = undefined;
-      this._emitBatchUpdate(batch.groupId);
-    }, MESSAGE_UPDATE_THROTTLE_MS);
-  }
-
   private _flushPendingMessageUpdate(batch: SpawnBatch) {
     if (!this._clearPendingMessageUpdate(batch)) return;
     this._emitBatchUpdate(batch.groupId);
@@ -269,15 +264,12 @@ export class AgentManager {
   private _emitBatchUpdate(groupId: string) {
     const batch = this._activeBatches.get(groupId);
     if (!batch?.listener) return;
-    batch.listener(this._buildBatchUpdate(batch));
-  }
 
-  private _buildBatchUpdate(batch: SpawnBatch): SubagentBatchUpdate {
     const sessions = batch.entries
       .slice()
       .sort((a, b) => a.inputIndex - b.inputIndex)
       .map(({ agent, view, inputIndex }) => agent ? agent.toView(inputIndex) : view!);
     const active = sessions.some(s => s.status.kind === "queued" || s.status.kind === "running");
-    return { sessions, active };
+    batch.listener({ sessions, active });
   }
 }
