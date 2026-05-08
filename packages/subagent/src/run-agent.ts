@@ -14,10 +14,45 @@ import {
 
 import { Agent } from "./agent.js";
 
-export interface RunResult {
-  response: string;
-  session: AgentSession;
+export interface AgentRunResult {
+  agent: string;
+  prompt: string;
+  status: "completed" | "error" | "aborted" | "skipped" | "interrupted";
+  output?: string;
   error?: string;
+  model?: string;
+  sessionId?: string;
+  resumable: boolean;
+}
+
+export function buildAgentResult(
+  agent: Agent,
+  prompt: string,
+  fallbackError?: string,
+): AgentRunResult {
+  const hasSession = "session" in agent.status && Boolean(agent.status.session);
+  const resumable = Boolean(agent.config.resumable && hasSession);
+  const base = {
+    agent: agent.options.agent,
+    prompt,
+    model: agent.options.model ?? agent.config.model,
+    resumable,
+    ...(resumable ? { sessionId: agent.id } : {}),
+  };
+  switch (agent.status.kind) {
+    case "completed":
+      return { ...base, status: "completed", output: agent.status.response };
+    case "skipped":
+      return { ...base, status: "skipped", error: "Agent skipped." };
+    case "interrupted":
+      return { ...base, status: "interrupted", error: agent.status.error ?? "Agent interrupted." };
+    case "aborted":
+      return { ...base, status: "aborted", error: "Agent aborted." };
+    case "error":
+      return { ...base, status: "error", error: agent.status.error };
+    default:
+      return { ...base, status: "error", error: fallbackError ?? "Agent failed." };
+  }
 }
 
 export interface RunAgentDependencies {
@@ -41,7 +76,7 @@ export async function RunAgent(
   agent: Agent,
   signal?: AbortSignal,
   dependencies: RunAgentDependencies = DefaultRunAgentDependencies,
-): Promise<RunResult> {
+): Promise<AgentRunResult> {
   ThrowIfAbortedBeforeStart(agent, signal);
 
   const cwd = ResolveTaskCwd(ctx.cwd, agent.options.cwd);
@@ -89,7 +124,7 @@ export async function ResumeAgent(
   agent: Agent,
   prompt: string,
   signal?: AbortSignal,
-): Promise<RunResult> {
+): Promise<AgentRunResult> {
   if (agent.status.kind !== "completed") {
     throw new Error(`Cannot resume an agent that is ${agent.status.kind}.`);
   }
@@ -104,7 +139,7 @@ async function PromptAgent(
   agent: Agent,
   prompt: string,
   signal?: AbortSignal,
-): Promise<RunResult> {
+): Promise<AgentRunResult> {
   const onAbort = () => {
     void AbortSession(session);
     if (agent.status.kind === "running") agent.interrupt("Agent interrupted.");
@@ -134,7 +169,7 @@ async function PromptAgent(
     const response = agent.message || finalMessage.response;
 
     agent.complete(response);
-    return { response, session };
+    return buildAgentResult(agent, prompt);
   } catch (error) {
     if (agent.status.kind === "running") {
       const message = error instanceof Error ? error.message : String(error);

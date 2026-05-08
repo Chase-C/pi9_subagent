@@ -985,12 +985,13 @@ test('subagents command inspect view shows metadata and clears retained session 
 
 test('subagent tool lists retained sessions as serialized DTOs with clear action', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
     agent.start(session);
     agent.complete('The final answer from the child.');
-    return { response: 'The final answer from the child.', session };
+    return buildAgentResult(agent, agent.options.prompt);
   };
   const fakeRegistry = {
     agents: new Map([
@@ -1069,10 +1070,14 @@ test('tool execution returns structured failed run for unknown agents', async ()
 test('manager returns ordered per-run output and reports unknown agents and child failures', async () => {
   const calls = [];
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   const runner = async (_ctx, agent) => {
     calls.push(agent.options.prompt);
     if (agent.options.prompt === 'three') throw new Error('child failed');
-    return { response: `response:${agent.options.prompt}`, session: {} };
+    const session = { messages: [], subscribe: () => () => {}, async prompt() {}, abort() {} };
+    agent.start(session);
+    agent.complete(`response:${agent.options.prompt}`);
+    return buildAgentResult(agent, agent.options.prompt);
   };
 
   const registry = { agents: new Map([
@@ -1125,6 +1130,7 @@ test('manager marks runner rejections before start as terminal error in grouped 
 
 test('manager returns skipped result and final group row for queued task whose signal aborted before it can start', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   const calls = [];
   let finishFirst;
   const firstCanFinish = new Promise(resolve => { finishFirst = resolve; });
@@ -1134,7 +1140,7 @@ test('manager returns skipped result and final group row for queued task whose s
     agent.start(session);
     if (agent.options.prompt === 'one') await firstCanFinish;
     agent.complete(`done:${agent.options.prompt}`);
-    return { response: `done:${agent.options.prompt}`, session };
+    return buildAgentResult(agent, agent.options.prompt);
   };
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
@@ -1164,6 +1170,7 @@ test('manager returns skipped result and final group row for queued task whose s
 
 test('manager does not expose skipped resumable tasks as sessions', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   let finishFirst;
   const firstCanFinish = new Promise(resolve => { finishFirst = resolve; });
   const runner = async (_ctx, agent) => {
@@ -1171,7 +1178,7 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
     agent.start(session);
     await firstCanFinish;
     agent.complete('done');
-    return { response: 'done', session };
+    return buildAgentResult(agent, agent.options.prompt);
   };
   const registry = { agents: new Map([
     ['blocker', { name: 'blocker', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
@@ -1198,11 +1205,12 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
 
 test('manager does not expose or resume non-resumable completed sessions', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   const runner = async (_ctx, agent) => {
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
     agent.start(session);
     agent.complete('done');
-    return { response: 'done', session };
+    return buildAgentResult(agent, agent.options.prompt);
   };
   const registry = { agents: new Map([
     ['oneshot', { name: 'oneshot', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
@@ -1264,6 +1272,7 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
 
 test('manager retains, resumes, lists, and clears completed resumable sessions', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   let runEmit;
   let resumeEmit;
   const runner = async (_ctx, agent) => {
@@ -1277,16 +1286,15 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
     agent.start(session);
     runEmit({ type: 'turn_end' });
     agent.complete(response);
-    return { response, session };
+    return buildAgentResult(agent, agent.options.prompt);
   };
   const resumeRunner = async (_ctx, agent, prompt) => {
     agent.resume(agent.status.session);
-    const session = agent.status.session;
     resumeEmit = runEmit;
     resumeEmit({ type: 'turn_end' });
     const response = `follow:${prompt}`;
     agent.complete(response);
-    return { response, session };
+    return buildAgentResult(agent, prompt);
   };
 
   const registry = { agents: new Map([
@@ -1342,12 +1350,13 @@ test('agent re-subscribes on resume so events during a resumed cycle update its 
 
 test('manager emits grouped progress rows in input order including unknown agents', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
     agent.start(session);
     agent.complete(`done:${agent.options.prompt}`);
-    return { response: `done:${agent.options.prompt}`, session };
+    return buildAgentResult(agent, agent.options.prompt);
   };
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
@@ -1381,6 +1390,7 @@ test('manager emits grouped progress rows in input order including unknown agent
 
 test('manager emits live agent progress with the right transitions', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', model: 'test/model' }],
@@ -1395,7 +1405,7 @@ test('manager emits live agent progress with the right transitions', async () =>
     emit({ type: 'turn_end' });
     emit({ type: 'tool_execution_end' });
     agent.complete('done');
-    return { response: 'done', session };
+    return buildAgentResult(agent, agent.options.prompt);
   };
   const manager = new AgentManager(registry, 1, runner);
   const snapshots = [];
@@ -1419,13 +1429,14 @@ test('manager emits live agent progress with the right transitions', async () =>
 
 test('subagent tool returns one ordered final group for mixed success, unknown, and failed children', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
     agent.start(session);
     if (agent.options.agent === 'flaky') throw new Error('flaky failed');
     agent.complete(`done:${agent.options.prompt}`);
-    return { response: `done:${agent.options.prompt}`, session };
+    return buildAgentResult(agent, agent.options.prompt);
   };
   const fakeRegistry = {
     agents: new Map([
@@ -1632,6 +1643,7 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
 
 test('manager throttles live message snippets while lifecycle updates are immediate', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { buildAgentResult } = await import(`../dist/run-agent.js?t=${unique()}`);
   const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
@@ -1650,7 +1662,7 @@ test('manager throttles live message snippets while lifecycle updates are immedi
     emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'three' } });
     await allowFinish;
     agent.complete('done');
-    return { response: 'done', session };
+    return buildAgentResult(agent, agent.options.prompt);
   };
   const manager = new AgentManager(registry, 1, runner);
   const snapshots = [];
@@ -1893,7 +1905,7 @@ test('run-agent forwards configured tools allowlist to createAgentSession', asyn
 
   const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, undefined, dependencies);
 
-  assert.equal(result.response, 'final');
+  assert.equal(result.output, 'final');
   assert.deepEqual(createOptions.tools, ['read', 'grep']);
 });
 

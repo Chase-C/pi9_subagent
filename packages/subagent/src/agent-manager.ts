@@ -9,7 +9,9 @@ import {
   activeOrRetainedAgents,
   serializeUnknownAgentError,
 } from "./subagent-ui.js";
-import { ResumeAgent, RunAgent, type RunResult } from "./run-agent.js";
+import { ResumeAgent, RunAgent, buildAgentResult, type AgentRunResult } from "./run-agent.js";
+
+export { type AgentRunResult } from "./run-agent.js";
 
 export type ErrorEntry = {
   serialized: ReturnType<typeof serializeUnknownAgentError>;
@@ -35,20 +37,9 @@ export interface AgentOptions {
   cwd?: string;
 }
 
-export interface AgentRunResult {
-  agent: string;
-  prompt: string;
-  status: "completed" | "error" | "aborted" | "skipped" | "interrupted";
-  output?: string;
-  error?: string;
-  model?: string;
-  sessionId?: string;
-  resumable?: boolean;
-}
-
 export type AgentManagerUpdateListener = (update: AgentManagerGroupUpdate) => void;
-export type AgentRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<RunResult>;
-export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<RunResult>;
+export type AgentRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<AgentRunResult>;
+export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
 
 type SubagentGroupEntry =
   | { kind: "agent"; agent: Agent; inputIndex: number }
@@ -155,6 +146,7 @@ export class AgentManager {
           status: "error" as const,
           error,
           model: opts.model,
+          resumable: false,
         });
       }
 
@@ -195,14 +187,11 @@ export class AgentManager {
 
     const unsubscribe = onUpdate ? this.subscribe(agent.groupId, onUpdate) : undefined;
     try {
-      const { response } = await this._resumeAgent(ctx, agent, prompt, signal);
-      return this._resultFromAgent(agent, prompt, response);
+      return await this._resumeAgent(ctx, agent, prompt, signal);
     } catch (error) {
-      try {
-        agent.error(error instanceof Error ? error.message : String(error));
-      } catch { }
-
-      return this._resultFromAgent(agent, prompt, undefined, error);
+      const message = error instanceof Error ? error.message : String(error);
+      try { agent.error(message); } catch { }
+      return buildAgentResult(agent, prompt, message);
     } finally {
       this._flushPendingMessageUpdate(agent.groupId);
       unsubscribe?.();
@@ -226,7 +215,7 @@ export class AgentManager {
     return new Promise(resolve => {
       const abortQueued = () => {
         if (agent.status.kind === "queued") agent.cancelQueued();
-        resolve(this._resultFromAgent(agent, agent.options.prompt));
+        resolve(buildAgentResult(agent, agent.options.prompt));
       };
 
       if (signal?.aborted) {
@@ -241,13 +230,8 @@ export class AgentManager {
           return;
         }
 
-        const run = this._runAgent(ctx, agent, signal)
-          .then(({ response }) => response);
-
-        run.then(
-          output => {
-            resolve(this._resultFromAgent(agent, agent.options.prompt, output));
-          },
+        this._runAgent(ctx, agent, signal).then(
+          result => resolve(result),
           error => {
             const message = error instanceof Error ? error.message : String(error);
             if (agent.status.kind === "running") {
@@ -257,51 +241,11 @@ export class AgentManager {
               if (signal?.aborted) agent.cancelQueued();
               else agent.failQueued(message);
             }
-            resolve(this._resultFromAgent(agent, agent.options.prompt, undefined, error));
+            resolve(buildAgentResult(agent, agent.options.prompt, message));
           },
         ).finally(() => this._flushQueue());
       });
     });
-  }
-
-  private _resultFromAgent(
-    agent: Agent,
-    prompt: string,
-    output?: string,
-    error?: unknown,
-  ): AgentRunResult {
-    const resumable = Boolean(agent.config.resumable && "session" in agent.status && agent.status.session);
-    const base = {
-      agent: agent.options.agent,
-      prompt,
-      model: agent.options.model ?? agent.config.model,
-      resumable,
-      ...(resumable ? { sessionId: agent.id } : {}),
-    };
-
-    if (agent.status.kind === "completed") {
-      return { ...base, status: "completed", output: output ?? agent.status.response };
-    }
-    if (output !== undefined) {
-      return { ...base, status: "completed", output };
-    }
-    if (agent.status.kind === "skipped") {
-      return { ...base, status: "skipped", error: "Agent skipped." };
-    }
-    if (agent.status.kind === "interrupted") {
-      return { ...base, status: "interrupted", error: agent.status.error ?? "Agent interrupted." };
-    }
-    if (agent.status.kind === "aborted") {
-      return { ...base, status: "aborted", error: "Agent aborted." };
-    }
-    if (agent.status.kind === "error") {
-      return { ...base, status: "error", error: agent.status.error };
-    }
-    return {
-      ...base,
-      status: "error",
-      error: error instanceof Error ? error.message : String(error ?? "Agent failed."),
-    };
   }
 
   private _releaseNonResumableCompleted(groupId: string) {
