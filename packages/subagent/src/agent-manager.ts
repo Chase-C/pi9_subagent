@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { ModelThinkingLevel } from "@mariozechner/pi-ai";
 import { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { Agent, type AgentUpdateKind } from "./agent.js";
+import { Agent, type AgentUpdateKind, type AgentView } from "./agent.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { activeOrRetainedAgents } from "./serialize.js";
 import {
@@ -17,18 +17,10 @@ import {
 
 export { type AgentRunResult } from "./run-agent.js";
 
-export interface UnknownAgentError {
-  options: AgentOptions;
-  error: string;
-  createdAt: number;
-  inputIndex: number;
-}
-
 export interface AgentManagerGroupUpdate {
   groupId: string;
   createdAt: number;
-  agents: Array<{ agent: Agent; inputIndex: number }>;
-  errors: UnknownAgentError[];
+  entries: Array<{ entry: AgentView; inputIndex: number }>;
   active: boolean;
   updatedAt: number;
 }
@@ -47,14 +39,45 @@ export type AgentManagerUpdateListener = (update: AgentManagerGroupUpdate) => vo
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<AgentRunResult>;
 export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
 
-type SubagentGroupEntry =
-  | { kind: "agent"; agent: Agent; inputIndex: number }
-  | { kind: "error"; error: UnknownAgentError };
-
 interface SubagentGroupState {
   id: string;
   createdAt: number;
-  entries: SubagentGroupEntry[];
+  entries: Array<{ entry: AgentView; inputIndex: number }>;
+}
+
+function unknownEntry(
+  opts: AgentOptions,
+  error: string,
+  groupId: string,
+  inputIndex: number,
+  createdAt: number,
+): AgentView {
+  const result: AgentRunResult = {
+    agent: opts.agent,
+    prompt: opts.prompt,
+    status: "error",
+    error,
+    model: opts.model,
+    resumable: false,
+  };
+  return {
+    id: `${groupId}:task-${inputIndex}`,
+    groupId,
+    options: opts,
+    status: { kind: "done", result, completedAt: createdAt },
+    source: undefined,
+    resolvedModel: opts.model,
+    resolvedThinking: undefined,
+    tools: undefined,
+    resumable: false,
+    message: "",
+    tool: undefined,
+    turns: 0,
+    toolUses: 0,
+    compactions: 0,
+    createdAt,
+    totalUsage: undefined,
+  };
 }
 
 export class AgentManager {
@@ -136,27 +159,20 @@ export class AgentManager {
       .map((agent) => `${agent.name} (${agent.source})`)
       .join("\n");
 
-    const entries: SubagentGroupEntry[] = [];
+    const entries: Array<{ entry: AgentView; inputIndex: number }> = [];
     const resultPromises = options.map((opts, inputIndex) => {
       const config = this.registry.agents.get(opts.agent);
       if (!config) {
         const error = `Unknown agent: ${opts.agent}. Available agents:\n${available()}`;
-        entries.push({
-          kind: "error",
-          error: { options: opts, error, createdAt: groupCreatedAt, inputIndex },
-        });
-        return Promise.resolve({
-          agent: opts.agent,
-          prompt: opts.prompt,
-          status: "error" as const,
-          error,
-          model: opts.model,
-          resumable: false,
-        });
+        const entry = unknownEntry(opts, error, groupId, inputIndex, groupCreatedAt);
+        entries.push({ entry, inputIndex });
+        return Promise.resolve(
+          (entry.status as { kind: "done"; result: AgentRunResult }).result,
+        );
       }
 
       const agent = new Agent(randomUUID(), groupId, config, opts, this._agentUpdate.bind(this));
-      entries.push({ kind: "agent", agent, inputIndex });
+      entries.push({ entry: agent, inputIndex });
       this._agents.push(agent);
       return this._enqueue(ctx, signal, agent);
     });
@@ -301,23 +317,20 @@ export class AgentManager {
 
   private _buildUpdate(groupId: string): AgentManagerGroupUpdate {
     const group = this._groups.get(groupId);
-    const agents: AgentManagerGroupUpdate["agents"] = [];
-    const errors: UnknownAgentError[] = [];
+    let entries: Array<{ entry: AgentView; inputIndex: number }>;
     let createdAt: number;
 
     if (group) {
       createdAt = group.createdAt;
-      for (const entry of group.entries) {
-        if (entry.kind === "error") errors.push(entry.error);
-        else agents.push({ agent: entry.agent, inputIndex: entry.inputIndex });
-      }
+      entries = group.entries;
     } else {
       createdAt = Date.now();
-      const groupAgents = this._agents.filter(agent => agent.groupId === groupId);
-      groupAgents.forEach((agent, i) => agents.push({ agent, inputIndex: i }));
+      entries = this._agents
+        .filter(agent => agent.groupId === groupId)
+        .map((agent, i) => ({ entry: agent, inputIndex: i }));
     }
 
-    const active = agents.some(({ agent }) => agent.status.kind === "queued" || agent.status.kind === "running");
-    return { groupId, createdAt, agents, errors, active, updatedAt: Date.now() };
+    const active = entries.some(({ entry }) => entry.status.kind === "queued" || entry.status.kind === "running");
+    return { groupId, createdAt, entries, active, updatedAt: Date.now() };
   }
 }

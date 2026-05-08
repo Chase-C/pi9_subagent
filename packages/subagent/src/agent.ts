@@ -1,7 +1,7 @@
-import { Usage } from "@mariozechner/pi-ai";
+import { ModelThinkingLevel, Usage } from "@mariozechner/pi-ai";
 import { AgentSession } from "@mariozechner/pi-coding-agent";
 
-import { AgentConfig } from "./agent-config.js";
+import { AgentConfig, AgentSource } from "./agent-config.js";
 import { AgentOptions } from "./agent-manager.js";
 import { AgentRunResult } from "./run-agent.js";
 
@@ -17,7 +17,26 @@ export type AgentStatus =
 
 export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
 
-export class Agent {
+export interface AgentView {
+  readonly id: string;
+  readonly groupId: string;
+  readonly options: AgentOptions;
+  readonly status: AgentStatus;
+  readonly source: AgentSource | undefined;
+  readonly resolvedModel: string | undefined;
+  readonly resolvedThinking: ModelThinkingLevel | undefined;
+  readonly tools: string[] | undefined;
+  readonly resumable: boolean;
+  readonly message: string;
+  readonly tool: string | undefined;
+  readonly turns: number;
+  readonly toolUses: number;
+  readonly compactions: number;
+  readonly createdAt: number;
+  readonly totalUsage: Usage | undefined;
+}
+
+export class Agent implements AgentView {
 
   private _status: AgentStatus = { kind: "queued" };
 
@@ -56,6 +75,17 @@ export class Agent {
   get totalUsage() { return this._totalUsage }
 
   get createdAt() { return this._createdAt }
+
+  get source() { return this.config.source }
+  get resolvedModel() { return this.options.model ?? this.config.model }
+  get resolvedThinking() { return this.options.thinking ?? this.config.thinking }
+  get tools() { return this.config.tools }
+
+  get resumable(): boolean {
+    if (!this.config.resumable) return false;
+    if (this._status.kind !== "done") return true;
+    return Boolean(this._status.session);
+  }
 
   attach(session: AgentSession) {
     const canAttach =

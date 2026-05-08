@@ -1,7 +1,7 @@
 import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
-import type { Agent } from "./agent.js";
+import type { AgentView } from "./agent.js";
 import { AgentManager, AgentOptions, type AgentManagerGroupUpdate } from "./agent-manager.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { SubagentParams } from "./schema.js";
@@ -17,7 +17,6 @@ import {
   listAgentDefinitions,
   serializeAgent,
   serializeGroup,
-  serializeUnknownAgentError,
 } from "./serialize.js";
 
 const MAX_TASKS = 8;
@@ -56,23 +55,14 @@ function errorResult(message: string, details: Record<string, unknown> = { }) {
   };
 }
 
-function liveAgents(update: AgentManagerGroupUpdate): Agent[] {
-  return update.agents.map(entry => entry.agent);
+function liveAgents(update: AgentManagerGroupUpdate): AgentView[] {
+  return update.entries.map(({ entry }) => entry);
 }
 
 function snapshotGroup(update: AgentManagerGroupUpdate) {
-  const sessions = [
-    ...update.agents.map(entry => serializeAgent(entry.agent, entry.inputIndex)),
-    ...update.errors.map(error => serializeUnknownAgentError(
-      `${update.groupId}:task-${error.inputIndex}`,
-      update.groupId,
-      error.options,
-      error.error,
-      error.createdAt,
-      error.inputIndex,
-    )),
-  ];
-  sessions.sort((a, b) => (a.inputIndex ?? 0) - (b.inputIndex ?? 0));
+  const sessions = update.entries
+    .map(({ entry, inputIndex }) => serializeAgent(entry, inputIndex))
+    .sort((a, b) => (a.inputIndex ?? 0) - (b.inputIndex ?? 0));
   return serializeGroup(update.groupId, update.createdAt, sessions);
 }
 

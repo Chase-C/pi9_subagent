@@ -39,7 +39,20 @@ function fakeAgent({ config: configOverrides, options: optionsOverrides, status:
     status = baseStatus;
   }
 
-  return { id: 's1', groupId: 'g1', message: '', tool: undefined, turns: 0, toolUses: 0, compactions: 0, totalUsage: ZERO_USAGE, createdAt: 1, ...rest, config, options, status };
+  const resumable = config.resumable && (status.kind !== 'done' || Boolean(status.session));
+  return {
+    id: 's1', groupId: 'g1',
+    message: '', tool: undefined,
+    turns: 0, toolUses: 0, compactions: 0,
+    totalUsage: ZERO_USAGE, createdAt: 1,
+    source: config.source,
+    resolvedModel: options.model ?? config.model,
+    resolvedThinking: options.thinking ?? config.thinking,
+    tools: config.tools,
+    resumable,
+    ...rest,
+    config, options, status,
+  };
 }
 
 test('subagent UI settings default to below editor when file is missing', async () => {
@@ -1147,11 +1160,10 @@ test('manager marks runner rejections before start as terminal error in grouped 
   assert.match(results[0].error, /setup failed before start/);
   const final = updates.at(-1);
   assert.equal(final.active, false);
-  assert.equal(final.agents.length, 1);
-  assert.equal(final.errors.length, 0);
-  assert.equal(final.agents[0].agent.status.kind, 'done');
-  assert.equal(final.agents[0].agent.status.result.status, 'error');
-  assert.match(final.agents[0].agent.status.result.error, /setup failed before start/);
+  assert.equal(final.entries.length, 1);
+  assert.equal(final.entries[0].entry.status.kind, 'done');
+  assert.equal(final.entries[0].entry.status.result.status, 'error');
+  assert.match(final.entries[0].entry.status.result.error, /setup failed before start/);
   assert.deepEqual(manager.sessions, []);
 });
 
@@ -1190,7 +1202,7 @@ test('manager returns skipped result and final group row for queued task whose s
   assert.equal(results[1].status, 'skipped');
   assert.equal(results[1].resumable, false);
   const final = updates.at(-1);
-  assert.deepEqual(final.agents.map(({ agent }) => agent.status.result.status), ['completed', 'skipped']);
+  assert.deepEqual(final.entries.map(({ entry }) => entry.status.result.status), ['completed', 'skipped']);
   assert.deepEqual(manager.sessions, []);
 });
 
@@ -1373,7 +1385,7 @@ test('agent re-subscribes on resume so events during a resumed cycle update its 
 test('manager emits grouped progress rows in input order including unknown agents', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { serializeAgent, serializeUnknownAgentError } = await import(`../dist/serialize.js?t=${unique()}`);
+  const { serializeAgent } = await import(`../dist/serialize.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
     agent.attach(session);
@@ -1389,31 +1401,21 @@ test('manager emits grouped progress rows in input order including unknown agent
     { agent: 'helper', prompt: 'one' },
     { agent: 'missing', prompt: 'two' },
     { agent: 'helper', prompt: 'three' },
-  ], update => snapshots.push({
-    agents: update.agents.map(({ agent, inputIndex }) => serializeAgent(agent, inputIndex)),
-    errors: update.errors.map(e => serializeUnknownAgentError(
-      `${update.groupId}:task-${e.inputIndex}`,
-      update.groupId,
-      e.options,
-      e.error,
-      e.createdAt,
-      e.inputIndex,
-    )),
-  }));
+  ], update => snapshots.push(
+    update.entries.map(({ entry, inputIndex }) => serializeAgent(entry, inputIndex)),
+  ));
 
   assert.deepEqual(results.map(result => result.agent), ['helper', 'missing', 'helper']);
   assert.deepEqual(results.map(result => result.status), ['completed', 'error', 'completed']);
 
   const initial = snapshots[0];
-  assert.equal(initial.agents.length, 2);
-  assert.equal(initial.errors.length, 1);
-  assert.deepEqual(initial.agents.map(a => [a.agent, a.status, a.inputIndex]), [
+  assert.equal(initial.length, 3);
+  assert.deepEqual(initial.map(row => [row.agent, row.status, row.inputIndex]), [
     ['helper', 'queued', 0],
+    ['missing', 'error', 1],
     ['helper', 'queued', 2],
   ]);
-  assert.equal(initial.errors[0].inputIndex, 1);
-  assert.equal(initial.errors[0].agent, 'missing');
-  assert.match(initial.errors[0].errorSnippet, /Unknown agent: missing/);
+  assert.match(initial[1].errorSnippet, /Unknown agent: missing/);
 });
 
 test('manager emits live agent progress with the right transitions', async () => {
@@ -1439,7 +1441,7 @@ test('manager emits live agent progress with the right transitions', async () =>
 
   const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { agent: 'helper', prompt: 'Summarize the project status for the parent agent.' },
-  ], update => snapshots.push(serializeAgent(update.agents[0].agent)));
+  ], update => snapshots.push(serializeAgent(update.entries[0].entry)));
 
   assert.equal(results[0].status, 'completed');
   assert.ok(snapshots.length >= 4);
@@ -1507,7 +1509,7 @@ test('subagent tool notifies invalid settings fallback without breaking executio
   const fakeManager = {
     sessions: [],
     async spawn(_ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', createdAt: 1, agents: [{ agent: runningAgent, inputIndex: 0 }], errors: [], active: true, updatedAt: 1 });
+      onUpdate({ groupId: 'g1', createdAt: 1, entries: [{ entry: runningAgent, inputIndex: 0 }], active: true, updatedAt: 1 });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1547,7 +1549,7 @@ test('subagent tool falls back to default UI settings when settings load rejects
   const fakeManager = {
     sessions: [],
     async spawn(_ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', createdAt: 1, agents: [{ agent: runningAgent, inputIndex: 0 }], errors: [], active: true, updatedAt: 1 });
+      onUpdate({ groupId: 'g1', createdAt: 1, entries: [{ entry: runningAgent, inputIndex: 0 }], active: true, updatedAt: 1 });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1587,7 +1589,7 @@ test('subagent tool keeps subagent surfaces working but hides widget when placem
   const fakeManager = {
     sessions: [runningAgent],
     async spawn(_ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', createdAt: 1, agents: [{ agent: runningAgent, inputIndex: 0 }], errors: [], active: true, updatedAt: 1 });
+      onUpdate({ groupId: 'g1', createdAt: 1, entries: [{ entry: runningAgent, inputIndex: 0 }], active: true, updatedAt: 1 });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1635,7 +1637,7 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
   const fakeManager = {
     sessions: [],
     async spawn(_ctx, _signal, _options, onUpdate) {
-      onUpdate({ groupId: 'g1', createdAt: 1, agents: [{ agent: runningAgent, inputIndex: 0 }], errors: [], active: true, updatedAt: 1 });
+      onUpdate({ groupId: 'g1', createdAt: 1, entries: [{ entry: runningAgent, inputIndex: 0 }], active: true, updatedAt: 1 });
       return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
     },
   };
@@ -1693,7 +1695,7 @@ test('manager throttles live message snippets while lifecycle updates are immedi
   const snapshots = [];
   const pending = manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { agent: 'helper', prompt: 'work' },
-  ], update => snapshots.push(serializeAgent(update.agents[0].agent)));
+  ], update => snapshots.push(serializeAgent(update.entries[0].entry)));
 
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(snapshots.some(s => s.status === 'running'));

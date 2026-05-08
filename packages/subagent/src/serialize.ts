@@ -1,6 +1,6 @@
 import type { Usage } from "@mariozechner/pi-ai";
 
-import type { Agent, AgentStatus } from "./agent.js";
+import type { AgentStatus, AgentView } from "./agent.js";
 import type { AgentConfig } from "./agent-config.js";
 import type { AgentRegistry } from "./agent-registry.js";
 
@@ -41,57 +41,31 @@ export interface AgentRowGroup {
   isError: boolean;
 }
 
-export function serializeAgent(agent: Agent, inputIndex?: number): AgentRow {
-  const status = agent.status;
+export function serializeAgent(entry: AgentView, inputIndex?: number): AgentRow {
+  const status = entry.status;
   return {
-    id: agent.id,
-    groupId: agent.groupId,
-    agent: agent.options.agent,
+    id: entry.id,
+    groupId: entry.groupId,
+    agent: entry.options.agent,
     status: effectiveStatus(status),
-    resumable: isResumable(agent),
-    promptPreview: compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH),
-    messageSnippet: agent.message ? compact(agent.message, MESSAGE_SNIPPET_LENGTH) : undefined,
-    activeTool: agent.tool,
-    turns: agent.turns,
-    toolUses: agent.toolUses,
-    compactions: agent.compactions,
-    createdAt: agent.createdAt,
+    resumable: entry.resumable,
+    promptPreview: compact(entry.options.prompt, PROMPT_PREVIEW_LENGTH),
+    messageSnippet: entry.message ? compact(entry.message, MESSAGE_SNIPPET_LENGTH) : undefined,
+    activeTool: entry.tool,
+    turns: entry.turns,
+    toolUses: entry.toolUses,
+    compactions: entry.compactions,
+    createdAt: entry.createdAt,
     startedAt: getStartedAt(status),
     completedAt: getCompletedAt(status),
     outputSnippet: getOutputSnippet(status),
     errorSnippet: getErrorSnippet(status),
-    source: agent.config.source,
-    model: agent.options.model ?? agent.config.model,
-    thinking: agent.options.thinking ?? agent.config.thinking,
-    tools: agent.config.tools,
-    usage: agent.totalUsage,
+    source: entry.source,
+    model: entry.resolvedModel,
+    thinking: entry.resolvedThinking,
+    tools: entry.tools,
+    usage: entry.totalUsage,
     inputIndex,
-  };
-}
-
-export function serializeUnknownAgentError(
-  id: string,
-  groupId: string,
-  task: { agent: string; prompt: string; model?: string },
-  error: string,
-  createdAt: number,
-  inputIndex?: number,
-): AgentRow {
-  return {
-    id,
-    groupId,
-    agent: task.agent,
-    status: "error",
-    resumable: false,
-    promptPreview: compact(task.prompt, PROMPT_PREVIEW_LENGTH),
-    turns: 0,
-    toolUses: 0,
-    compactions: 0,
-    createdAt,
-    completedAt: createdAt,
-    model: task.model,
-    inputIndex,
-    errorSnippet: compact(error, OUTPUT_SNIPPET_LENGTH),
   };
 }
 
@@ -131,23 +105,16 @@ export function listAgentDefinitions(agentRegistry: AgentRegistry) {
   return Array.from(agentRegistry.agents.values()).map(serializeAgentConfig);
 }
 
-export function activeOrRetainedAgents(agents: Agent[]): Agent[] {
-  return agents.filter(a => isActiveStatusKind(a.status.kind) || isResumable(a));
+export function activeOrRetainedAgents<T extends AgentView>(agents: T[]): T[] {
+  return agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable);
 }
 
-export function canResumeSubagentSession(agent: Agent): boolean {
-  return isResumable(agent) && agent.status.kind === "done" && agent.status.result.status === "completed";
+export function canResumeSubagentSession(agent: AgentView): boolean {
+  return agent.resumable && agent.status.kind === "done" && agent.status.result.status === "completed";
 }
 
-export function canClearSubagentSession(agent: Agent): boolean {
-  return isResumable(agent) && !isActiveStatusKind(agent.status.kind);
-}
-
-export function isResumable(agent: Agent): boolean {
-  const status = agent.status;
-  if (!agent.config.resumable) return false;
-  if (status.kind === "queued" || status.kind === "running") return true;
-  return Boolean(status.session);
+export function canClearSubagentSession(agent: AgentView): boolean {
+  return agent.resumable && !isActiveStatusKind(agent.status.kind);
 }
 
 export function effectiveStatus(status: AgentStatus): string {

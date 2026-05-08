@@ -1,4 +1,4 @@
-import type { Agent } from "./agent.js";
+import type { AgentView } from "./agent.js";
 import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentUiSettingsStore, type SubagentUiSettings, type SubagentUiSettingsLoadResult } from "./subagent-settings.js";
 import { formatWidgetLines } from "./format.js";
 
@@ -35,7 +35,7 @@ function notifySettingsWarning(ctx: SubagentWidgetContext, result: SubagentUiSet
 
 export function updateSubagentWidget(
   ctx: SubagentWidgetContext,
-  agents: Agent[],
+  agents: AgentView[],
   settings: SubagentUiSettings,
 ) {
   if (!ctx.hasUI || !ctx.ui?.setWidget) return;

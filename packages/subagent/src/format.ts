@@ -1,7 +1,7 @@
 import type { Usage } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 
-import type { Agent } from "./agent.js";
+import type { AgentView } from "./agent.js";
 import type { AgentConfig } from "./agent-config.js";
 import {
   AgentRow,
@@ -18,7 +18,6 @@ import {
   getOutputSnippet,
   getStartedAt,
   isActiveStatusKind,
-  isResumable,
   serializeGroup,
 } from "./serialize.js";
 
@@ -60,37 +59,37 @@ export function formatAgentConfigInspect(config: AgentConfig): string[] {
   return lines;
 }
 
-export function formatSubagentSessionSummary(agent: Agent): string {
+export function formatSubagentSessionSummary(agent: AgentView): string {
   const badges = [
-    isResumable(agent) ? "resumable" : undefined,
+    agent.resumable ? "resumable" : undefined,
     `session:${agent.id}`,
   ].filter(Boolean);
   return [agent.options.agent, effectiveStatus(agent.status), ...badges, `"${compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH)}"`].join(" · ");
 }
 
-export function formatSubagentSessionInspect(agent: Agent, now = Date.now()): string[] {
+export function formatSubagentSessionInspect(agent: AgentView, now = Date.now()): string[] {
   const status = agent.status;
   const startedAt = getStartedAt(status);
   const completedAt = getCompletedAt(status);
   const elapsed = formatElapsed(startedAt ?? agent.createdAt, completedAt ?? now);
-  const resumable = isResumable(agent);
-  const model = agent.options.model ?? agent.config.model;
-  const thinking = agent.options.thinking ?? agent.config.thinking;
+  const resumable = agent.resumable;
+  const model = agent.resolvedModel;
+  const thinking = agent.resolvedThinking;
 
   const lines = [
     `Session ${agent.id}`,
     `Status: ${effectiveStatus(status)}${resumable ? " · resumable" : ""}`,
-    `Agent: ${agent.options.agent} (${agent.config.source})`,
+    `Agent: ${agent.options.agent}${agent.source ? ` (${agent.source})` : ""}`,
   ];
 
   if (model || thinking) {
     lines.push(`Model: ${model ?? "default"}${thinking ? ` · thinking:${thinking}` : ""}`);
   }
-  lines.push(`Tools: ${agent.config.tools?.length ? agent.config.tools.join(", ") : "default"}`);
+  lines.push(`Tools: ${agent.tools?.length ? agent.tools.join(", ") : "default"}`);
   lines.push(`Prompt: ${compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH)}`);
   if (agent.tool) lines.push(`Active tool: ${agent.tool}`);
   lines.push(`Progress: ${agent.turns} turn${agent.turns === 1 ? "" : "s"} · ${agent.toolUses} tool use${agent.toolUses === 1 ? "" : "s"} · ${agent.compactions} compaction${agent.compactions === 1 ? "" : "s"}`);
-  lines.push(`Usage: ${formatUsage(agent.totalUsage)}`);
+  if (agent.totalUsage) lines.push(`Usage: ${formatUsage(agent.totalUsage)}`);
   lines.push(`Timestamps: created ${formatTimestamp(agent.createdAt)}${startedAt ? ` · started ${formatTimestamp(startedAt)}` : ""}${completedAt ? ` · completed ${formatTimestamp(completedAt)}` : ""} · elapsed ${elapsed}`);
 
   const outputSnippet = getOutputSnippet(status);
@@ -106,7 +105,7 @@ export function formatSubagentSessionInspect(agent: Agent, now = Date.now()): st
   return lines;
 }
 
-export function formatSubagentSessionLine(agent: Agent, now = Date.now()): string {
+export function formatSubagentSessionLine(agent: AgentView, now = Date.now()): string {
   const status = agent.status;
   const startedAt = getStartedAt(status);
   const completedAt = getCompletedAt(status);
@@ -134,8 +133,8 @@ export function formatSubagentSessionLine(agent: Agent, now = Date.now()): strin
   return parts.join(" · ");
 }
 
-export function formatWidgetLines(agents: Agent[], now = Date.now()): string[] {
-  const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || isResumable(a));
+export function formatWidgetLines(agents: AgentView[], now = Date.now()): string[] {
+  const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable);
   if (visible.length === 0) return [];
   if (visible.length === 1) return [formatSubagentSessionLine(visible[0], now)];
 

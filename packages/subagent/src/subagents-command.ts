@@ -399,7 +399,7 @@ async function resumeSessionFromCommand(
       };
 
       agentManager.resume(ctx, loader.signal, action.sessionId, prompt, update => {
-        updateSubagentWidget(ctx, update.agents.map(e => e.agent), uiSettings);
+        updateSubagentWidget(ctx, update.entries.map(e => e.entry), uiSettings);
       }).then(
         result => finish({ result }),
         error => finish({ error }),
