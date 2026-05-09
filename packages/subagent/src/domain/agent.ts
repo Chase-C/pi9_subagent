@@ -56,7 +56,7 @@ export class Agent {
   get modelOverride() { return this.options.model }
   get thinkingOverride() { return this.options.thinking }
   get cwd() { return this.options.cwd }
-  get skills(): readonly string[] { return this.options.skills ?? [] }
+  get skills(): readonly string[] | undefined { return this.options.skills }
 
   get status() { return this._status }
 
@@ -96,6 +96,7 @@ export class Agent {
         model: this.resolvedModel,
         thinking: this.resolvedThinking,
         tools: this.config.tools,
+        ...(this.config.skills !== undefined ? { skills: this.config.skills } : {}),
         resumable: this.resumable,
       },
       status: this._viewStatus(),

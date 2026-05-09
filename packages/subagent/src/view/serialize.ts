@@ -30,6 +30,7 @@ export function serializeAgentConfig(config: AgentConfig) {
     model: config.model,
     thinking: config.thinking,
     tools: config.tools,
+    skills: config.skills,
     resumable: config.resumable,
     sourcePath: config.sourcePath,
   };

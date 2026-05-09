@@ -54,7 +54,7 @@ export async function RunAgent(
   const cwd = ResolveTaskCwd(ctx.cwd, agent.cwd);
   const agentDir = dependencies.getAgentDir();
 
-  const requestedSkills = agent.skills;
+  const requestedSkills = agent.skills ?? agent.config.skills ?? [];
   let systemPrompt = agent.config.systemPrompt;
   if (requestedSkills.length > 0) {
     const { skills: available } = dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true });

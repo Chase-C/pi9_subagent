@@ -22,6 +22,7 @@ export interface AgentViewConfig {
   readonly model: string | undefined;
   readonly thinking: ModelThinkingLevel | undefined;
   readonly tools: readonly string[] | undefined;
+  readonly skills?: readonly string[];
   readonly resumable: boolean;
 }
 

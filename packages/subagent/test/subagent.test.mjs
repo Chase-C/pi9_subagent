@@ -96,15 +96,30 @@ test('Agent exposes the label from options and falls back to undefined when abse
   assert.equal(unlabeled.label, undefined);
 });
 
-test('Agent exposes the skills array from options and falls back to empty when absent', async () => {
+test('Agent exposes the per-task skills array as-is and preserves undefined when absent', async () => {
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
 
   const withSkills = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', skills: ['tdd'] }, () => {});
   assert.deepEqual(withSkills.skills, ['tdd']);
 
-  const without = new Agent('id2', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
-  assert.deepEqual(without.skills, []);
+  const explicitlyEmpty = new Agent('id2', 'group', config, { agent: 'helper', prompt: 'work', skills: [] }, () => {});
+  assert.deepEqual(explicitlyEmpty.skills, []);
+
+  const without = new Agent('id3', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
+  assert.equal(without.skills, undefined);
+});
+
+test('Agent.toView surfaces the default skills from the agent config', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', skills: ['foo', 'bar'] };
+
+  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
+  assert.deepEqual(agent.toView().config.skills, ['foo', 'bar']);
+
+  const noSkillsConfig = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+  const noSkills = new Agent('id2', 'group', noSkillsConfig, { agent: 'helper', prompt: 'work' }, () => {});
+  assert.equal(noSkills.toView().config.skills, undefined);
 });
 
 test('Agent uses a per-task resumable false override before the config default', async () => {
@@ -143,6 +158,15 @@ test('subagent tool description mentions the per-task skills field and the skill
   assert.match(registeredTool.description, /skills/);
   assert.match(registeredTool.description, /unknown skill/i);
   assert.match(registeredTool.description, /type="skills"/);
+});
+
+test('subagent tool description mentions agent-frontmatter default skills and replace semantics', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  assert.match(registeredTool.description, /default skills/i);
+  assert.match(registeredTool.description, /replace/i);
 });
 
 test('subagent tool description mentions the per-task resumable override is one-way', async () => {
@@ -382,6 +406,16 @@ test('registry loads markdown files from ctx cwd project dir and keys by frontma
   assert.equal(registry.agents.get('runtime-name')?.resumable, true);
 });
 
+test('BuildAgentConfig parses CSV skills frontmatter and leaves skills undefined when absent', async () => {
+  const { BuildAgentConfig } = await import(`../dist/domain/agent-config.js?t=${unique()}`);
+
+  const withSkills = BuildAgentConfig(`---\nname: helper\ndescription: d\nskills: foo, bar\n---\nbody`, 'project');
+  assert.deepEqual(withSkills.skills, ['foo', 'bar']);
+
+  const withoutSkills = BuildAgentConfig(`---\nname: helper\ndescription: d\n---\nbody`, 'project');
+  assert.equal(withoutSkills.skills, undefined);
+});
+
 test('agent transitions through start, finalize, and is idempotent on second finalize', async () => {
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const { completedRun, errorRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
@@ -483,6 +517,27 @@ test('tool list action returns agent definitions or resumable sessions by type',
   }, undefined, undefined, { cwd: root });
   assert.equal(sessions.isError, false);
   assert.deepEqual(sessions.details.sessions, []);
+});
+
+test('tool list action returns each agent default skills alongside tools', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-list-skills-default-'));
+  const projectAgents = join(root, '.pi', 'agents');
+  await mkdir(projectAgents, { recursive: true });
+  await writeFile(join(projectAgents, 'helper.md'), `---\nname: helper\ndescription: Helps\ntools: read\nskills: foo, bar\n---\nHelp prompt`);
+
+  let registeredTool;
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'list',
+  }, undefined, undefined, { cwd: root });
+
+  assert.equal(result.isError, false);
+  const helper = result.details.agents.find(agent => agent.name === 'helper');
+  assert.ok(helper);
+  assert.deepEqual(helper.skills, ['foo', 'bar']);
+  assert.deepEqual(helper.tools, ['read']);
 });
 
 test('tool list action with type=skills returns skills loaded from project .pi/skills', async () => {
@@ -2586,6 +2641,137 @@ test('run-agent reports an unknown skill as a failed run without starting a sess
   assert.equal(createCalled, false);
   assert.equal(agent.status.kind, 'done');
   assert.equal(agent.status.result.status, 'error');
+});
+
+test('run-agent uses agent-frontmatter default skills when the task does not provide skills', async () => {
+  let loaderOptions;
+  const session = {
+    messages: [{ role: 'assistant', content: [{ type: 'text', text: 'final' }] }],
+    subscribe() { return () => {}; },
+    async prompt() {},
+    abort() {},
+  };
+  const skill = {
+    name: 'foo',
+    description: 'Default foo skill',
+    filePath: '/skills/foo/SKILL.md',
+    baseDir: '/skills/foo',
+    sourceInfo: { path: '/skills/foo/SKILL.md', source: 'local', scope: 'project', origin: 'top-level' },
+    disableModelInvocation: false,
+  };
+  const dependencies = {
+    ResourceLoader: class { constructor(options) { loaderOptions = options; } async reload() {} },
+    getAgentDir: () => '/tmp/pi-agent',
+    createAgentSession: async () => ({ session }),
+    sessionManager: cwd => ({ cwd }),
+    settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
+    loadSkills: () => ({ skills: [skill], diagnostics: [] }),
+  };
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const agent = new Agent('id', 'group', {
+    name: 'helper', description: 'd', systemPrompt: 'BASE PROMPT', source: 'project', skills: ['foo']
+  }, { agent: 'helper', prompt: 'work' }, () => {});
+
+  const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
+
+  assert.equal(result.status, 'completed');
+  const prompt = loaderOptions.systemPromptOverride();
+  assert.match(prompt, /^BASE PROMPT/);
+  assert.match(prompt, /<name>foo<\/name>/);
+});
+
+test('run-agent per-task skills fully replace agent-frontmatter default skills', async () => {
+  let loaderOptions;
+  const session = {
+    messages: [{ role: 'assistant', content: [{ type: 'text', text: 'final' }] }],
+    subscribe() { return () => {}; },
+    async prompt() {},
+    abort() {},
+  };
+  const skills = [
+    { name: 'foo', description: 'foo skill', filePath: '/skills/foo/SKILL.md', baseDir: '/skills/foo',
+      sourceInfo: { path: '/skills/foo/SKILL.md', source: 'local', scope: 'project', origin: 'top-level' },
+      disableModelInvocation: false },
+    { name: 'bar', description: 'bar skill', filePath: '/skills/bar/SKILL.md', baseDir: '/skills/bar',
+      sourceInfo: { path: '/skills/bar/SKILL.md', source: 'local', scope: 'project', origin: 'top-level' },
+      disableModelInvocation: false },
+    { name: 'baz', description: 'baz skill', filePath: '/skills/baz/SKILL.md', baseDir: '/skills/baz',
+      sourceInfo: { path: '/skills/baz/SKILL.md', source: 'local', scope: 'project', origin: 'top-level' },
+      disableModelInvocation: false },
+  ];
+  const dependencies = {
+    ResourceLoader: class { constructor(options) { loaderOptions = options; } async reload() {} },
+    getAgentDir: () => '/tmp/pi-agent',
+    createAgentSession: async () => ({ session }),
+    sessionManager: cwd => ({ cwd }),
+    settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
+    loadSkills: () => ({ skills, diagnostics: [] }),
+  };
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const agent = new Agent('id', 'group', {
+    name: 'helper', description: 'd', systemPrompt: 'BASE', source: 'project', skills: ['foo', 'baz']
+  }, { agent: 'helper', prompt: 'work', skills: ['bar'] }, () => {});
+
+  await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
+
+  const prompt = loaderOptions.systemPromptOverride();
+  assert.match(prompt, /<name>bar<\/name>/);
+  assert.doesNotMatch(prompt, /<name>foo<\/name>/);
+  assert.doesNotMatch(prompt, /<name>baz<\/name>/);
+});
+
+test('run-agent explicit empty per-task skills opts out of agent-frontmatter defaults', async () => {
+  let loaderOptions;
+  let loadSkillsCalls = 0;
+  const session = {
+    messages: [{ role: 'assistant', content: [{ type: 'text', text: 'final' }] }],
+    subscribe() { return () => {}; },
+    async prompt() {},
+    abort() {},
+  };
+  const dependencies = {
+    ResourceLoader: class { constructor(options) { loaderOptions = options; } async reload() {} },
+    getAgentDir: () => '/tmp/pi-agent',
+    createAgentSession: async () => ({ session }),
+    sessionManager: cwd => ({ cwd }),
+    settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
+    loadSkills: () => { loadSkillsCalls += 1; return { skills: [], diagnostics: [] }; },
+  };
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const agent = new Agent('id', 'group', {
+    name: 'helper', description: 'd', systemPrompt: 'BASE PROMPT', source: 'project', skills: ['foo']
+  }, { agent: 'helper', prompt: 'work', skills: [] }, () => {});
+
+  await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
+
+  assert.equal(loaderOptions.systemPromptOverride(), 'BASE PROMPT');
+  assert.equal(loadSkillsCalls, 0, 'should not load skills when the task explicitly opted out');
+});
+
+test('run-agent reports an unknown skill from agent-frontmatter defaults as a failed run', async () => {
+  let createCalled = false;
+  const dependencies = {
+    ResourceLoader: class { async reload() {} },
+    getAgentDir: () => '/tmp/pi-agent',
+    createAgentSession: async () => { createCalled = true; return { session: { subscribe() { return () => {}; }, async prompt() {}, abort() {}, messages: [] } }; },
+    sessionManager: cwd => ({ cwd }),
+    settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
+    loadSkills: () => ({ skills: [], diagnostics: [] }),
+  };
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const agent = new Agent('id', 'group', {
+    name: 'helper', description: 'd', systemPrompt: 's', source: 'project', skills: ['ghost']
+  }, { agent: 'helper', prompt: 'work' }, () => {});
+
+  const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
+
+  assert.equal(result.status, 'error');
+  assert.match(result.error, /ghost/);
+  assert.equal(createCalled, false);
 });
 
 test('run-agent leaves the system prompt unchanged when no skills are requested', async () => {

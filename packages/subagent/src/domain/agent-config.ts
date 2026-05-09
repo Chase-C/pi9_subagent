@@ -9,6 +9,7 @@ export interface AgentConfig {
   model?: string;
   thinking?: ModelThinkingLevel;
   tools?: string[];
+  skills?: string[];
   resumable: boolean;
   systemPrompt: string;
   source: AgentSource;
@@ -29,6 +30,7 @@ export function BuildAgentConfig(
       model: parseString(frontmatter.model, "model"),
       thinking: parseString(frontmatter.thinking, "thinking") as ModelThinkingLevel | undefined,
       tools: parseCSVStrings(frontmatter.tools, "tools"),
+      skills: parseCSVStrings(frontmatter.skills, "skills"),
       resumable: parseBoolean(frontmatter.resumable, "resumable") ?? false,
       systemPrompt: body.trim(),
       source,
