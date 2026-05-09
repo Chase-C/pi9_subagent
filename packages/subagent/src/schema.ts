@@ -13,6 +13,9 @@ export const TaskSchema = Type.Object({
   model: Type.Optional(Type.String({ description: "Model for this subagent" })),
   thinking: Type.Optional(Type.String({ description: "Thinking level for this subagent" })),
   cwd: Type.Optional(Type.String({ description: "Working directory for this subagent" })),
+  skills: Type.Optional(Type.Array(Type.String(), {
+    description: "Skill names to inject into this subagent's system prompt. Unknown skill names are a hard error. Explicit skills bypass the disable-model-invocation flag."
+  })),
 });
 
 export const SubagentParams = Type.Object({
@@ -37,4 +40,5 @@ export interface AgentOptions {
   model?: string;
   thinking?: ModelThinkingLevel;
   cwd?: string;
+  skills?: string[];
 }

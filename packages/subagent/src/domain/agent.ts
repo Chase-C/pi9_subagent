@@ -56,6 +56,7 @@ export class Agent {
   get modelOverride() { return this.options.model }
   get thinkingOverride() { return this.options.thinking }
   get cwd() { return this.options.cwd }
+  get skills(): readonly string[] { return this.options.skills ?? [] }
 
   get status() { return this._status }
 

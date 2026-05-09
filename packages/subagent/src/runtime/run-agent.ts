@@ -5,11 +5,14 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   ExtensionContext,
+  formatSkillsForPrompt,
   getAgentDir,
+  loadSkills,
   SessionManager,
   SettingsManager,
   type AgentSession,
   type ModelRegistry,
+  type Skill,
 } from "@mariozechner/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
@@ -27,6 +30,7 @@ export interface RunAgentDependencies {
   createAgentSession: typeof createAgentSession;
   sessionManager: typeof SessionManager.inMemory;
   settingsManager: typeof SettingsManager.create;
+  loadSkills: typeof loadSkills;
 }
 
 const DefaultRunAgentDependencies: RunAgentDependencies = {
@@ -35,6 +39,7 @@ const DefaultRunAgentDependencies: RunAgentDependencies = {
   createAgentSession,
   sessionManager: SessionManager.inMemory,
   settingsManager: SettingsManager.create,
+  loadSkills,
 };
 
 export async function RunAgent(
@@ -49,15 +54,31 @@ export async function RunAgent(
   const cwd = ResolveTaskCwd(ctx.cwd, agent.cwd);
   const agentDir = dependencies.getAgentDir();
 
+  const requestedSkills = agent.skills;
+  let systemPrompt = agent.config.systemPrompt;
+  if (requestedSkills.length > 0) {
+    const { skills: available } = dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true });
+    const matched: Skill[] = [];
+    for (const name of requestedSkills) {
+      const found = available.find(skill => skill.name === name);
+      if (!found) {
+        return errorRun(agent, prompt, `Unknown skill: ${name}`);
+      }
+      matched.push({ ...found, disableModelInvocation: false });
+    }
+    const skillBlock = formatSkillsForPrompt(matched);
+    if (skillBlock) systemPrompt = `${systemPrompt}\n\n${skillBlock}`;
+  }
+
   const resourceLoader = new dependencies.ResourceLoader({
     cwd,
     agentDir,
     noExtensions: false,
-    noSkills: false,
+    noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    systemPromptOverride: () => agent.config.systemPrompt,
+    systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
   });
 

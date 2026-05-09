@@ -13,7 +13,7 @@ import {
   formatSubagentToolLines,
 } from "./view/format.js";
 import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
-import { listAgentDefinitions, serializeGroup } from "./view/serialize.js";
+import { listAgentDefinitions, listSkills, serializeGroup } from "./view/serialize.js";
 
 const MAX_TASKS = 8;
 
@@ -96,8 +96,8 @@ Use this tool when a task benefits from separation from the main conversation: c
 
 Inputs:
 - action: one of "list", "start", "resume", or "clear".
-- action="list": list configured agent definitions by default. Pass type="sessions" to list active and retained subagent sessions instead of definitions.
-- action="start": run one to eight independent delegations. Each task requires an agent name and prompt, and can include cwd to run from a different directory relative to the current project, an optional label shown in widgets and logs in place of the agent name, and an optional resumable override whose non-resumable decision is one-way at completion.
+- action="list": list configured agent definitions by default. Pass type="sessions" to list active and retained subagent sessions instead of definitions, or type="skills" to list skills available to inject.
+- action="start": run one to eight independent delegations. Each task requires an agent name and prompt, and can include cwd to run from a different directory relative to the current project, an optional label shown in widgets and logs in place of the agent name, an optional resumable override whose non-resumable decision is one-way at completion, and an optional skills array of skill names to inject into the subagent's system prompt (an unknown skill is a hard error; an explicitly named skill bypasses its disable-model-invocation flag).
 - action="resume": send a follow-up prompt to a completed resumable subagent session by sessionId.
 - action="clear": clear one known session by sessionId, aborting it if still running, or clear all non-running retained sessions when sessionId is omitted.
 
@@ -159,7 +159,10 @@ Execution notes:
         if (type === "sessions") {
           return toolResult({ sessions: agentManager.sessions });
         }
-        return errorResult('For action=list, type must be "agents" or "sessions".');
+        if (type === "skills") {
+          return toolResult({ skills: listSkills(ctx.cwd) });
+        }
+        return errorResult('For action=list, type must be "agents", "sessions", or "skills".');
       }
 
       if (params.action === "start") {
