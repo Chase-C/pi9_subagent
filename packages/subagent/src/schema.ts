@@ -33,24 +33,28 @@ export const SubagentParams = Type.Object({
 export type SubagentParams = Static<typeof SubagentParams>;
 
 export type TaskRequest =
-  | {
-      kind: "spawn";
-      agent: string;
-      prompt: string;
-      label?: string;
-      skills?: string[];
-      resumable?: boolean;
-      model?: string;
-      thinking?: ModelThinkingLevel;
-      cwd?: string;
-    }
-  | {
-      kind: "resume";
-      sessionId: string;
-      prompt: string;
-      label?: string;
-      resumable?: boolean;
-    };
+  | SpawnRequest
+  | ResumeRequest
+
+export type SpawnRequest = {
+  kind: "spawn";
+  agent: string;
+  prompt: string;
+  label?: string;
+  skills?: string[];
+  resumable?: boolean;
+  model?: string;
+  thinking?: ModelThinkingLevel;
+  cwd?: string;
+}
+
+export type ResumeRequest = {
+  kind: "resume";
+  sessionId: string;
+  prompt: string;
+  label?: string;
+  resumable?: boolean;
+}
 
 export type ParsedTask = TaskRequest | { error: string };
 

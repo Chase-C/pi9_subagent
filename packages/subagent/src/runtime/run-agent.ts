@@ -19,8 +19,8 @@ import { Agent } from "../domain/agent.js";
 import {
   completedRun,
   errorRun,
-  finalizeRun,
   interruptedRun,
+  skippedRun,
   type AgentRunResult,
 } from "../domain/agent-result.js";
 
@@ -49,7 +49,7 @@ export async function RunAgent(
   signal?: AbortSignal,
   dependencies: RunAgentDependencies = DefaultRunAgentDependencies,
 ): Promise<AgentRunResult> {
-  if (signal?.aborted) return finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped." });
+  if (signal?.aborted) return skippedRun(agent, prompt);
 
   const cwd = ResolveTaskCwd(ctx.cwd, agent.spawn.cwd);
   const agentDir = dependencies.getAgentDir();
@@ -83,7 +83,7 @@ export async function RunAgent(
   });
 
   await resourceLoader.reload();
-  if (signal?.aborted) return finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped." });
+  if (signal?.aborted) return skippedRun(agent, prompt);
 
   const { session } = await dependencies.createAgentSession({
     cwd,
@@ -99,7 +99,7 @@ export async function RunAgent(
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped." });
+    return skippedRun(agent, prompt);
   }
 
   agent.attach(session);

@@ -3,7 +3,7 @@ import { AgentSession } from "@mariozechner/pi-coding-agent";
 
 import { AgentConfig } from "./agent-config.js";
 import type { AgentInvocation, AgentSpawn } from "./agent-invocation.js";
-import type { AgentRunResult } from "./agent-result.js";
+import type { AgentRunResult, FinalizeRunArgs } from "./agent-result.js";
 import type { AgentToolUse, AgentUpdateKind, AgentView, AgentViewStatus } from "./agent-view.js";
 import { MESSAGE_SNIPPET_LENGTH, OUTPUT_SNIPPET_LENGTH, compact } from "../view/view-helpers.js";
 
@@ -68,6 +68,29 @@ export class Agent {
     if (!base) return false;
     if (this._status.kind !== "done") return true;
     return Boolean(this._status.ran);
+  }
+
+  buildResult(prompt: string, args: FinalizeRunArgs): AgentRunResult {
+    const resumable = this._hasResumableSession();
+    return {
+      agent: this.agentName,
+      ...(this._label !== undefined ? { label: this._label } : {}),
+      prompt,
+      model: this.spawn.model ?? this.config.model,
+      resumable,
+      resumed: Boolean(args.resumed),
+      status: args.status,
+      ...(resumable ? { sessionId: this.id } : {}),
+      ...(args.output !== undefined ? { output: args.output } : {}),
+      ...(args.error !== undefined ? { error: args.error } : {}),
+    };
+  }
+
+  private _hasResumableSession(): boolean {
+    if (!this.resumable) return false;
+    if (this._status.kind === "running") return true;
+    if (this._status.kind === "done") return Boolean(this._status.ran);
+    return false;
   }
 
   toView(inputIndex?: number): AgentView {

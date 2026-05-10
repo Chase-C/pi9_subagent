@@ -146,17 +146,12 @@ Execution notes:
 
       if (params.action === "list") {
         const type = params.type ?? "agents";
-        if (type === "agents") {
-          const agents = listAgentDefinitions(agentRegistry);
-          return toolResult({ agents });
+        switch (type) {
+          case "agents": return toolResult({ agents: listAgentDefinitions(agentRegistry) });
+          case "sessions": return toolResult({ sessions: agentManager.sessions });
+          case "skills": return toolResult({ skills: listSkills(ctx.cwd) });
+          default: return errorResult('For action=list, type must be "agents", "sessions", or "skills".');
         }
-        if (type === "sessions") {
-          return toolResult({ sessions: agentManager.sessions });
-        }
-        if (type === "skills") {
-          return toolResult({ skills: listSkills(ctx.cwd) });
-        }
-        return errorResult('For action=list, type must be "agents", "sessions", or "skills".');
       }
 
       if (params.action === "run") {
@@ -167,11 +162,12 @@ Execution notes:
 
         const parsed: TaskRequest[] = [];
         const errors: string[] = [];
-        (params.tasks ?? []).forEach((raw, index) => {
+        params.tasks?.forEach((raw, index) => {
           const result = parseTask(raw);
           if ("error" in result) errors.push(`task[${index}]: ${result.error}`);
           else parsed.push(result);
         });
+
         if (errors.length > 0) {
           return errorResult(errors.join("\n"), { errors });
         }
@@ -198,6 +194,7 @@ Execution notes:
         if (params.sessionId && result.cleared === 0) {
           return errorResult(`Unknown resumable subagent session: ${params.sessionId}`, result);
         }
+
         return toolResult(result);
       }
 
