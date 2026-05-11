@@ -112,7 +112,9 @@ export async function ResumeAgent(
   prompt: string,
   signal?: AbortSignal,
 ): Promise<AgentRunResult> {
-  const session = agent.status.kind === "done" ? agent.status.ran?.session : undefined;
+  const session = (agent.status.kind === "done" || agent.status.kind === "resumeFailed")
+    ? agent.status.ran?.session
+    : undefined;
   if (!session) {
     throw new Error(`Cannot resume an agent without a retained session.`);
   }

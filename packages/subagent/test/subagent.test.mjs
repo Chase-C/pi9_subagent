@@ -1979,8 +1979,9 @@ test('manager keeps a retained completed session retryable after resume setup fa
   assert.equal(manager.sessions.length, 1);
   assert.equal(manager.sessions[0].id, first.sessionId);
   assert.equal(manager.sessions[0].status.kind, 'done');
-  assert.equal(manager.sessions[0].status.outcome, 'completed');
-  assert.equal(manager.sessions[0].status.snippet, 'old:initial prompt');
+  assert.equal(manager.sessions[0].status.outcome, 'error');
+  assert.equal(manager.sessions[0].status.snippet, 'resume setup exploded');
+  assert.equal(manager.sessions[0].config.resumable, true);
 
   const [retried] = await manager.run(
     { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
@@ -1991,6 +1992,55 @@ test('manager keeps a retained completed session retryable after resume setup fa
   assert.equal(retried.output, 'new:successful follow-up');
   assert.equal(retried.prompt, 'successful follow-up');
   assert.equal(retried.sessionId, first.sessionId);
+});
+
+test('manager keeps a session retryable after repeated pre-attach resume failures', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => {
+    agent.attach(session);
+    return completedRun(agent, prompt, `old:${prompt}`);
+  };
+  let resumeAttempts = 0;
+  const resumeRunner = async (_ctx, agent, prompt) => {
+    resumeAttempts += 1;
+    if (resumeAttempts <= 2) throw new Error(`resume failed #${resumeAttempts}`);
+    agent.attach(agent.status.ran.session);
+    return completedRun(agent, prompt, `new:${prompt}`);
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner, resumeRunner);
+  const [first] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'initial prompt' },
+  ]);
+
+  const [firstFail] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'resume', sessionId: first.sessionId, prompt: 'try 1' },
+  ]);
+  assert.equal(firstFail.status, 'error');
+  assert.equal(firstFail.error, 'resume failed #1');
+  assert.equal(manager.sessions[0].status.outcome, 'error');
+  assert.equal(manager.sessions[0].status.snippet, 'resume failed #1');
+  assert.equal(manager.sessions[0].config.resumable, true);
+
+  const [secondFail] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'resume', sessionId: first.sessionId, prompt: 'try 2' },
+  ]);
+  assert.equal(secondFail.status, 'error');
+  assert.equal(secondFail.error, 'resume failed #2');
+  assert.equal(manager.sessions[0].status.snippet, 'resume failed #2');
+  assert.equal(manager.sessions[0].config.resumable, true);
+
+  const [retried] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'resume', sessionId: first.sessionId, prompt: 'try 3' },
+  ]);
+  assert.equal(retried.status, 'completed');
+  assert.equal(retried.output, 'new:try 3');
+  assert.equal(manager.sessions[0].status.outcome, 'completed');
+  assert.equal(manager.sessions[0].status.snippet, 'new:try 3');
 });
 
 test('manager reports queued cancelled resume as skipped follow-up and keeps retained session retryable', async () => {
@@ -2052,8 +2102,9 @@ test('manager reports queued cancelled resume as skipped follow-up and keeps ret
   assert.equal(manager.sessions.length, 1);
   assert.equal(manager.sessions[0].id, first.sessionId);
   assert.equal(manager.sessions[0].status.kind, 'done');
-  assert.equal(manager.sessions[0].status.outcome, 'completed');
-  assert.equal(manager.sessions[0].status.snippet, 'output:initial prompt');
+  assert.equal(manager.sessions[0].status.outcome, 'skipped');
+  assert.equal(manager.sessions[0].status.snippet, 'Agent skipped.');
+  assert.equal(manager.sessions[0].config.resumable, true);
 
   const [retried] = await manager.run(
     { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },

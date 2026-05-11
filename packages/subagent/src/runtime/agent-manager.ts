@@ -10,6 +10,7 @@ import {
   interruptedRun,
   skippedRun,
   type AgentRunResult,
+  type FinalizeRunArgs,
 } from "../domain/agent-result.js";
 import type { AgentUpdateKind, AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
@@ -17,7 +18,6 @@ import { preflightResumeFailure, preflightSpawnFailure } from "../domain/preflig
 import type { ResumeRequest, TaskRequest } from "../schema.js";
 import { activeOrRetainedAgents } from "../view/view-helpers.js";
 import { ResumeAgent, RunAgent } from "./run-agent.js";
-import { ResumeReservation } from "./resume-reservation.js";
 import { TaskQueue } from "./task-queue.js";
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
@@ -137,9 +137,12 @@ export class AgentManager {
       // task.kind === "resume"
       else {
         const target = this._agents.find(a => a.id === task.sessionId && a.resumable);
-        const isInvalidStatus = target && (target.status.kind !== "done" || target.status.result.status !== "completed");
+        const isValidStatus = target && (
+          (target.status.kind === "done" && target.status.result.status === "completed") ||
+          target.status.kind === "resumeFailed"
+        );
         const isReserved = target && this._reservedResumeSessionIds.has(target.id);
-        if (!target || isInvalidStatus || isReserved) {
+        if (!target || !isValidStatus || isReserved) {
           let error: string;
           if (!target) {
             error = `Unknown resumable subagent session: ${task.sessionId}`;
@@ -156,15 +159,10 @@ export class AgentManager {
           return Promise.resolve(result);
         }
 
-        const entry: BatchEntry = { agent: target, inputIndex, resumed: true };
-        entries.push(entry);
+        entries.push({ agent: target, inputIndex, resumed: true });
         this._agentBatch.set(target.id, groupId);
         touched.add(target);
-        const reservation = this._reserveResume(target, task, inputIndex, view => {
-          entry.view = view;
-          this._emitBatchUpdate(groupId);
-        });
-        return this._runResume(ctx, signal, reservation);
+        return this._runResume(ctx, signal, target, task);
       }
     });
 
@@ -230,45 +228,39 @@ export class AgentManager {
   private async _runResume(
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
-    reservation: ResumeReservation,
+    target: Agent,
+    task: ResumeRequest,
   ): Promise<AgentRunResult> {
-    const { target, prompt } = reservation;
+    this._reservedResumeSessionIds.add(target.id);
+    const { prompt } = task;
+    const { invocation } = InvocationFromTask(task);
+    const undo = target.apply(invocation);
+    const originalStatus = target.status;
+
+    const closePreAttach = (args: FinalizeRunArgs): AgentRunResult => {
+      undo();
+      const result = target.buildResult(prompt, { ...args, resumed: true });
+      target.markResumeFailed(result);
+      return result;
+    };
+
     try {
       return await this._queue.enqueue(async () => {
-        if (signal?.aborted) return reservation.skipPreAttach();
+        if (signal?.aborted) return closePreAttach({ status: "skipped", error: "Agent skipped." });
         try {
           const result = await this._resumeAgent(ctx, target, prompt, signal);
           return result.resumed ? result : { ...result, resumed: true };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (reservation.isPreAttach()) return reservation.failPreAttach(message);
+          if (target.status === originalStatus) return closePreAttach({ status: "error", error: message });
           if (target.status.kind === "done") return target.status.result;
           if (signal?.aborted) return interruptedRun(target, prompt, message, true);
           return errorRun(target, prompt, message, true);
         }
       });
     } finally {
-      reservation.release();
+      this._reservedResumeSessionIds.delete(target.id);
     }
-  }
-
-  private _reserveResume(
-    target: Agent,
-    task: ResumeRequest,
-    inputIndex: number,
-    onSyntheticView: (view: AgentView) => void,
-  ): ResumeReservation {
-    this._reservedResumeSessionIds.add(target.id);
-    const { invocation } = InvocationFromTask(task);
-    const undo = target.apply(invocation);
-    return new ResumeReservation(
-      target,
-      task.prompt,
-      inputIndex,
-      undo,
-      onSyntheticView,
-      () => this._reservedResumeSessionIds.delete(target.id),
-    );
   }
 
   private _flushPendingMessageUpdate(batch: SpawnBatch) {

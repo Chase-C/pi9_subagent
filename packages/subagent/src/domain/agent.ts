@@ -15,7 +15,8 @@ const DefaultUsage: Usage = {
 export type AgentStatus =
   | { kind: "queued" }
   | { kind: "running"; session: AgentSession; startedAt: number }
-  | { kind: "done"; result: AgentRunResult; ran?: { session: AgentSession; startedAt: number }; completedAt: number };
+  | { kind: "done"; result: AgentRunResult; ran?: { session: AgentSession; startedAt: number }; completedAt: number }
+  | { kind: "resumeFailed"; result: AgentRunResult; completedAt: number; ran: { session: AgentSession; startedAt: number } };
 
 export class Agent {
 
@@ -70,8 +71,8 @@ export class Agent {
   get resumable(): boolean {
     const base = this._resumableOverride ?? this.config.resumable;
     if (!base) return false;
-    if (this._status.kind !== "done") return true;
-    return Boolean(this._status.ran);
+    if (this._status.kind === "done") return Boolean(this._status.ran);
+    return true;
   }
 
   buildResult(prompt: string, args: FinalizeRunArgs): AgentRunResult {
@@ -94,6 +95,7 @@ export class Agent {
     if (!this.resumable) return false;
     if (this._status.kind === "running") return true;
     if (this._status.kind === "done") return Boolean(this._status.ran);
+    if (this._status.kind === "resumeFailed") return true;
     return false;
   }
 
@@ -129,12 +131,24 @@ export class Agent {
   attach(session: AgentSession) {
     const canAttach =
       this._status.kind === "queued" ||
+      this._status.kind === "resumeFailed" ||
       (this._status.kind === "done" && this._status.result.status === "completed");
     if (!canAttach) {
       throw new Error(`Cannot attach a session to an agent that is ${this._describe()}.`);
     }
     this._subscribe(session);
     this._status = { kind: "running", session, startedAt: Date.now() };
+    this.onUpdate(this, "status");
+  }
+
+  markResumeFailed(result: AgentRunResult) {
+    const ran = this._status.kind === "done" ? this._status.ran
+      : this._status.kind === "resumeFailed" ? this._status.ran
+      : undefined;
+    if (!ran) {
+      throw new Error(`Cannot mark resume failed on an agent that is ${this._describe()}.`);
+    }
+    this._status = { kind: "resumeFailed", result, completedAt: Date.now(), ran };
     this.onUpdate(this, "status");
   }
 
@@ -155,17 +169,19 @@ export class Agent {
 
     const result = this._status.result;
     const rawSnippet = result.status === "completed" ? result.output : result.error ?? result.status;
+    const startedAt = this._status.kind === "done" ? this._status.ran?.startedAt : undefined;
     return {
       kind: "done",
       outcome: result.status,
       completedAt: this._status.completedAt,
-      ...(this._status.ran ? { startedAt: this._status.ran.startedAt } : {}),
+      ...(startedAt !== undefined ? { startedAt } : {}),
       ...(rawSnippet ? { snippet: compact(rawSnippet, OUTPUT_SNIPPET_LENGTH) } : {}),
     };
   }
 
   private _describe(): string {
     if (this._status.kind === "done") return `done (${this._status.result.status})`;
+    if (this._status.kind === "resumeFailed") return `resume-failed (${this._status.result.status})`;
     return this._status.kind;
   }
 
