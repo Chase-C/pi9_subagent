@@ -19,6 +19,7 @@ import type { ResumeRequest, TaskRequest } from "../schema.js";
 import { activeOrRetainedAgents } from "../view/view-helpers.js";
 import { ResumeAgent, RunAgent } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
+import { timingMark, timingStart, timingSync } from "./timing.js";
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
 const ANIMATION_UPDATE_INTERVAL_MS = 120;
@@ -105,6 +106,7 @@ export class AgentManager {
   ): Promise<AgentRunResult[]> {
     const groupId = randomUUID();
     const groupCreatedAt = Date.now();
+    timingMark("manager.run.start", { groupId, taskCount: tasks.length });
 
     const entries: BatchEntry[] = [];
     const batch: SpawnBatch = { groupId, entries, listener: onUpdate };
@@ -125,12 +127,14 @@ export class AgentManager {
             groupId, inputIndex, createdAt: groupCreatedAt, task, error,
           });
           entries.push({ view, inputIndex });
+          timingMark("manager.task.preflightFailure", { groupId, inputIndex, agent: task.agent });
           return Promise.resolve(result);
         }
 
         const { spawn, invocation } = InvocationFromTask(task);
         const agent = new Agent(randomUUID(), config, spawn, invocation, this._agentUpdate.bind(this));
         entries.push({ agent, inputIndex });
+        timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id });
         this._agents.push(agent);
         this._agentBatch.set(agent.id, groupId);
         touched.add(agent);
@@ -158,17 +162,21 @@ export class AgentManager {
             groupId, inputIndex, createdAt: groupCreatedAt, task, target, error,
           });
           entries.push({ view, inputIndex, resumed: true });
+          timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId });
           return Promise.resolve(result);
         }
 
         entries.push({ agent: target, inputIndex, resumed: true });
+        timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id });
         this._agentBatch.set(target.id, groupId);
         touched.add(target);
         return this._runResume(ctx, signal, target, task);
       }
     });
 
+    timingMark("manager.initialEmit.before", { groupId, entries: entries.length });
     this._emitBatchUpdate(groupId);
+    timingMark("manager.initialEmit.after", { groupId });
     try {
       const results = await Promise.all(resultPromises);
       this._agents = this._agents.filter(agent => {
@@ -178,6 +186,7 @@ export class AgentManager {
         this._agentBatch.delete(agent.id);
         return false;
       });
+      timingMark("manager.run.results", { groupId, resultCount: results.length });
       return results;
     } finally {
       this._flushPendingMessageUpdate(batch);
@@ -213,20 +222,34 @@ export class AgentManager {
     prompt: string,
   ): Promise<AgentRunResult> {
     return this._queue.enqueue(async () => {
-      if (signal?.aborted) return skippedRun(agent, prompt);
+      const end = timingStart("manager.spawnTask", { agent: agent.agentName, sessionId: agent.id });
+      if (signal?.aborted) {
+        const result = skippedRun(agent, prompt);
+        end({ status: result.status });
+        return result;
+      }
       try {
-        return await this._runAgent(ctx, agent, prompt, signal);
+        const result = await this._runAgent(ctx, agent, prompt, signal);
+        end({ status: result.status });
+        return result;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (agent.status.kind === "done") return agent.status.result;
+        if (agent.status.kind === "done") {
+          end({ status: agent.status.result.status });
+          return agent.status.result;
+        }
         if (signal?.aborted) {
-          return agent.status.kind === "queued"
+          const result = agent.status.kind === "queued"
             ? skippedRun(agent, prompt)
             : interruptedRun(agent, prompt, message);
+          end({ status: result.status, error: message });
+          return result;
         }
-        return errorRun(agent, prompt, message);
+        const result = errorRun(agent, prompt, message);
+        end({ status: result.status, error: message });
+        return result;
       }
-    });
+    }, { agent: agent.agentName, sessionId: agent.id, kind: "spawn" });
   }
 
   private async _runResume(
@@ -250,18 +273,38 @@ export class AgentManager {
 
     try {
       return await this._queue.enqueue(async () => {
-        if (signal?.aborted) return closePreAttach({ status: "skipped", error: "Agent skipped." });
+        const end = timingStart("manager.resumeTask", { agent: target.agentName, sessionId: target.id });
+        if (signal?.aborted) {
+          const result = closePreAttach({ status: "skipped", error: "Agent skipped." });
+          end({ status: result.status });
+          return result;
+        }
         try {
           const result = await this._resumeAgent(ctx, target, prompt, signal);
-          return result.resumed ? result : { ...result, resumed: true };
+          const resumed = result.resumed ? result : { ...result, resumed: true };
+          end({ status: resumed.status });
+          return resumed;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (target.status === originalStatus) return closePreAttach({ status: "error", error: message });
-          if (target.status.kind === "done") return target.status.result;
-          if (signal?.aborted) return interruptedRun(target, prompt, message, true);
-          return errorRun(target, prompt, message, true);
+          if (target.status === originalStatus) {
+            const result = closePreAttach({ status: "error", error: message });
+            end({ status: result.status, error: message });
+            return result;
+          }
+          if (target.status.kind === "done") {
+            end({ status: target.status.result.status });
+            return target.status.result;
+          }
+          if (signal?.aborted) {
+            const result = interruptedRun(target, prompt, message, true);
+            end({ status: result.status, error: message });
+            return result;
+          }
+          const result = errorRun(target, prompt, message, true);
+          end({ status: result.status, error: message });
+          return result;
         }
-      });
+      }, { agent: target.agentName, sessionId: target.id, kind: "resume" });
     } finally {
       this._reservedResumeSessionIds.delete(target.id);
     }
@@ -283,6 +326,7 @@ export class AgentManager {
     const batch = this._activeBatches.get(groupId);
     if (!batch?.listener) return;
 
+    const end = timingStart("manager.emitBatchUpdate", { groupId, entries: batch.entries.length });
     const sessions = batch.entries
       .slice()
       .sort((a, b) => a.inputIndex - b.inputIndex)
@@ -291,8 +335,9 @@ export class AgentManager {
         return { ...baseView, resumed: Boolean(resumed) };
       });
     const active = sessions.some(s => s.status.kind === "queued" || s.status.kind === "running");
-    batch.listener({ sessions, active });
+    timingSync("manager.listener", { groupId, sessionCount: sessions.length, active }, () => batch.listener?.({ sessions, active }));
     this._scheduleAnimationUpdate(batch, active);
+    end({ active, sessionCount: sessions.length });
   }
 
   private _scheduleAnimationUpdate(batch: SpawnBatch, active: boolean) {

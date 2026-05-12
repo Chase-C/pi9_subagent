@@ -4,6 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { AgentRegistry } from "./domain/agent-registry.js";
 import type { SubagentBatchUpdate } from "./domain/agent-view.js";
 import { AgentManager } from "./runtime/agent-manager.js";
+import { timingAsync, timingMark, timingStart, timingSync } from "./runtime/timing.js";
 import { parseTask, SubagentParams, type TaskRequest } from "./schema.js";
 import { SubagentUiSettingsStore } from "./ui/settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./ui/widget.js";
@@ -140,7 +141,8 @@ Execution notes:
     },
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      await agentRegistry.reload(ctx.cwd);
+      timingMark("tool.execute.start", { action: params.action, taskCount: Array.isArray(params.tasks) ? params.tasks.length : undefined, cwd: ctx.cwd });
+      await timingAsync("tool.agentRegistry.reload", { cwd: ctx.cwd }, () => agentRegistry.reload(ctx.cwd));
 
       if (!params.action) {
         return errorResult(`Provide an action: "list", "run", or "clear".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
@@ -164,25 +166,30 @@ Execution notes:
 
         const parsed: TaskRequest[] = [];
         const errors: string[] = [];
-        params.tasks?.forEach((raw, index) => {
-          const result = parseTask(raw);
-          if ("error" in result) errors.push(`task[${index}]: ${result.error}`);
-          else parsed.push(result);
+        timingSync("tool.parseTasks", { taskCount: params.tasks?.length ?? 0 }, () => {
+          params.tasks?.forEach((raw, index) => {
+            const result = parseTask(raw);
+            if ("error" in result) errors.push(`task[${index}]: ${result.error}`);
+            else parsed.push(result);
+          });
         });
 
         if (errors.length > 0) {
           return errorResult(errors.join("\n"), { errors });
         }
 
-        const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
+        const uiSettings = await timingAsync("tool.loadUiSettings", { hasUI: ctx.hasUI }, () => loadSubagentUiSettings(ctx, settingsStore));
         let lastGroup: ReturnType<typeof serializeGroup> | undefined;
+        const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length });
         const results = await agentManager.run(ctx, signal, parsed, update => {
-          const partial = partialToolResult(update);
+          timingMark("tool.update.received", { sessionCount: update.sessions.length, active: update.active });
+          const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length }, () => partialToolResult(update));
           lastGroup = partial.details.group;
-          onUpdate?.(partial);
-          updateSubagentWidget(ctx, update.sessions, uiSettings);
+          timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
+          timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, uiSettings));
         });
-        updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
+        runEnd({ ok: true, resultCount: results.length });
+        timingSync("tool.finalWidget", { sessionCount: agentManager.sessions.length }, () => updateSubagentWidget(ctx, agentManager.sessions, uiSettings));
         const isError = results.some(result => result.status !== "completed");
         const details = lastGroup ? runDetails(lastGroup, { results }) : { results };
         return toolResult(details, isError);

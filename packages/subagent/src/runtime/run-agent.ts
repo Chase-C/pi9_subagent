@@ -16,6 +16,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
+import { timingAsync, timingMark, timingSync } from "./timing.js";
 import {
   completedRun,
   errorRun,
@@ -51,26 +52,30 @@ export async function RunAgent(
 ): Promise<AgentRunResult> {
   if (signal?.aborted) return skippedRun(agent, prompt);
 
-  const cwd = ResolveTaskCwd(ctx.cwd, agent.spawn.cwd);
-  const agentDir = dependencies.getAgentDir();
+  const runData = { agent: agent.agentName, sessionId: agent.id };
+  timingMark("runAgent.start", { ...runData, cwd: ctx.cwd, taskCwd: agent.spawn.cwd });
+  const cwd = timingSync("runAgent.resolveCwd", runData, () => ResolveTaskCwd(ctx.cwd, agent.spawn.cwd));
+  const agentDir = timingSync("runAgent.getAgentDir", runData, () => dependencies.getAgentDir());
 
   const requestedSkills = agent.spawn.skills ?? agent.config.skills ?? [];
   let systemPrompt = agent.config.systemPrompt;
   if (requestedSkills.length > 0) {
-    const { skills: available } = dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true });
+    const { skills: available } = timingSync("runAgent.loadSkills", { ...runData, cwd, requestedSkillCount: requestedSkills.length }, () => dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true }));
     const matched: Skill[] = [];
-    for (const name of requestedSkills) {
-      const found = available.find(skill => skill.name === name);
-      if (!found) {
-        return errorRun(agent, prompt, `Unknown skill: ${name}`);
+    const missingSkill = timingSync("runAgent.matchSkills", { ...runData, availableSkillCount: available.length, requestedSkillCount: requestedSkills.length }, () => {
+      for (const name of requestedSkills) {
+        const found = available.find(skill => skill.name === name);
+        if (!found) return name;
+        matched.push({ ...found, disableModelInvocation: false });
       }
-      matched.push({ ...found, disableModelInvocation: false });
-    }
-    const skillBlock = formatSkillsForPrompt(matched);
+      return undefined;
+    });
+    if (missingSkill) return errorRun(agent, prompt, `Unknown skill: ${missingSkill}`);
+    const skillBlock = timingSync("runAgent.formatSkills", { ...runData, matchedSkillCount: matched.length }, () => formatSkillsForPrompt(matched));
     if (skillBlock) systemPrompt = `${systemPrompt}\n\n${skillBlock}`;
   }
 
-  const resourceLoader = new dependencies.ResourceLoader({
+  const resourceLoader = timingSync("runAgent.newResourceLoader", { ...runData, cwd }, () => new dependencies.ResourceLoader({
     cwd,
     agentDir,
     noExtensions: false,
@@ -80,29 +85,32 @@ export async function RunAgent(
     noContextFiles: true,
     systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
-  });
+  }));
 
-  await resourceLoader.reload();
+  await timingAsync("runAgent.resourceLoader.reload", { ...runData, cwd }, () => resourceLoader.reload());
   if (signal?.aborted) return skippedRun(agent, prompt);
 
-  const { session } = await dependencies.createAgentSession({
+  const selectedModel = timingSync("runAgent.selectModel", { ...runData, requestedModel: agent.spawn.model ?? agent.config.model }, () => SelectModel(agent.spawn.model ?? agent.config.model, ctx.model, ctx.modelRegistry));
+  const sessionManager = timingSync("runAgent.sessionManager", { ...runData, cwd }, () => dependencies.sessionManager(cwd));
+  const settingsManager = timingSync("runAgent.settingsManager", { ...runData, cwd }, () => dependencies.settingsManager(cwd, agentDir));
+  const { session } = await timingAsync("runAgent.createAgentSession", { ...runData, cwd, model: selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : undefined }, () => dependencies.createAgentSession({
     cwd,
     agentDir,
     resourceLoader,
-    model: SelectModel(agent.spawn.model ?? agent.config.model, ctx.model, ctx.modelRegistry),
+    model: selectedModel,
     thinkingLevel: agent.spawn.thinking ?? agent.config.thinking,
     modelRegistry: ctx.modelRegistry,
     tools: agent.config.tools,
-    sessionManager: dependencies.sessionManager(cwd),
-    settingsManager: dependencies.settingsManager(cwd, agentDir),
-  });
+    sessionManager,
+    settingsManager,
+  }));
 
   if (signal?.aborted) {
     await AbortSession(session);
     return skippedRun(agent, prompt);
   }
 
-  agent.attach(session);
+  timingSync("runAgent.attach", runData, () => agent.attach(session));
   return PromptAgent(session, agent, prompt, signal);
 }
 
@@ -119,7 +127,7 @@ export async function ResumeAgent(
     throw new Error(`Cannot resume an agent without a retained session.`);
   }
 
-  agent.attach(session);
+  timingSync("resumeAgent.attach", { agent: agent.agentName, sessionId: agent.id }, () => agent.attach(session));
   return PromptAgent(session, agent, prompt, signal);
 }
 
@@ -139,7 +147,7 @@ async function PromptAgent(
   signal?.addEventListener("abort", onAbort, { once: true });
 
   try {
-    await session.prompt(prompt);
+    await timingAsync("runAgent.session.prompt", { agent: agent.agentName, sessionId: agent.id, promptLength: prompt.length }, () => session.prompt(prompt));
     const finalMessage = GetFinalAssistantMessage(session);
     if (finalMessage.stopReason === "aborted") {
       return interruptedRun(agent, prompt, finalMessage.errorMessage || "Agent interrupted.");
