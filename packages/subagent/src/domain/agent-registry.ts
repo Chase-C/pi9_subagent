@@ -2,7 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { AgentConfig, AgentSource, BuildAgentConfig } from "./agent-config.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentAgentDiscoverySettings } from "../ui/settings.js";

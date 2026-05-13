@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -13,7 +13,7 @@ import {
   type AgentSession,
   type ModelRegistry,
   type Skill,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
 import { timingAsync, timingMark, timingSync } from "./timing.js";

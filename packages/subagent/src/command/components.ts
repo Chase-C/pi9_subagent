@@ -1,5 +1,5 @@
-import { getSettingsListTheme } from "@mariozechner/pi-coding-agent";
-import { SettingsList, type Component, type SettingItem, type TUI } from "@mariozechner/pi-tui";
+import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { SettingsList, type Component, type SettingItem, type TUI } from "@earendil-works/pi-tui";
 
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentView } from "../domain/agent-view.js";

@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";

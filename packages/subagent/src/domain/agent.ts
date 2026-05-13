@@ -1,5 +1,5 @@
-import { Usage } from "@mariozechner/pi-ai";
-import { AgentSession } from "@mariozechner/pi-coding-agent";
+import { Usage } from "@earendil-works/pi-ai";
+import { AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { AgentConfig } from "./agent-config.js";
 import type { AgentInvocation, AgentSpawn } from "./agent-invocation.js";

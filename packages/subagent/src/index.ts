@@ -1,5 +1,5 @@
-import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 
 import { AgentRegistry } from "./domain/agent-registry.js";
 import type { SubagentBatchUpdate } from "./domain/agent-view.js";

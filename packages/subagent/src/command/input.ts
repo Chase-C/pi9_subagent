@@ -1,4 +1,4 @@
-import { matchesKey, truncateToWidth, visibleWidth, type KeybindingsManager } from "@mariozechner/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, type KeybindingsManager } from "@earendil-works/pi-tui";
 
 import type { AgentView } from "../domain/agent-view.js";
 import { canClearSubagentSession, canResumeSubagentSession } from "../view/view-helpers.js";

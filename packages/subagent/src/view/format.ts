@@ -1,5 +1,5 @@
-import type { Usage } from "@mariozechner/pi-ai";
-import { wrapTextWithAnsi, type Component } from "@mariozechner/pi-tui";
+import type { Usage } from "@earendil-works/pi-ai";
+import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentView, AgentViewStatus } from "../domain/agent-view.js";

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
 import { InvocationFromTask } from "../domain/agent-invocation.js";

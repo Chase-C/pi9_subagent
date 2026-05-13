@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export type WidgetPlacement = "belowEditor" | "aboveEditor" | "off";
 export type ProjectAgentsStrategy = "nearest" | "off";

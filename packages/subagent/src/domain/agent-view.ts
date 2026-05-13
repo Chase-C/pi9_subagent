@@ -1,4 +1,4 @@
-import type { ModelThinkingLevel, Usage } from "@mariozechner/pi-ai";
+import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 
 import type { AgentSource } from "./agent-config.js";
 

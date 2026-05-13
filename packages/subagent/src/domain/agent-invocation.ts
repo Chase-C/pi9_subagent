@@ -1,4 +1,4 @@
-import type { ModelThinkingLevel } from "@mariozechner/pi-ai";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 import { ResumeRequest, SpawnRequest, TaskRequest } from "../schema.js";
 

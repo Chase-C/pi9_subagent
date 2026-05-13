@@ -1,5 +1,5 @@
-import { ModelThinkingLevel } from "@mariozechner/pi-ai";
-import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentSource = "user" | "project";
 

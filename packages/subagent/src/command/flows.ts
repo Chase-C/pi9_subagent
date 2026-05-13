@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import type { TUI } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
 
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { createSubagentResumeMessage } from "../view/resume-message.js";
