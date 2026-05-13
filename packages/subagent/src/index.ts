@@ -168,7 +168,7 @@ Execution notes:
       }));
 
       if (!params.action) {
-        return errorResult(`Provide an action: "list", "run", or "remove".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
+        return errorResult(`Provide an action: "agents", "list", "run", or "remove".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
       }
 
       if (params.action === "agents") {
@@ -253,7 +253,7 @@ Execution notes:
         return toolResult({ view: "remove-summary", summary });
       }
 
-      return errorResult(`Unknown action: ${String(params.action)}. Use "list", "run", or "remove".`);
+      return errorResult(`Unknown action: ${String(params.action)}. Use "agents", "list", "run", or "remove".`);
     },
   }));
 }
