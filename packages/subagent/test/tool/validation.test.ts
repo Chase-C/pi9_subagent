@@ -1,0 +1,84 @@
+import { test } from "vitest";
+import assert from "node:assert/strict";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import subagentExtension from "../../src/index.js";
+
+function registerExtension(dependencies: any = {}) {
+  let registeredTool: any;
+  subagentExtension({ registerTool: (tool: any) => { registeredTool = tool; } } as any, dependencies);
+  return registeredTool;
+}
+
+test("subagent extension still registers the tool when custom resume renderer registration fails", () => {
+  let registeredTool: any;
+  assert.doesNotThrow(() => subagentExtension({
+    registerCommand() {},
+    registerMessageRenderer() { throw new Error("renderer unsupported"); },
+    registerTool: (tool: any) => { registeredTool = tool; },
+  } as any));
+  assert.equal(registeredTool.name, "subagent");
+});
+
+test("tool execution requires action", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-action-"));
+  const tool = registerExtension();
+
+  const result = await tool.execute("tool-call", { tasks: [] }, undefined, undefined, { cwd: root });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Provide an action/);
+});
+
+test("tool execution validates task count and reports available agents", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-validation-"));
+  const projectAgents = join(root, ".pi", "agents");
+  await mkdir(projectAgents, { recursive: true });
+  await writeFile(join(projectAgents, "helper.md"), `---\nname: helper\ndescription: Helps\n---\nHelp prompt`);
+
+  const tool = registerExtension();
+
+  const result = await tool.execute("tool-call", {
+    action: "run",
+    tasks: Array.from({ length: 9 }, (_, i) => ({ agent: "helper", prompt: `task ${i}` })),
+  }, undefined, undefined, { cwd: root });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Too many tasks \(9\)\. Max is 8/);
+  assert.match(result.content[0].text, /helper \(project\)/);
+});
+
+test("subagent action=resume is no longer recognized", async () => {
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: { sessions: [], listSessions() { return this.sessions; } },
+  });
+
+  const result = await tool.execute("tool-call", {
+    action: "resume",
+    sessionId: "whatever",
+    prompt: "follow up",
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Unknown action/);
+  assert.match(result.content[0].text, /run/);
+});
+
+test("subagent action=clear is rejected with the remove migration error", async () => {
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: { sessions: [], listSessions() { return this.sessions; } },
+  });
+
+  const result = await tool.execute("tool-call", {
+    action: "clear",
+    sessionId: "whatever",
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /'clear' action has been replaced by 'remove'/);
+  assert.match(result.content[0].text, /scope: 'background' \| 'retained' \| 'non-running'/);
+});

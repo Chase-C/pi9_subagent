@@ -5,15 +5,29 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist", "src", "agents", "README.md"],
-  "keywords": ["pi-package", "pi", "pi9", "subagent"],
+  "files": [
+    "dist",
+    "src",
+    "agents",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi9",
+    "subagent"
+  ],
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean",
-    "test": "npm run build && node --test --test-timeout=5000 test/*.mjs"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:smoke": "npm run build && vitest run --config vitest.smoke.config.ts"
   },
   "pi": {
-    "extensions": ["./src/index.ts"],
+    "extensions": [
+      "./src/index.ts"
+    ],
     "skills": [],
     "prompts": []
   },
@@ -27,6 +41,7 @@
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
-    "typebox": "*"
+    "typebox": "*",
+    "vitest": "^4.1.6"
   }
 }

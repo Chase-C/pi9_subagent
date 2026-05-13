@@ -1,0 +1,74 @@
+import { test } from "vitest";
+import assert from "node:assert/strict";
+
+import {
+  formatSubagentSessionInspect,
+  formatSubagentSessionSummary,
+  formatSubagentToolLines,
+  inventoryDetails,
+  runDetails,
+} from "../../src/view/format.js";
+import { serializeGroup } from "../../src/view/serialize.js";
+import { fakeAgent } from "../helpers/fake-agent.js";
+
+test("subagent run display animates only the running status glyph", () => {
+  const sessions = [
+    fakeAgent({ config: { name: "done" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }),
+    fakeAgent({ config: { name: "active" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ config: { name: "waiting" }, status: { kind: "queued" } }),
+    fakeAgent({ config: { name: "failed" }, status: { kind: "error", startedAt: 1, completedAt: 2, error: "bad" } }),
+  ];
+
+  const details = runDetails(serializeGroup(sessions));
+  const first = formatSubagentToolLines(details, false, 0);
+  const second = formatSubagentToolLines(details, false, 120);
+
+  assert.match(first[0], /^  ✓ done/);
+  assert.match(first[1], /^  ⠋ active/);
+  assert.match(first[2], /^  ○ waiting/);
+  assert.match(first[3], /^  ✗ failed/);
+  assert.match(second[0], /^  ✓ done/);
+  assert.match(second[1], /^  ⠙ active/);
+  assert.match(second[2], /^  ○ waiting/);
+  assert.match(second[3], /^  ✗ failed/);
+});
+
+test("collapsed inventory group line surfaces a filter:<statuses> segment when a status filter is active", () => {
+  const a = fakeAgent({ id: "s1", config: { name: "a" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+  const b = fakeAgent({ id: "s2", config: { name: "b" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+
+  const noFilter = formatSubagentToolLines(inventoryDetails([a, b]), false, 0);
+  assert.doesNotMatch(noFilter.join("\n"), /filter:/);
+
+  const filtered = formatSubagentToolLines(inventoryDetails([a, b], { status: ["completed", "error"] }), false, 0);
+  assert.match(filtered.join("\n"), /· filter:completed,error/);
+});
+
+test("formatSubagentSessionSummary surfaces kind:background only for background-kind sessions", () => {
+  const retained = fakeAgent({ config: { name: "helper", resumable: true } });
+  const background = fakeAgent({ id: "s2", kind: "background", config: { name: "helper", resumable: true } });
+
+  assert.doesNotMatch(formatSubagentSessionSummary(retained), /kind:/);
+  assert.match(formatSubagentSessionSummary(background), /kind:background/);
+});
+
+test("formatSessionLine appends kind:background segment only for background sessions and never for retained", () => {
+  const retained = fakeAgent({ config: { name: "helper" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+  const background = fakeAgent({ id: "s2", kind: "background", config: { name: "helper" }, status: { kind: "running", startedAt: 1 } });
+
+  const retainedLines = formatSubagentToolLines(inventoryDetails([retained]), false, 0);
+  assert.doesNotMatch(retainedLines.join("\n"), /kind:/);
+
+  const backgroundLines = formatSubagentToolLines(inventoryDetails([background]), false, 0);
+  assert.match(backgroundLines.join("\n"), /kind:background/);
+});
+
+test("subagent session inspect output uses remove terminology", () => {
+  const retainedSession = fakeAgent({
+    config: { resumable: true },
+    status: { kind: "completed", startedAt: 2_000, completedAt: 5_000, response: "done" },
+  });
+  const inspectLines = formatSubagentSessionInspect(retainedSession).join("\n");
+  assert.match(inspectLines, /Actions: inspect, resume, remove/);
+  assert.doesNotMatch(inspectLines, /clear/);
+});
