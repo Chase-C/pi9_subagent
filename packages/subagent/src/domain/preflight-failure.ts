@@ -38,6 +38,7 @@ export function preflightSpawnFailure(args: PreflightSpawnFailureArgs): Prefligh
       status: { kind: "done", outcome: "error", completedAt: createdAt, snippet: error },
       activity: { turns: 0, compactions: 0, toolHistory: [] },
       usage: undefined,
+      capabilities: { canResume: false, canClear: false },
     },
     result: {
       agent: task.agent,
@@ -85,6 +86,7 @@ export function preflightResumeFailure(args: PreflightResumeFailureArgs): Prefli
       status: { kind: "done", outcome: "error", completedAt: createdAt, snippet: error },
       activity: { turns: 0, compactions: 0, toolHistory: [] },
       usage: undefined,
+      capabilities: { canResume: false, canClear: false },
     },
     result: {
       agent: target?.agentName ?? "(unknown)",

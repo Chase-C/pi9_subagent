@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
+import type { Attempt } from "../domain/agent-attempt.js";
 import { timingAsync, timingMark, timingSync } from "./timing.js";
 import {
   completedRun,
@@ -46,6 +47,7 @@ const DefaultRunAgentDependencies: RunAgentDependencies = {
 export async function RunAgent(
   ctx: ExtensionContext,
   agent: Agent,
+  attempt: Attempt,
   signal?: AbortSignal,
   dependencies: RunAgentDependencies = DefaultRunAgentDependencies,
 ): Promise<AgentRunResult> {
@@ -110,12 +112,13 @@ export async function RunAgent(
   }
 
   timingSync("runAgent.attach", runData, () => agent.attach(session));
-  return PromptAgent(session, agent, signal);
+  return PromptAgent(session, agent, attempt, signal);
 }
 
 export async function ResumeAgent(
   _ctx: ExtensionContext,
   agent: Agent,
+  attempt: Attempt,
   signal?: AbortSignal,
 ): Promise<AgentRunResult> {
   const session = agent.retainedSession();
@@ -124,16 +127,17 @@ export async function ResumeAgent(
   }
 
   timingSync("resumeAgent.attach", { agent: agent.agentName, sessionId: agent.id }, () => agent.attach(session));
-  return PromptAgent(session, agent, signal, true);
+  return PromptAgent(session, agent, attempt, signal, true);
 }
 
 async function PromptAgent(
   session: AgentSession,
   agent: Agent,
+  attempt: Attempt,
   signal?: AbortSignal,
   resumed = false,
 ): Promise<AgentRunResult> {
-  const prompt = agent.requireCurrentAttempt().prompt;
+  const prompt = attempt.prompt;
   const onAbort = () => { void AbortSession(session); }
 
   if (signal?.aborted) {

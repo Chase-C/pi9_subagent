@@ -46,6 +46,11 @@ export interface AgentActivityView {
 
 export type AgentKind = "background" | "retained";
 
+export interface AgentViewCapabilities {
+  readonly canResume: boolean;
+  readonly canClear: boolean;
+}
+
 export interface AgentView {
   readonly id: string;
   readonly inputIndex?: number;
@@ -58,6 +63,7 @@ export interface AgentView {
   readonly activity: AgentActivityView;
   readonly usage: Usage | undefined;
   readonly kind: AgentKind;
+  readonly capabilities?: AgentViewCapabilities;
 }
 
 export interface AgentGroupView {

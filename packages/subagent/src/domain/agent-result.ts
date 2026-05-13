@@ -38,7 +38,7 @@ export function buildAgentResult(agent: Agent, args: FinalizeRunArgs): AgentRunR
 }
 
 export function finalizeRun(agent: Agent, args: FinalizeRunArgs): AgentRunResult {
-  if (agent.status.kind === "done" && !agent.current) return agent.status.result;
+  if (agent.status.kind === "done" && !agent.hasCurrentAttempt) return agent.status.result;
   const result = buildAgentResult(agent, args);
   agent.settle(result);
   return result;

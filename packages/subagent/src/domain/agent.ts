@@ -20,8 +20,8 @@ export class Agent {
   readonly agentName: string;
   readonly createdAt = Date.now();
 
-  private _attempts: Attempt[] = [];
   private _current?: Attempt;
+  private _lastAttempt?: Attempt;
   private _retainedSession?: AgentSession;
   private _label: string | undefined;
   private _appliedResumableOverride: boolean | undefined;
@@ -41,7 +41,7 @@ export class Agent {
     this._background = options.background ?? false;
     this._appliedResumableOverride = invocation.resumable;
     this._label = invocation.label;
-    this._current = new Attempt("spawn", invocation.prompt, invocation.label, invocation.resumable);
+    this._current = new Attempt("spawn", invocation.prompt, invocation.resumable);
   }
 
   on(listener: AgentUpdateListener): () => void {
@@ -63,11 +63,10 @@ export class Agent {
 
   /** The in-flight attempt if any, else the most recent terminal attempt. */
   private _activeAttempt(): Attempt | undefined {
-    return this._current ?? this._attempts[this._attempts.length - 1];
+    return this._current ?? this._lastAttempt;
   }
 
-  /** The in-flight attempt, or undefined if the agent is idle. */
-  get current(): Attempt | undefined { return this._current }
+  get hasCurrentAttempt(): boolean { return this._current !== undefined }
 
   get label(): string | undefined { return this._label }
 
@@ -87,7 +86,7 @@ export class Agent {
       if (state.kind === "queued") return { kind: "queued", queuedAt: this._current.createdAt };
       if (state.kind === "running") return { kind: "running", session: state.session, startedAt: state.startedAt };
     }
-    const last = this._attempts[this._attempts.length - 1];
+    const last = this._lastAttempt;
     if (!last || last.state.kind !== "done") return { kind: "queued", queuedAt: this.createdAt };
     return {
       kind: "done",
@@ -107,7 +106,7 @@ export class Agent {
     if (!this.resumable) return false;
     if (this._current) return false;
     if (!this._retainedSession) return false;
-    const last = this._attempts[this._attempts.length - 1];
+    const last = this._lastAttempt;
     if (!last || last.state.kind !== "done") return false;
     // Pre-attach failures (no startedAt) leave the retained session intact: still resumable.
     if (last.state.startedAt === undefined) return true;
@@ -124,7 +123,7 @@ export class Agent {
     }
     const label = invocation.label ?? this._label;
     if (invocation.label !== undefined) this._label = invocation.label;
-    const attempt = new Attempt("resume", invocation.prompt, label, invocation.resumable);
+    const attempt = new Attempt("resume", invocation.prompt, invocation.resumable);
     this._current = attempt;
     this._emit("status");
     return attempt;
@@ -149,6 +148,7 @@ export class Agent {
     const last = this._activeAttempt();
     const label = this._label;
     const prompt = last?.prompt;
+    const active = this.status.kind === "queued" || this.status.kind === "running";
     return {
       id: this.id,
       ...(inputIndex !== undefined ? { inputIndex } : {}),
@@ -175,6 +175,10 @@ export class Agent {
         toolHistory: activity.toolHistory,
       },
       usage: activity.usage,
+      capabilities: {
+        canResume: this.canResume,
+        canClear: this.resumable && !active,
+      },
     };
   }
 
@@ -214,7 +218,7 @@ export class Agent {
     if (!current) return;
     this._finishSubscription();
     current.settle(result);
-    this._attempts.push(current);
+    this._lastAttempt = current;
     this._current = undefined;
     this._emit("status");
   }

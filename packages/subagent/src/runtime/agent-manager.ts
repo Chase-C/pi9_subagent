@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
+import type { Attempt } from "../domain/agent-attempt.js";
 import { InvocationFromTask } from "../domain/agent-invocation.js";
 import {
   errorRun,
@@ -10,50 +11,32 @@ import {
   skippedRun,
   type AgentRunResult,
 } from "../domain/agent-result.js";
-import type { AgentUpdateKind, AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
+import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import { preflightResumeFailure, preflightSpawnFailure } from "../domain/preflight-failure.js";
 import type { TaskRequest, SessionStatus } from "../schema.js";
 import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
+import { AgentBatchEntry, StaticBatchEntry } from "./batch-entry.js";
+import { BatchRun, type BatchUpdateListener } from "./batch-run.js";
 import { ResumeAgent, RunAgent } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
-import { timingMark, timingStart, timingSync } from "./timing.js";
+import { timingMark, timingStart } from "./timing.js";
 
-const MESSAGE_UPDATE_THROTTLE_MS = 100;
-const ANIMATION_UPDATE_INTERVAL_MS = 120;
-
-export type AgentManagerUpdateListener = (update: SubagentBatchUpdate) => void;
+export type AgentManagerUpdateListener = BatchUpdateListener;
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
-export type AgentRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<AgentRunResult>;
-export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<AgentRunResult>;
+export type AgentRunner = (ctx: ExtensionContext, agent: Agent, attempt: Attempt, signal?: AbortSignal) => Promise<AgentRunResult>;
+export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, attempt: Attempt, signal?: AbortSignal) => Promise<AgentRunResult>;
 
 export type BackgroundResult =
   | { sessionId: string; ready: true; result: AgentRunResult }
   | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
   | { sessionId: string; error: string };
 
-interface BatchEntry {
-  agent?: Agent;
-  view?: AgentView;
-  inputIndex: number;
-  resumed?: boolean;
-}
-
-interface SpawnBatch {
-  groupId: string;
-  entries: BatchEntry[];
-  listener?: AgentManagerUpdateListener;
-  pendingMessageTimer?: NodeJS.Timeout;
-  animationTimer?: NodeJS.Timeout;
-  background: boolean;
-  controller?: AbortController;
-}
-
 export class AgentManager {
 
   private _agents = new Array<Agent>();
   private _queue: TaskQueue;
-  private _activeBatches = new Map<string, SpawnBatch>();
+  private _activeBatches = new Map<string, BatchRun>();
   private _agentBatch = new Map<string, string>();
   private _updateListeners = new Set<AgentUpdateListener>();
 
@@ -153,7 +136,7 @@ export class AgentManager {
         if (groupId) touchedGroups.add(groupId);
         this._agentBatch.delete(id);
       }
-      for (const groupId of touchedGroups) this._emitBatchUpdate(groupId);
+      for (const groupId of touchedGroups) this._activeBatches.get(groupId)?.emit();
     }
 
     return {
@@ -192,9 +175,9 @@ export class AgentManager {
     const groupCreatedAt = Date.now();
     timingMark("manager.run.start", { groupId, taskCount: tasks.length, background: options.background });
 
-    const entries: BatchEntry[] = [];
     const controller = options.background ? new AbortController() : undefined;
-    const batch: SpawnBatch = { groupId, entries, listener: onUpdate, background: options.background, controller };
+    const batch = new BatchRun(groupId, onUpdate);
+    const { entries } = batch;
     this._activeBatches.set(groupId, batch);
 
     const childSignal = controller ? controller.signal : signal;
@@ -212,7 +195,7 @@ export class AgentManager {
           const { view, result } = preflightSpawnFailure({
             groupId, inputIndex, createdAt: groupCreatedAt, task, error,
           });
-          entries.push({ view, inputIndex });
+          entries.push(new StaticBatchEntry(view, inputIndex, false));
           timingMark("manager.task.preflightFailure", { groupId, inputIndex, agent: task.agent });
           return Promise.resolve(result);
         }
@@ -226,18 +209,18 @@ export class AgentManager {
           { background: options.background },
         );
         agent.on(this._agentUpdate.bind(this));
-        entries.push({ agent, inputIndex });
+        entries.push(new AgentBatchEntry(agent, inputIndex, false));
         timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id });
         this._agents.push(agent);
         this._agentBatch.set(agent.id, groupId);
         touched.add(agent);
-        return this._runAttempt(ctx, childSignal, agent, "spawn");
+        return this._runAttempt(ctx, childSignal, agent, agent.requireCurrentAttempt(), "spawn");
       }
       // task.kind === "resume"
       const target = this._agents.find(a => a.id === task.sessionId && a.resumable);
       const error = !target
         ? `Unknown resumable subagent session: ${task.sessionId}`
-        : target.current
+        : target.hasCurrentAttempt
           ? `Cannot resume subagent session ${task.sessionId}: it is already resuming.`
           : !target.canResume
             ? `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.result.status : target.status.kind}.`
@@ -246,26 +229,26 @@ export class AgentManager {
         const { view, result } = preflightResumeFailure({
           groupId, inputIndex, createdAt: groupCreatedAt, task, target, error: error!,
         });
-        entries.push({ view, inputIndex, resumed: true });
+        entries.push(new StaticBatchEntry(view, inputIndex, true));
         timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId });
         return Promise.resolve(result);
       }
 
       const { invocation } = InvocationFromTask(task);
-      target.startResume(invocation);
+      const attempt = target.startResume(invocation);
       if (options.background) target.promoteToBackground();
-      entries.push({ agent: target, inputIndex, resumed: true });
+      entries.push(new AgentBatchEntry(target, inputIndex, true));
       timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id });
       this._agentBatch.set(target.id, groupId);
       touched.add(target);
-      return this._runAttempt(ctx, childSignal, target, "resume");
+      return this._runAttempt(ctx, childSignal, target, attempt, "resume");
     });
 
     timingMark("manager.initialEmit.before", { groupId, entries: entries.length });
-    this._emitBatchUpdate(groupId);
+    batch.emit();
     timingMark("manager.initialEmit.after", { groupId });
 
-    const sessions = this._snapshotEntries(batch.entries);
+    const sessions = batch.sessions();
 
     const resultsPromise = Promise.all(resultPromises)
       .then(results => {
@@ -281,22 +264,12 @@ export class AgentManager {
         return results;
       })
       .finally(() => {
-        this._flushPendingMessageUpdate(batch);
-        this._clearAnimationUpdate(batch);
+        batch.flush();
+        batch.dispose();
         this._activeBatches.delete(groupId);
       });
 
     return { groupId, sessions, resultsPromise };
-  }
-
-  private _snapshotEntries(entries: BatchEntry[]): AgentView[] {
-    return entries
-      .slice()
-      .sort((a, b) => a.inputIndex - b.inputIndex)
-      .map(({ agent, view, inputIndex, resumed }) => {
-        const baseView = view ?? (agent ? agent.toView(inputIndex) : view!);
-        return { ...baseView, resumed: Boolean(resumed) };
-      });
   }
 
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
@@ -305,25 +278,14 @@ export class AgentManager {
     if (!groupId) return;
     const batch = this._activeBatches.get(groupId);
     if (!batch) return;
-    if (kind === "message") {
-      this._clearAnimationUpdate(batch);
-      if (!batch.pendingMessageTimer) {
-        batch.pendingMessageTimer = setTimeout(() => {
-          batch.pendingMessageTimer = undefined;
-          this._emitBatchUpdate(batch.groupId);
-        }, MESSAGE_UPDATE_THROTTLE_MS);
-      }
-
-      return;
-    }
-    this._clearPendingMessageUpdate(batch);
-    this._emitBatchUpdate(groupId);
+    batch.handleAgentUpdate(kind);
   }
 
   private _runAttempt(
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
     agent: Agent,
+    attempt: Attempt,
     kind: "spawn" | "resume",
   ): Promise<AgentRunResult> {
     const resumed = kind === "resume";
@@ -334,71 +296,28 @@ export class AgentManager {
         end({ status: result.status });
         return result;
       }
-      if (agent.status.kind === "done" && !agent.current) {
+      if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
         end({ status: agent.status.result.status });
         return agent.status.result;
       }
       try {
         const runner = kind === "spawn" ? this._runAgent : this._resumeAgent;
-        const result = await runner(ctx, agent, signal);
+        const result = await runner(ctx, agent, attempt, signal);
         const finalResult = resumed && !result.resumed ? { ...result, resumed: true } : result;
         end({ status: finalResult.status });
         return finalResult;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (agent.status.kind === "done" && !agent.current) {
+        if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
           end({ status: agent.status.result.status });
           return agent.status.result;
         }
         const result = signal?.aborted
-          ? (agent.current?.state.kind === "queued" ? skippedRun(agent, resumed) : interruptedRun(agent, message, resumed))
+          ? (attempt.state.kind === "queued" ? skippedRun(agent, resumed) : interruptedRun(agent, message, resumed))
           : errorRun(agent, message, resumed);
         end({ status: result.status, error: message });
         return result;
       }
     }, { agent: agent.agentName, sessionId: agent.id, kind });
-  }
-
-  private _flushPendingMessageUpdate(batch: SpawnBatch) {
-    if (!this._clearPendingMessageUpdate(batch)) return;
-    this._emitBatchUpdate(batch.groupId);
-  }
-
-  private _clearPendingMessageUpdate(batch: SpawnBatch): boolean {
-    if (!batch.pendingMessageTimer) return false;
-    clearTimeout(batch.pendingMessageTimer);
-    batch.pendingMessageTimer = undefined;
-    return true;
-  }
-
-  private _emitBatchUpdate(groupId: string) {
-    const batch = this._activeBatches.get(groupId);
-    if (!batch?.listener) return;
-
-    const end = timingStart("manager.emitBatchUpdate", { groupId, entries: batch.entries.length });
-    const sessions = this._snapshotEntries(batch.entries);
-    const active = sessions.some(s => s.status.kind === "queued" || s.status.kind === "running");
-    timingSync("manager.listener", { groupId, sessionCount: sessions.length, active }, () => batch.listener?.({ sessions, active }));
-    this._scheduleAnimationUpdate(batch, active);
-    end({ active, sessionCount: sessions.length });
-  }
-
-  private _scheduleAnimationUpdate(batch: SpawnBatch, active: boolean) {
-    if (!active) {
-      this._clearAnimationUpdate(batch);
-      return;
-    }
-    if (batch.animationTimer) return;
-    batch.animationTimer = setTimeout(() => {
-      batch.animationTimer = undefined;
-      this._emitBatchUpdate(batch.groupId);
-    }, ANIMATION_UPDATE_INTERVAL_MS);
-    batch.animationTimer.unref?.();
-  }
-
-  private _clearAnimationUpdate(batch: SpawnBatch) {
-    if (!batch.animationTimer) return;
-    clearTimeout(batch.animationTimer);
-    batch.animationTimer = undefined;
   }
 }

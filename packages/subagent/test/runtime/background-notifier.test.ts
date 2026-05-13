@@ -73,7 +73,7 @@ async function runBackgroundOne(manager: AgentManager, prompt = "go") {
   return batch.sessions[0].id;
 }
 
-const completingRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+const completingRunner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
   agent.attach(makeSession());
   return completedRun(agent, "ok");
 };
@@ -96,7 +96,7 @@ test("BackgroundNotifier in end-of-turn mode fires no message until agent_end, t
 });
 
 test("BackgroundNotifier payload references subagent results, includes per-session metadata, and never includes output or error from the child", async () => {
-  const manager = makeManager(async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+  const manager = makeManager(async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
     agent.attach(makeSession());
     return completedRun(agent, "SUPER-SECRET-CHILD-OUTPUT");
   });
@@ -197,11 +197,11 @@ test("BackgroundNotifier in next-tool-call mode fires no message until tool_exec
 });
 
 test("BackgroundNotifier notifies again when a background session resumes and completes with the same sessionId", async () => {
-  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
     agent.attach(makeSession());
     return completedRun(agent, "ok");
   };
-  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+  const resumeRunner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
     agent.attach(makeSession());
     return completedRun(agent, "ok again", true);
   };

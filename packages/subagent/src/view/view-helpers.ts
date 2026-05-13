@@ -21,12 +21,14 @@ export function activeOrRetainedAgents<T extends { status: { kind: string }; res
 }
 
 export function canResumeSubagentSession(agent: AgentView): boolean {
+  if (agent.capabilities) return agent.capabilities.canResume;
   if (!agent.config.resumable || agent.status.kind !== "done") return false;
   if (agent.status.outcome === "completed") return true;
   return agent.status.startedAt === undefined;
 }
 
 export function canClearSubagentSession(agent: AgentView): boolean {
+  if (agent.capabilities) return agent.capabilities.canClear;
   return agent.config.resumable && !isActiveStatusKind(agent.status.kind);
 }
 

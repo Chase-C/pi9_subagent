@@ -48,7 +48,7 @@ test("tool list action with legacy type=skills returns the migration error notin
 
 test("subagent tool action=list with status filter [completed, error] returns terminal-success and terminal-failed sessions but excludes others", async () => {
   let nextRunner: ((agent: any, prompt: string) => any) | null = null;
-  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return nextRunner!(agent, prompt);
   };
@@ -80,7 +80,7 @@ test("subagent tool action=list with status filter [completed, error] returns te
 });
 
 test("subagent tool action=list with empty status filter returns no sessions distinct from no filter", async () => {
-  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "ok");
   };
@@ -114,7 +114,7 @@ test("subagent tool action=list with an unknown status value returns the unknown
 
 test("subagent tool action=list with status filter [completed] returns only completed sessions", async () => {
   let nextRunner: ((agent: any, prompt: string) => any) | null = null;
-  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return nextRunner?.(agent, prompt) ?? completedRun(agent, "ok");
   };
@@ -144,7 +144,7 @@ test("subagent tool action=list with status filter [completed] returns only comp
 });
 
 test("subagent tool action=list with no filter returns retained sessions tagged kind: retained", async () => {
-  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "The final answer from the child.");
   };

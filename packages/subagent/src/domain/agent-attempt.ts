@@ -23,7 +23,6 @@ export class Attempt {
   constructor(
     readonly kind: AttemptKind,
     readonly prompt: string,
-    readonly label: string | undefined,
     readonly resumableOverride: boolean | undefined,
   ) {}
 
@@ -40,11 +39,4 @@ export class Attempt {
     this.state = { kind: "done", result, startedAt, completedAt: Date.now() };
   }
 
-  get session(): AgentSession | undefined {
-    return this.state.kind === "running" ? this.state.session : undefined;
-  }
-
-  get result(): AgentRunResult | undefined {
-    return this.state.kind === "done" ? this.state.result : undefined;
-  }
 }
