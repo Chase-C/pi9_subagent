@@ -222,8 +222,6 @@ Execution notes:
 
         if (background) {
           const batch = agentManager.startBatch(ctx, signal, parsed, update => {
-            const partial = partialToolResult(update);
-            onUpdate?.(partial);
             updateSubagentWidget(ctx, update.sessions, settings);
           }, { background: true });
           batch.resultsPromise.catch(() => {});

@@ -410,6 +410,39 @@ test("subagent action=run background:true returns view:background-started immedi
   await new Promise(resolve => setImmediate(resolve));
 });
 
+test("subagent action=run background:true never invokes the parent onUpdate channel", async () => {
+  let releaseRun: () => void;
+  const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    await runGate;
+    return completedRun(agent, prompt, `done:${prompt}`);
+  };
+  const fakeRegistry = {
+    agents: new Map([["helper", { name: "helper", description: "Helps", systemPrompt: "s", source: "project" }]]),
+    async reload() {},
+    summarizeAgent() { return "helper (project)"; },
+  };
+  const manager = new AgentManager(fakeRegistry as any, 2, runner);
+  const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
+
+  const onUpdateCalls: unknown[] = [];
+  const onUpdate = (partial: unknown) => { onUpdateCalls.push(partial); };
+
+  await tool.execute("tool-call", {
+    action: "run",
+    background: true,
+    tasks: [{ agent: "helper", prompt: "background work" }],
+  }, undefined, onUpdate, baseCtx());
+
+  await new Promise(resolve => setTimeout(resolve, 250));
+  releaseRun!();
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(onUpdateCalls, []);
+});
+
 test("subagent action=run rejects a per-task background field with the batch-level migration error", async () => {
   let runCalls = 0;
   const fakeManager = {
