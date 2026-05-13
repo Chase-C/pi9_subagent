@@ -35,7 +35,7 @@ interface CompletionEntry {
 
 export class BackgroundNotifier {
   private _queue: CompletionEntry[] = [];
-  private _seenSessionIds = new Set<string>();
+  private _notifiedTerminalSessionIds = new Set<string>();
   private _unsubAgent: () => void = () => {};
   private _disposed = false;
 
@@ -54,7 +54,7 @@ export class BackgroundNotifier {
     this._disposed = true;
     this._unsubAgent();
     this._queue = [];
-    this._seenSessionIds.clear();
+    this._notifiedTerminalSessionIds.clear();
   }
 
   private _handleAgentUpdate = (agent: Agent, kind: AgentUpdateKind): void => {
@@ -62,9 +62,13 @@ export class BackgroundNotifier {
     if (kind !== "status") return;
     if (!agent.background) return;
     const status = agent.status;
+    if (status.kind === "running" || status.kind === "queued") {
+      this._notifiedTerminalSessionIds.delete(agent.id);
+      return;
+    }
     if (status.kind !== "done" && status.kind !== "resumeFailed") return;
-    if (this._seenSessionIds.has(agent.id)) return;
-    this._seenSessionIds.add(agent.id);
+    if (this._notifiedTerminalSessionIds.has(agent.id)) return;
+    this._notifiedTerminalSessionIds.add(agent.id);
     const startedAt = status.kind === "done"
       ? status.ran?.startedAt ?? agent.createdAt
       : status.ran.startedAt;
@@ -82,12 +86,15 @@ export class BackgroundNotifier {
   private _onDispatchEvent(dispatchMode: BackgroundNotifyMode): void {
     if (this._disposed) return;
     const mode = this.deps.getMode();
-    if (mode === "none") return;
+    if (mode === "none") {
+      this._queue = [];
+      return;
+    }
     if (mode !== dispatchMode) return;
-    this._dispatch();
+    this._dispatch(dispatchMode);
   }
 
-  private _dispatch(): void {
+  private _dispatch(dispatchMode: Exclude<BackgroundNotifyMode, "none">): void {
     if (this._queue.length === 0) return;
     const entries = this._queue;
     this._queue = [];
@@ -98,7 +105,7 @@ export class BackgroundNotifier {
         content,
         details: { completions: entries.map(e => ({ ...e })) },
       },
-      { deliverAs: "nextTurn" },
+      { deliverAs: dispatchMode === "next-tool-call" ? "steer" : "followUp" },
     );
   }
 }

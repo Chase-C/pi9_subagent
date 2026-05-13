@@ -51,11 +51,14 @@ function fakePi(): FakePi {
   };
 }
 
-function makeManager(runner: any) {
+function makeManager(runner: any, resumeRunner?: any) {
   const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+    agents: new Map([
+      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }],
+      ["resumable", { name: "resumable", description: "d", systemPrompt: "s", source: "project", resumable: true }],
+    ]),
   };
-  return new AgentManager(registry as any, 2, runner);
+  return new AgentManager(registry as any, 2, runner, resumeRunner);
 }
 
 async function runBackgroundOne(manager: AgentManager, prompt = "go") {
@@ -86,6 +89,7 @@ test("BackgroundNotifier in end-of-turn mode fires no message until agent_end, t
 
   pi.fireAgentEnd();
   assert.equal(pi.sent.length, 1, "one message on agent_end");
+  assert.equal(pi.sent[0].options?.deliverAs, "followUp");
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
 
   notifier.dispose();
@@ -124,19 +128,20 @@ test("BackgroundNotifier payload references subagent results, includes per-sessi
   notifier.dispose();
 });
 
-test("BackgroundNotifier flushes completions queued under none when the mode flips to end-of-turn before agent_end", async () => {
+test("BackgroundNotifier drops queued completions when none mode sees a dispatch event", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
-  let mode: BackgroundNotifyMode = "none";
+  let mode: BackgroundNotifyMode = "end-of-turn";
   const notifier = new BackgroundNotifier({ pi, manager, getMode: () => mode });
 
-  const sessionId = await runBackgroundOne(manager);
+  await runBackgroundOne(manager);
 
+  mode = "none";
+  pi.fireAgentEnd();
   mode = "end-of-turn";
   pi.fireAgentEnd();
 
-  assert.equal(pi.sent.length, 1);
-  assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+  assert.equal(pi.sent.length, 0);
 
   notifier.dispose();
 });
@@ -185,7 +190,51 @@ test("BackgroundNotifier in next-tool-call mode fires no message until tool_exec
 
   pi.fireToolExecutionStart();
   assert.equal(pi.sent.length, 1, "one message on tool_execution_start");
+  assert.equal(pi.sent[0].options?.deliverAs, "steer");
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+
+  notifier.dispose();
+});
+
+test("BackgroundNotifier notifies again when a background session resumes and completes with the same sessionId", async () => {
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    return completedRun(agent, prompt, "ok");
+  };
+  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    return completedRun(agent, prompt, "ok again", true);
+  };
+  const manager = makeManager(runner, resumeRunner);
+  const pi = fakePi();
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "end-of-turn" });
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "resumable", prompt: "go" }],
+    undefined,
+    { background: true },
+  );
+  await batch.resultsPromise;
+  const sessionId = batch.sessions[0].id;
+
+  pi.fireAgentEnd();
+  assert.equal(pi.sent.length, 1);
+  assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+
+  const resumed = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "resume", sessionId, prompt: "continue" }],
+    undefined,
+    { background: true },
+  );
+  await resumed.resultsPromise;
+
+  pi.fireAgentEnd();
+  assert.equal(pi.sent.length, 2);
+  assert.match(pi.sent[1].content ?? "", new RegExp(sessionId));
 
   notifier.dispose();
 });
