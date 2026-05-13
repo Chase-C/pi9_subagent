@@ -1226,7 +1226,23 @@ test('subagents command resume cancellation aborts the child and reports interru
   assert.match(notifications.at(-1)[0], /resume interrupted/);
 });
 
-test('subagents command inspect view shows metadata and clears retained session immediately', async () => {
+test('subagent session help and inspect actions use remove terminology', async () => {
+  const { listHelp, inspectHelp } = await import(`../dist/command/input.js?t=${unique()}`);
+  const { formatSubagentSessionInspect } = await import(`../dist/view/format.js?t=${unique()}`);
+  const retainedSession = fakeAgent({
+    config: { resumable: true },
+    status: { kind: 'completed', startedAt: 2_000, completedAt: 5_000, response: 'done' },
+  });
+
+  assert.match(listHelp(retainedSession), /c remove retained/);
+  assert.doesNotMatch(listHelp(retainedSession), /clear/);
+  assert.match(inspectHelp(retainedSession), /c remove/);
+  assert.doesNotMatch(inspectHelp(retainedSession), /clear/);
+  assert.match(formatSubagentSessionInspect(retainedSession).join('\n'), /Actions: inspect, resume, remove/);
+  assert.doesNotMatch(formatSubagentSessionInspect(retainedSession).join('\n'), /clear/);
+});
+
+test('subagents command inspect view shows metadata and removes retained session immediately', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const retainedSession = fakeAgent({
     config: { resumable: true, tools: ['read', 'bash'] },
@@ -1276,13 +1292,14 @@ test('subagents command inspect view shows metadata and clears retained session 
   assert.match(inspectText, /Progress: 3 turns · 2 tool uses · 1 compaction/);
   assert.match(inspectText, /Usage: 3 tokens · \$0\.0100/);
   assert.match(inspectText, /Output: Implemented the retained-session fix/);
-  assert.match(inspectText, /Actions: inspect, resume, clear/);
+  assert.match(inspectText, /Actions: inspect, resume, remove/);
+  assert.doesNotMatch(inspectText, /clear/);
   assert.deepEqual(clearCalls, ['s1']);
   assert.deepEqual(fakeManager.sessions, []);
-  assert.match(notifications.at(-1)[0], /Cleared subagent session s1/);
+  assert.match(notifications.at(-1)[0], /Removed subagent session s1/);
 });
 
-test('subagent tool lists retained sessions as serialized DTOs with clear action', async () => {
+test('subagent tool lists retained sessions as serialized DTOs', async () => {
   const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
   const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
@@ -3363,6 +3380,127 @@ test('AgentManager.remove scope=non-running removes terminal and queued sessions
   await pending;
 });
 
+test('AgentManager.remove with a queued sessionId prevents the queued spawn from later invoking the runner', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  let unblockRunning;
+  const runningGate = new Promise(resolve => { unblockRunning = resolve; });
+  const runnerPrompts = [];
+  const runner = async (_ctx, agent, prompt) => {
+    runnerPrompts.push(prompt);
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    if (prompt === 'block') await runningGate;
+    return completedRun(agent, prompt, 'done');
+  };
+  const registry = { agents: new Map([
+    ['oneshot', { name: 'oneshot', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'oneshot', prompt: 'block' },
+    { kind: 'spawn', agent: 'oneshot', prompt: 'queued' },
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const queued = manager.sessions.find(session => session.status.kind === 'queued');
+  assert.ok(queued);
+
+  const result = await manager.remove({ sessionIds: [queued.id] });
+  assert.equal(result.removed, 1);
+  assert.equal(result.aborted, 0);
+
+  unblockRunning();
+  const results = await pending;
+
+  assert.deepEqual(runnerPrompts, ['block']);
+  assert.equal(results[1].status, 'skipped');
+  assert.deepEqual(manager.sessions, []);
+});
+
+test('AgentManager.remove scope=non-running prevents queued spawns from later invoking the runner', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  let unblockRunning;
+  const runningGate = new Promise(resolve => { unblockRunning = resolve; });
+  const runnerPrompts = [];
+  const runner = async (_ctx, agent, prompt) => {
+    runnerPrompts.push(prompt);
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    if (prompt === 'block') await runningGate;
+    return completedRun(agent, prompt, 'done');
+  };
+  const registry = { agents: new Map([
+    ['oneshot', { name: 'oneshot', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'oneshot', prompt: 'block' },
+    { kind: 'spawn', agent: 'oneshot', prompt: 'queued' },
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(manager.sessions.some(session => session.status.kind === 'queued'));
+
+  const result = await manager.remove({ scope: 'non-running' });
+  assert.equal(result.removed, 1);
+  assert.equal(result.aborted, 0);
+
+  unblockRunning();
+  const results = await pending;
+
+  assert.deepEqual(runnerPrompts, ['block']);
+  assert.equal(results[1].status, 'skipped');
+  assert.deepEqual(manager.sessions, []);
+});
+
+test('AgentManager.remove with a queued resume sessionId prevents the queued resume runner from starting', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  let unblockRunning;
+  const runningGate = new Promise(resolve => { unblockRunning = resolve; });
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    if (prompt === 'block') await runningGate;
+    return completedRun(agent, prompt, 'done');
+  };
+  let resumeCalls = 0;
+  const resumeRunner = async (_ctx, agent, prompt) => {
+    resumeCalls += 1;
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    return completedRun(agent, prompt, 'resumed');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+    ['oneshot', { name: 'oneshot', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner, resumeRunner);
+  const [seed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'seed' },
+  ]);
+
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'oneshot', prompt: 'block' },
+    { kind: 'resume', sessionId: seed.sessionId, prompt: 'queued resume' },
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const result = await manager.remove({ sessionIds: [seed.sessionId] });
+  assert.equal(result.removed, 1);
+  assert.equal(result.aborted, 0);
+
+  unblockRunning();
+  const results = await pending;
+
+  assert.equal(resumeCalls, 0);
+  assert.equal(results[1].status, 'skipped');
+  assert.equal(results[1].resumed, true);
+  assert.deepEqual(manager.sessions, []);
+});
+
 test('subagent tool description documents action=remove and drops references to action=clear', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   let registeredTool;
@@ -3659,6 +3797,86 @@ test('subagent action=remove rejects a call that supplies both sessionIds and sc
 
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /exactly one of sessionIds or scope/);
+});
+
+test('subagent action=remove rejects an invalid scope without calling manager.remove', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let removeCalls = 0;
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: { sessions: [], async remove() { removeCalls += 1; throw new Error('should not remove'); } },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'remove',
+    scope: 'retianed',
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /scope must be "background", "retained", or "non-running"/);
+  assert.equal(removeCalls, 0);
+});
+
+test('subagent action=remove rejects non-array sessionIds without calling manager.remove', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let removeCalls = 0;
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: { sessions: [], async remove() { removeCalls += 1; throw new Error('should not remove'); } },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'remove',
+    sessionIds: 's1',
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /sessionIds must be an array of strings/);
+  assert.equal(removeCalls, 0);
+});
+
+test('subagent action=remove rejects non-string sessionIds entries without calling manager.remove', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let removeCalls = 0;
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: { sessions: [], async remove() { removeCalls += 1; throw new Error('should not remove'); } },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'remove',
+    sessionIds: ['s1', 42],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /sessionIds must be an array of strings/);
+  assert.equal(removeCalls, 0);
+});
+
+test('AgentManager.remove rejects an unknown internal scope without removing sessions', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    return completedRun(agent, prompt, 'done');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+  await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'work' },
+  ]);
+
+  await assert.rejects(
+    () => manager.remove({ scope: 'retianed' }),
+    /Unknown remove scope: retianed/,
+  );
+  assert.equal(manager.sessions.length, 1);
 });
 
 test('subagent action=clear is rejected with the remove migration error', async () => {

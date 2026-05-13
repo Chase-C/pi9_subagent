@@ -125,7 +125,7 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
 
   const actions = ["inspect"];
   if (canResumeSubagentSession(agent)) actions.push("resume");
-  if (canClearSubagentSession(agent)) actions.push("clear");
+  if (canClearSubagentSession(agent)) actions.push("remove");
   lines.push(`Actions: ${actions.join(", ")}`);
   return lines;
 }

@@ -34,6 +34,16 @@ function validateTaskCount(tasks: SubagentParams["tasks"] | undefined, maxTasks 
   return undefined;
 }
 
+type RemoveScope = "background" | "retained" | "non-running";
+
+function isRemoveScope(scope: unknown): scope is RemoveScope {
+  return scope === "background" || scope === "retained" || scope === "non-running";
+}
+
+function validateRemoveSessionIds(sessionIds: unknown): sessionIds is string[] {
+  return Array.isArray(sessionIds) && sessionIds.every(id => typeof id === "string");
+}
+
 function toolResult(details: object, isError = false) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }],
@@ -112,7 +122,7 @@ Execution notes:
 - Up to maxConcurrentSubagents run tasks execute concurrently (default four); final results preserve input order.
 - run is blocking and returns structured results when each child prompt completes. Each result carries a resumed flag distinguishing fresh spawns from resumed sessions.
 - Results include a resumable flag and a sessionId when a resumable child has or had a child AgentSession; only completed resumable sessions can be resumed.
-- Resumable sessions live for the current Pi process lifetime or until cleared.
+- Resumable sessions live for the current Pi process lifetime or until removed.
 - Unknown agents and unknown sessionIds surface as per-task error results (with resumed set accordingly) and do not prevent sibling tasks from running.
 `,
     promptSnippet: "Delegate focused tasks to specialized subagents with separate context windows",
@@ -216,9 +226,15 @@ Execution notes:
         const hasScope = scope !== undefined;
         if (hasIds && hasScope) return errorResult("remove requires exactly one of sessionIds or scope.");
         if (!hasIds && !hasScope) return errorResult("remove requires either sessionIds or scope.");
+        if (hasIds && !validateRemoveSessionIds(sessionIds)) {
+          return errorResult("remove sessionIds must be an array of strings.");
+        }
+        if (hasScope && !isRemoveScope(scope)) {
+          return errorResult('remove scope must be "background", "retained", or "non-running".');
+        }
         const summary = hasIds
-          ? await agentManager.remove({ sessionIds: sessionIds as string[] })
-          : await agentManager.remove({ scope: scope as "background" | "retained" | "non-running" });
+          ? await agentManager.remove({ sessionIds })
+          : await agentManager.remove({ scope: scope! });
         return toolResult({ view: "remove-summary", summary });
       }
 

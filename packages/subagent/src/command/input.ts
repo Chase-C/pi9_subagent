@@ -29,14 +29,14 @@ export function agentInspectHelp() {
 export function listHelp(session: AgentView | undefined) {
   const actions = ["↑↓ select", "enter inspect"];
   if (session && canResumeSubagentSession(session)) actions.push("r resume");
-  actions.push("c clear retained", "esc close");
+  actions.push("c remove retained", "esc close");
   return actions.join(" · ");
 }
 
 export function inspectHelp(session: AgentView) {
   const actions = [];
   if (canResumeSubagentSession(session)) actions.push("r resume");
-  if (canClearSubagentSession(session)) actions.push("c clear");
+  if (canClearSubagentSession(session)) actions.push("c remove");
   actions.push("b back", "esc close");
   return actions.join(" · ");
 }

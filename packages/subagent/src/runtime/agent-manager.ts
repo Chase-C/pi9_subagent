@@ -85,9 +85,10 @@ export class AgentManager {
 
     let aborted = 0;
     for (const agent of targets) {
-      if (agent.status.kind === "running") {
+      const status = agent.status.kind;
+      if (status === "running" || status === "queued") {
         await agent.abort();
-        aborted += 1;
+        if (status === "running") aborted += 1;
       }
     }
 
@@ -114,7 +115,8 @@ export class AgentManager {
   private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
     if (scope === "background") return [];
     if (scope === "retained") return this._agents.filter(a => a.status.kind !== "running" && a.resumable);
-    return this._agents.filter(a => a.status.kind !== "running");
+    if (scope === "non-running") return this._agents.filter(a => a.status.kind !== "running");
+    throw new Error(`Unknown remove scope: ${String(scope)}`);
   }
 
   async run(
@@ -247,6 +249,11 @@ export class AgentManager {
         end({ status: result.status });
         return result;
       }
+      const currentStatus = agent.status as Agent["status"];
+      if (currentStatus.kind === "done") {
+        end({ status: currentStatus.result.status });
+        return currentStatus.result;
+      }
       try {
         const result = await this._runAgent(ctx, agent, prompt, signal);
         end({ status: result.status });
@@ -294,6 +301,11 @@ export class AgentManager {
       return await this._queue.enqueue(async () => {
         const end = timingStart("manager.resumeTask", { agent: target.agentName, sessionId: target.id });
         if (signal?.aborted) {
+          const result = closePreAttach({ status: "skipped", error: "Agent skipped." });
+          end({ status: result.status });
+          return result;
+        }
+        if (!this._agents.includes(target)) {
           const result = closePreAttach({ status: "skipped", error: "Agent skipped." });
           end({ status: result.status });
           return result;

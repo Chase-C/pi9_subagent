@@ -28,7 +28,11 @@ export const SubagentParams = Type.Object({
     description: "Type of items to list for action='list'. Use 'agents' to list available agents, 'sessions' for active or retained sessions, or 'skills' for skills available to inject. Defaults to 'agents'.",
   })),
   sessionIds: Type.Optional(Type.Array(Type.String(), { description: "Subagent session ids targeted by action=remove. Mutually exclusive with scope." })),
-  scope: Type.Optional(Type.String({ description: "Removal scope for action=remove. One of 'background' | 'retained' | 'non-running'. Mutually exclusive with sessionIds." })),
+  scope: Type.Optional(Type.Union([
+    Type.Literal("background"),
+    Type.Literal("retained"),
+    Type.Literal("non-running"),
+  ], { description: "Removal scope for action=remove. One of 'background' | 'retained' | 'non-running'. Mutually exclusive with sessionIds." })),
 });
 
 export type SubagentParams = Static<typeof SubagentParams>;

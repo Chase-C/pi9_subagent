@@ -241,7 +241,7 @@ When active or retained sessions exist, `/subagents` opens the Sessions view. Fr
 
 - Inspect a session's status, agent metadata, prompt preview, progress counters, timestamps, usage, output/error snippets, and available actions.
 - Resume a completed resumable session. The command asks for a follow-up prompt in an editor, runs with a cancellable loader, updates the widget live, and appends a concise custom result message to the main conversation. Cancelling the loader interrupts the child run instead of hiding background work.
-- Clear a retained non-running resumable session.
+- Remove a retained non-running resumable session.
 
 If no active or retained sessions exist, `/subagents` opens the read-only Agents browser instead. The browser lists discovered user/project agent definitions and lets you inspect model, thinking, tools, resumable status, and source path metadata. It does not launch agents.
 
@@ -257,7 +257,7 @@ Session management is intentionally process-lifetime only.
 - Restarting Pi or reloading the extension releases retained sessions; sessions are not restored from disk.
 - `sessionId` identifies a retained process-local session, not a durable record.
 - Tool results include `resumable` and include `sessionId` only when a resumable child has or had a child `AgentSession`. Check `resumable` and the status before offering follow-up behavior.
-- Only `status: "completed"` resumable sessions can be resumed. Failed, aborted, and interrupted resumable sessions are inspect/clear-only.
+- Only `status: "completed"` resumable sessions can be resumed. Failed, aborted, and interrupted resumable sessions are inspect/remove-only.
 - Command-driven resume messages include bounded metadata plus output/error snippets, not the full child transcript.
 
 ## Status meanings

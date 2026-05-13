@@ -259,16 +259,16 @@ export class SubagentSessionsComponent implements Component {
     if (!session) return;
     if (!canClearSubagentSession(session)) {
       const detail = session.status.kind === "done" ? session.status.outcome : session.status.kind;
-      this.notify(`Subagent session ${session.id} is ${detail} and cannot be cleared.`, "warning");
+      this.notify(`Subagent session ${session.id} is ${detail} and cannot be removed.`, "warning");
       return;
     }
 
     void this.agentManager.remove({ sessionIds: [session.id] }).then(
       result => {
-        if (result.removed > 0) this.notify(`Cleared subagent session ${session.id}.`, "success");
+        if (result.removed > 0) this.notify(`Removed subagent session ${session.id}.`, "success");
         else this.notify(`Subagent session ${session.id} was already gone.`, "warning");
       },
-      error => this.notify(`Failed to clear subagent session ${session.id}: ${error instanceof Error ? error.message : String(error)}`, "warning"),
+      error => this.notify(`Failed to remove subagent session ${session.id}: ${error instanceof Error ? error.message : String(error)}`, "warning"),
     );
 
     const sessions = this.sessions;
