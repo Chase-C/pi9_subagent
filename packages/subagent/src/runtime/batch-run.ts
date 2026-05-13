@@ -8,7 +8,7 @@ const ANIMATION_UPDATE_INTERVAL_MS = 120;
 export type BatchUpdateListener = (update: SubagentBatchUpdate) => void;
 
 export class BatchRun {
-  readonly entries: BatchEntry[] = [];
+  private readonly _entries: BatchEntry[] = [];
   private pendingMessageTimer?: NodeJS.Timeout;
   private animationTimer?: NodeJS.Timeout;
 
@@ -17,8 +17,14 @@ export class BatchRun {
     private readonly listener?: BatchUpdateListener,
   ) {}
 
+  get entryCount(): number { return this._entries.length }
+
+  addEntry(entry: BatchEntry): void {
+    this._entries.push(entry);
+  }
+
   sessions(): AgentView[] {
-    return this.entries
+    return this._entries
       .slice()
       .sort((a, b) => a.inputIndex - b.inputIndex)
       .map(entry => entry.toView());
@@ -47,7 +53,7 @@ export class BatchRun {
   emit(): void {
     if (!this.listener) return;
 
-    const end = timingStart("manager.emitBatchUpdate", { groupId: this.groupId, entries: this.entries.length });
+    const end = timingStart("manager.emitBatchUpdate", { groupId: this.groupId, entries: this._entries.length });
     const sessions = this.sessions();
     const active = sessions.some(s => s.status.kind === "queued" || s.status.kind === "running");
     timingSync("manager.listener", { groupId: this.groupId, sessionCount: sessions.length, active }, () => this.listener?.({ sessions, active }));

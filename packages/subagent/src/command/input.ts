@@ -1,7 +1,6 @@
 import { matchesKey, truncateToWidth, visibleWidth, type KeybindingsManager } from "@earendil-works/pi-tui";
 
 import type { AgentView } from "../domain/agent-view.js";
-import { canClearSubagentSession, canResumeSubagentSession } from "../view/view-helpers.js";
 
 export type SubagentSessionsTheme = {
   fg?: (color: "accent" | "dim", text: string) => string;
@@ -28,15 +27,15 @@ export function agentInspectHelp() {
 
 export function listHelp(session: AgentView | undefined) {
   const actions = ["↑↓ select", "enter inspect"];
-  if (session && canResumeSubagentSession(session)) actions.push("r resume");
+  if (session?.capabilities.canResume) actions.push("r resume");
   actions.push("c remove retained", "esc close");
   return actions.join(" · ");
 }
 
 export function inspectHelp(session: AgentView) {
   const actions = [];
-  if (canResumeSubagentSession(session)) actions.push("r resume");
-  if (canClearSubagentSession(session)) actions.push("c remove");
+  if (session.capabilities.canResume) actions.push("r resume");
+  if (session.capabilities.canClear) actions.push("c remove");
   actions.push("b back", "esc close");
   return actions.join(" · ");
 }

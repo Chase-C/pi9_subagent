@@ -63,7 +63,7 @@ export interface AgentView {
   readonly activity: AgentActivityView;
   readonly usage: Usage | undefined;
   readonly kind: AgentKind;
-  readonly capabilities?: AgentViewCapabilities;
+  readonly capabilities: AgentViewCapabilities;
 }
 
 export interface AgentGroupView {

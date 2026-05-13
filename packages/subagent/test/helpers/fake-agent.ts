@@ -4,6 +4,7 @@ import type {
   AgentKind,
   AgentToolUse,
   AgentView,
+  AgentViewCapabilities,
   AgentViewStatus,
 } from "../../src/domain/agent-view.js";
 
@@ -62,6 +63,7 @@ export interface FakeAgentOptions {
   activeTools?: string[];
   usage?: Usage;
   totalUsage?: Usage;
+  capabilities?: Partial<AgentViewCapabilities>;
 }
 
 export function fakeAgent(options: FakeAgentOptions = {}): AgentView {
@@ -123,6 +125,14 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentView {
   }
 
   const resumable = Boolean(cfg.resumable) && (viewStatus.kind !== "done" || Boolean(ranSession));
+  const active = viewStatus.kind === "queued" || viewStatus.kind === "running";
+  const derivedCanResume = resumable && viewStatus.kind === "done"
+    && (viewStatus.outcome === "completed" || viewStatus.startedAt === undefined);
+  const derivedCanClear = resumable && !active;
+  const capabilities: AgentViewCapabilities = {
+    canResume: rest.capabilities?.canResume ?? derivedCanResume,
+    canClear: rest.capabilities?.canClear ?? derivedCanClear,
+  };
   const messageSnippet = rest.messageSnippet ?? rest.message;
   const turns = rest.turns ?? 0;
   const compactions = rest.compactions ?? 0;
@@ -169,6 +179,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentView {
       toolHistory,
     },
     usage: rest.totalUsage ?? rest.usage ?? ZERO_USAGE,
+    capabilities,
   };
 }
 

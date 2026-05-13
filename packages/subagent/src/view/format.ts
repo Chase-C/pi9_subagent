@@ -6,9 +6,7 @@ import type { AgentGroupView, AgentView, AgentViewStatus } from "../domain/agent
 import type { BackgroundResult } from "../runtime/agent-manager.js";
 import { serializeGroup } from "./serialize.js";
 import {
-  canClearSubagentSession,
   getSubagentDisplaySettings,
-  canResumeSubagentSession,
   compact,
   effectiveStatus,
   getActiveTools,
@@ -141,8 +139,8 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
   if (agent.activity.messageSnippet) lines.push(`Message: ${compact(agent.activity.messageSnippet, getSubagentDisplaySettings().messageSnippetLength)}`);
 
   const actions = ["inspect"];
-  if (canResumeSubagentSession(agent)) actions.push("resume");
-  if (canClearSubagentSession(agent)) actions.push("remove");
+  if (agent.capabilities.canResume) actions.push("resume");
+  if (agent.capabilities.canClear) actions.push("remove");
   lines.push(`Actions: ${actions.join(", ")}`);
   return lines;
 }

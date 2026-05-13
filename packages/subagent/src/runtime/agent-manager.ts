@@ -22,7 +22,6 @@ import { ResumeAgent, RunAgent } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
 import { timingMark, timingStart } from "./timing.js";
 
-export type AgentManagerUpdateListener = BatchUpdateListener;
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, attempt: Attempt, signal?: AbortSignal) => Promise<AgentRunResult>;
 export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, attempt: Attempt, signal?: AbortSignal) => Promise<AgentRunResult>;
@@ -158,7 +157,7 @@ export class AgentManager {
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
     tasks: TaskRequest[],
-    onUpdate?: AgentManagerUpdateListener,
+    onUpdate?: BatchUpdateListener,
   ): Promise<AgentRunResult[]> {
     const batch = this.startBatch(ctx, signal, tasks, onUpdate, { background: false });
     return batch.resultsPromise;
@@ -168,7 +167,7 @@ export class AgentManager {
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
     tasks: TaskRequest[],
-    onUpdate: AgentManagerUpdateListener | undefined,
+    onUpdate: BatchUpdateListener | undefined,
     options: { background: boolean },
   ): { groupId: string; sessions: AgentView[]; resultsPromise: Promise<AgentRunResult[]> } {
     const groupId = randomUUID();
@@ -177,7 +176,6 @@ export class AgentManager {
 
     const controller = options.background ? new AbortController() : undefined;
     const batch = new BatchRun(groupId, onUpdate);
-    const { entries } = batch;
     this._activeBatches.set(groupId, batch);
 
     const childSignal = controller ? controller.signal : signal;
@@ -195,7 +193,7 @@ export class AgentManager {
           const { view, result } = preflightSpawnFailure({
             groupId, inputIndex, createdAt: groupCreatedAt, task, error,
           });
-          entries.push(new StaticBatchEntry(view, inputIndex, false));
+          batch.addEntry(new StaticBatchEntry(view, inputIndex, false));
           timingMark("manager.task.preflightFailure", { groupId, inputIndex, agent: task.agent });
           return Promise.resolve(result);
         }
@@ -209,7 +207,7 @@ export class AgentManager {
           { background: options.background },
         );
         agent.on(this._agentUpdate.bind(this));
-        entries.push(new AgentBatchEntry(agent, inputIndex, false));
+        batch.addEntry(new AgentBatchEntry(agent, inputIndex, false));
         timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id });
         this._agents.push(agent);
         this._agentBatch.set(agent.id, groupId);
@@ -229,7 +227,7 @@ export class AgentManager {
         const { view, result } = preflightResumeFailure({
           groupId, inputIndex, createdAt: groupCreatedAt, task, target, error: error!,
         });
-        entries.push(new StaticBatchEntry(view, inputIndex, true));
+        batch.addEntry(new StaticBatchEntry(view, inputIndex, true));
         timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId });
         return Promise.resolve(result);
       }
@@ -237,14 +235,14 @@ export class AgentManager {
       const { invocation } = InvocationFromTask(task);
       const attempt = target.startResume(invocation);
       if (options.background) target.promoteToBackground();
-      entries.push(new AgentBatchEntry(target, inputIndex, true));
+      batch.addEntry(new AgentBatchEntry(target, inputIndex, true));
       timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id });
       this._agentBatch.set(target.id, groupId);
       touched.add(target);
       return this._runAttempt(ctx, childSignal, target, attempt, "resume");
     });
 
-    timingMark("manager.initialEmit.before", { groupId, entries: entries.length });
+    timingMark("manager.initialEmit.before", { groupId, entries: batch.entryCount });
     batch.emit();
     timingMark("manager.initialEmit.after", { groupId });
 

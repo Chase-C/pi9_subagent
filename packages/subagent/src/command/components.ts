@@ -10,7 +10,6 @@ import {
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
 } from "../view/format.js";
-import { canClearSubagentSession, canResumeSubagentSession } from "../view/view-helpers.js";
 import type { SubagentUiSettings, WidgetPlacement } from "../ui/settings.js";
 import {
   agentInspectHelp,
@@ -246,7 +245,7 @@ export class SubagentSessionsComponent implements Component {
   private resumeSelected() {
     const session = this.sessions[this.selected];
     if (!session) return;
-    if (!canResumeSubagentSession(session)) {
+    if (!session.capabilities.canResume) {
       const detail = session.status.kind === "done" ? session.status.outcome : session.status.kind;
       this.notify(`Subagent session ${session.id} is ${detail} and cannot be resumed.`, "warning");
       return;
@@ -257,7 +256,7 @@ export class SubagentSessionsComponent implements Component {
   private clearSelected() {
     const session = this.sessions[this.selected];
     if (!session) return;
-    if (!canClearSubagentSession(session)) {
+    if (!session.capabilities.canClear) {
       const detail = session.status.kind === "done" ? session.status.outcome : session.status.kind;
       this.notify(`Subagent session ${session.id} is ${detail} and cannot be removed.`, "warning");
       return;

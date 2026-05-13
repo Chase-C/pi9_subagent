@@ -20,18 +20,6 @@ export function activeOrRetainedAgents<T extends { status: { kind: string }; res
   return agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable || a.background === true);
 }
 
-export function canResumeSubagentSession(agent: AgentView): boolean {
-  if (agent.capabilities) return agent.capabilities.canResume;
-  if (!agent.config.resumable || agent.status.kind !== "done") return false;
-  if (agent.status.outcome === "completed") return true;
-  return agent.status.startedAt === undefined;
-}
-
-export function canClearSubagentSession(agent: AgentView): boolean {
-  if (agent.capabilities) return agent.capabilities.canClear;
-  return agent.config.resumable && !isActiveStatusKind(agent.status.kind);
-}
-
 export function effectiveStatus(status: AgentViewStatus): string {
   return status.kind === "done" ? status.outcome : status.kind;
 }
