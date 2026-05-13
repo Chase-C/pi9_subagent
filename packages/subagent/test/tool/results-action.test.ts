@@ -124,3 +124,21 @@ test("subagent action=results rejects non-string sessionIds entries without call
   assert.match(result.content[0].text, /sessionIds must be an array of strings/);
   assert.equal(calls, 0);
 });
+
+test("subagent action=results rejects empty-string sessionIds without calling manager.backgroundResults", async () => {
+  let calls = 0;
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: {
+      sessions: [],
+      listSessions() { return this.sessions; },
+      async backgroundResults() { calls += 1; return []; },
+    },
+  });
+
+  const result = await tool.execute("tool-call", { action: "results", sessionIds: [""] }, undefined, undefined, baseCtx());
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /sessionIds must be an array of non-empty strings/);
+  assert.equal(calls, 0);
+});

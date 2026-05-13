@@ -83,6 +83,7 @@ export class AgentManager {
   ): Promise<BackgroundResult[]> {
     const remove = options.remove === true;
     const results: BackgroundResult[] = [];
+    const terminalIds = new Set<string>();
     for (const id of sessionIds) {
       const agent = this._agents.find(a => a.id === id);
       if (!agent) {
@@ -92,7 +93,7 @@ export class AgentManager {
       const status = agent.status;
       if (status.kind === "done" || status.kind === "resumeFailed") {
         results.push({ sessionId: id, ready: true, result: status.result });
-        if (remove) await this.remove({ sessionIds: [id] });
+        if (remove) terminalIds.add(id);
         continue;
       }
       const now = Date.now();
@@ -109,6 +110,7 @@ export class AgentManager {
       if (agent.label !== undefined) entry.label = agent.label;
       results.push(entry);
     }
+    if (terminalIds.size > 0) await this.remove({ sessionIds: Array.from(terminalIds) });
     return results;
   }
 

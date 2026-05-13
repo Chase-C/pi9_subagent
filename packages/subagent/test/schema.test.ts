@@ -99,6 +99,10 @@ test("SubagentParams accepts results action with sessionIds and optional remove 
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: false }), true);
 });
 
+test("SubagentParams rejects empty sessionId strings", () => {
+  assert.equal(Check(SubagentParams, { action: "results", sessionIds: [""] }), false);
+});
+
 test("SubagentParams rejects results action when remove is not a boolean", () => {
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: "yes" }), false);
 });

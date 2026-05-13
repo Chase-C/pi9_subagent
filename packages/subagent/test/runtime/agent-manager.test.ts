@@ -1677,6 +1677,42 @@ test("AgentManager.backgroundResults remove:true sweeps terminal entries and a f
   assert.match((second[0] as any).error, /Unknown subagent session/);
 });
 
+test("AgentManager.backgroundResults remove:true returns duplicate terminal results before sweeping", async () => {
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    return completedRun(agent, prompt, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "oneshot", prompt: "go" }],
+    undefined,
+    { background: true },
+  );
+  await batch.resultsPromise;
+  const sessionId = batch.sessions[0].id;
+
+  const results = await manager.backgroundResults([sessionId, sessionId], { remove: true });
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].sessionId, sessionId);
+  assert.equal(results[1].sessionId, sessionId);
+  assert.equal((results[0] as any).ready, true);
+  assert.equal((results[1] as any).ready, true);
+  assert.equal((results[0] as any).result.output, "done");
+  assert.equal((results[1] as any).result.output, "done");
+  assert.deepEqual(manager.listSessions(), []);
+
+  const later = await manager.backgroundResults([sessionId]);
+  assert.equal(later.length, 1);
+  assert.match((later[0] as any).error, /Unknown subagent session/);
+});
+
 test("AgentManager.backgroundResults remove:true does not remove running entries", async () => {
   let release: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });

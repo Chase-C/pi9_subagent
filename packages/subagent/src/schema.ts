@@ -30,7 +30,7 @@ export const SubagentParams = Type.Object({
   status: Type.Optional(Type.Array(Type.String(), {
     description: "Optional session status filter for action=list. Values: queued, running, completed, error, aborted, interrupted, skipped. Empty array returns no sessions.",
   })),
-  sessionIds: Type.Optional(Type.Array(Type.String(), { description: "Subagent session ids targeted by action=remove or action=results. For action=remove, mutually exclusive with scope." })),
+  sessionIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "Subagent session ids targeted by action=remove or action=results. For action=remove, mutually exclusive with scope." })),
   scope: Type.Optional(Type.String({
     description: "Removal scope for action=remove. One of 'background' | 'retained' | 'non-running'. Mutually exclusive with sessionIds.",
   })),

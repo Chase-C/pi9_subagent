@@ -46,6 +46,10 @@ function validateRemoveSessionIds(sessionIds: unknown): sessionIds is string[] {
   return Array.isArray(sessionIds) && sessionIds.every(id => typeof id === "string");
 }
 
+function validateNonEmptySessionIds(sessionIds: unknown): sessionIds is string[] {
+  return Array.isArray(sessionIds) && sessionIds.every(id => typeof id === "string" && id.trim() !== "");
+}
+
 function toolResult(details: object, isError = false) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }],
@@ -249,6 +253,9 @@ Execution notes:
         const { sessionIds } = params;
         if (!validateRemoveSessionIds(sessionIds)) {
           return errorResult("results sessionIds must be an array of strings.");
+        }
+        if (!validateNonEmptySessionIds(sessionIds)) {
+          return errorResult("results sessionIds must be an array of non-empty strings.");
         }
         if (sessionIds.length === 0) {
           return errorResult("results requires at least one sessionId.");
