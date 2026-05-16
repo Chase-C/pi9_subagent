@@ -6,6 +6,7 @@ import {
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
   formatSubagentToolLines,
+  formatWidgetLines,
   inventoryDetails,
   runDetails,
 } from "../../src/view/format.js";
@@ -98,6 +99,61 @@ test("background-started view expanded shows one line per session with session i
   assert.match(expanded, /reviewer/);
   assert.match(expanded, /rev-1/);
   assert.match(expanded, /running/);
+});
+
+test("flat sessions (no parentSessionId) render with no indentation in widget and inventory", () => {
+  const a = fakeAgent({ id: "a", config: { name: "alpha" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const b = fakeAgent({ id: "b", config: { name: "beta" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+  const orphan = fakeAgent({ id: "c", parentSessionId: "missing-parent", config: { name: "orphan" }, createdAt: 3, status: { kind: "running", startedAt: 1 } });
+
+  const widgetLines = formatWidgetLines([a, b, orphan], 1_000);
+  for (const line of widgetLines) assert.doesNotMatch(line, /^ /);
+
+  const inventoryLines = formatSubagentToolLines(inventoryDetails([a, b, orphan]), true, 1_000);
+  const headLines = inventoryLines.filter(line => line.includes(" · running "));
+  assert.equal(headLines.length, 3);
+  for (const line of headLines) assert.doesNotMatch(line, /^ /);
+});
+
+test("inventory expanded output orders descendants DFS under their parents with depth indent", () => {
+  const root = fakeAgent({ id: "r1", config: { name: "alpha" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const root2 = fakeAgent({ id: "r2", config: { name: "delta" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+  const child = fakeAgent({ id: "c1", parentSessionId: "r1", config: { name: "beta" }, createdAt: 3, status: { kind: "running", startedAt: 1 } });
+  const grandchild = fakeAgent({ id: "g1", parentSessionId: "c1", config: { name: "gamma" }, createdAt: 4, status: { kind: "running", startedAt: 1 } });
+
+  const lines = formatSubagentToolLines(inventoryDetails([child, root, grandchild, root2]), true, 1_000);
+  const headLines = lines.filter(line => line.includes(" · running "));
+
+  assert.equal(headLines.length, 4);
+  assert.match(headLines[0], /^alpha /);
+  assert.match(headLines[1], /^  beta /);
+  assert.match(headLines[2], /^    gamma /);
+  assert.match(headLines[3], /^delta /);
+});
+
+test("formatWidgetLines renders a 2-level tree with depth-based indentation", () => {
+  const root = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const childA = fakeAgent({ id: "child-a", parentSessionId: "root", config: { name: "child-a" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+  const childB = fakeAgent({ id: "child-b", parentSessionId: "root", config: { name: "child-b" }, createdAt: 3, status: { kind: "running", startedAt: 1 } });
+  const grandchild = fakeAgent({ id: "grand", parentSessionId: "child-a", config: { name: "grand" }, createdAt: 4, status: { kind: "running", startedAt: 1 } });
+
+  const lines = formatWidgetLines([root, childA, childB, grandchild], 1_000);
+
+  assert.equal(lines.length, 4);
+  assert.match(lines[0], /^root /);
+  assert.match(lines[1], /^  child-a /);
+  assert.match(lines[2], /^    grand /);
+  assert.match(lines[3], /^  child-b /);
+});
+
+test("inventoryDetails passes parentSessionId through to each session view", () => {
+  const root = fakeAgent({ id: "root", createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const child = fakeAgent({ id: "child", parentSessionId: "root", createdAt: 2, status: { kind: "running", startedAt: 1 } });
+
+  const details = inventoryDetails([root, child]);
+
+  assert.equal(details.sessions[0].parentSessionId, undefined);
+  assert.equal(details.sessions[1].parentSessionId, "root");
 });
 
 test("subagent session inspect output uses remove terminology", () => {

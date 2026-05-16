@@ -148,7 +148,34 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
 export function formatWidgetLines(agents: AgentView[], now = Date.now()): string[] {
   const settings = getSubagentDisplaySettings();
   const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || (settings.widgetShowRetainedSessions && a.config.resumable));
-  return visible.map(agent => formatSessionLine(agent, now));
+  return orderAsTree(visible).map(({ agent, depth }) => `${"  ".repeat(depth)}${formatSessionLine(agent, now)}`);
+}
+
+function orderAsTree(sessions: readonly AgentView[]): Array<{ agent: AgentView; depth: number }> {
+  const presentIds = new Set(sessions.map(s => s.id));
+  const rootKey = "";
+  const childrenByParent = new Map<string, AgentView[]>();
+  for (const session of sessions) {
+    const parentKey = session.parentSessionId && presentIds.has(session.parentSessionId) ? session.parentSessionId : rootKey;
+    const bucket = childrenByParent.get(parentKey);
+    if (bucket) bucket.push(session);
+    else childrenByParent.set(parentKey, [session]);
+  }
+  for (const bucket of childrenByParent.values()) {
+    bucket.sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  const out: Array<{ agent: AgentView; depth: number }> = [];
+  const visit = (parentKey: string, depth: number) => {
+    const children = childrenByParent.get(parentKey);
+    if (!children) return;
+    for (const child of children) {
+      out.push({ agent: child, depth });
+      visit(child.id, depth + 1);
+    }
+  };
+  visit(rootKey, 0);
+  return out;
 }
 
 export function formatSubagentToolLines(
@@ -197,14 +224,15 @@ function formatSubagentToolDisplayLines(
       if (!expanded && sessions.length > 1) {
         return [formatViewGroupLine(serializeGroup(sessions), filter)];
       }
+      const ordered = orderAsTree(sessions);
       return expanded
-        ? sessions.flatMap((row, index) => expandedLines(
-            { text: formatSessionLine(row, now, bold), status: statusPresentation(row.status).color },
+        ? ordered.flatMap(({ agent: row, depth }, index) => expandedLines(
+            { text: `${"  ".repeat(depth)}${formatSessionLine(row, now, bold)}`, status: statusPresentation(row.status).color },
             row,
             false,
-            index < sessions.length - 1,
+            index < ordered.length - 1,
           ))
-        : sessions.map(row => ({ text: formatSessionLine(row, now, bold), status: statusPresentation(row.status).color }));
+        : ordered.map(({ agent: row, depth }) => ({ text: `${"  ".repeat(depth)}${formatSessionLine(row, now, bold)}`, status: statusPresentation(row.status).color }));
     }
 
     case "remove-summary":

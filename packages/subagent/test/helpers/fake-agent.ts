@@ -47,6 +47,7 @@ type FakeStatusInput =
 export interface FakeAgentOptions {
   id?: string;
   inputIndex?: number;
+  parentSessionId?: string;
   label?: string;
   prompt?: string;
   createdAt?: number;
@@ -156,6 +157,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentView {
   return {
     id: rest.id ?? "s1",
     ...(rest.inputIndex !== undefined ? { inputIndex: rest.inputIndex } : {}),
+    ...(rest.parentSessionId !== undefined ? { parentSessionId: rest.parentSessionId } : {}),
     ...(rest.label !== undefined ? { label: rest.label } : {}),
     ...(rest.prompt !== undefined ? { prompt: rest.prompt } : {}),
     createdAt: rest.createdAt ?? 1,
