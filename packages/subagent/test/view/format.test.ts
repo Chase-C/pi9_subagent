@@ -163,6 +163,32 @@ test("inventoryDetails passes parentSessionId through to each session view", () 
   assert.equal(details.sessions[1].parentSessionId, "root");
 });
 
+test("subagent run renders the flat batch shape and ignores parentSessionId when details.subtree is absent", () => {
+  const root = fakeAgent({ id: "r", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  // A second batch session that happens to declare a parent — should NOT be indented in run rendering.
+  const sibling = fakeAgent({ id: "s", parentSessionId: "r", config: { name: "sibling" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+
+  const details = runDetails(serializeGroup([root, sibling]));
+  const lines = formatSubagentToolLines(details, false, 0);
+
+  assert.match(lines[0], /^  ⠋ root/);
+  assert.match(lines[1], /^  ⠋ sibling/);
+});
+
+test("subagent run renders details.subtree as a depth-indented tree when present", () => {
+  const root = fakeAgent({ id: "r", config: { name: "alpha" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const child = fakeAgent({ id: "c", parentSessionId: "r", config: { name: "beta" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+  const grand = fakeAgent({ id: "g", parentSessionId: "c", config: { name: "gamma" }, createdAt: 3, status: { kind: "running", startedAt: 1 } });
+
+  const details = runDetails(serializeGroup([root]), { subtree: [root, child, grand] });
+  const lines = formatSubagentToolLines(details, false, 0);
+
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /^  ⠋ alpha/);
+  assert.match(lines[1], /^    ⠋ beta/);
+  assert.match(lines[2], /^      ⠋ gamma/);
+});
+
 test("subagent session inspect output uses remove terminology", () => {
   const retainedSession = fakeAgent({
     config: { resumable: true },

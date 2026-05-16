@@ -2661,5 +2661,151 @@ test("cancelNonBackgroundDescendantsOf treats agents promoted via promoteToBackg
   assert.equal(result.status, "completed");
 });
 
+test("AgentManager.subtreeOf returns just the root when the root has no descendants", async () => {
+  let release!: () => void;
+  const blocker = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    await blocker;
+    return completedRun(agent, "ok");
+  };
+  const registry: FakeRegistry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "root" }],
+    undefined,
+    { background: false },
+  );
+
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const rootId = manager.listSessions()[0].id;
+  const subtree = manager.subtreeOf([rootId]);
+
+  assert.equal(subtree.length, 1);
+  assert.equal(subtree[0].id, rootId);
+
+  release();
+  await batch.resultsPromise;
+});
+
+test("AgentManager.subtreeOf walks a root → child → grandchild chain", async () => {
+  let release!: () => void;
+  const blocker = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    await blocker;
+    return completedRun(agent, "ok");
+  };
+  const registry: FakeRegistry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 4, runner);
+
+  const rootBatch = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "root" }],
+    undefined, { background: false },
+  );
+  await new Promise(r => setTimeout(r, 10));
+  const rootId = manager.listSessions()[0].id;
+  const childBatch = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "child" }],
+    undefined, { background: false, parentSessionId: rootId },
+  );
+  await new Promise(r => setTimeout(r, 10));
+  const childId = manager.listSessions().find(s => s.parentSessionId === rootId)!.id;
+  const grandBatch = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "grand" }],
+    undefined, { background: false, parentSessionId: childId },
+  );
+  await new Promise(r => setTimeout(r, 10));
+
+  const subtree = manager.subtreeOf([rootId]);
+  assert.deepEqual(
+    subtree.map(s => ({ id: s.id, parent: s.parentSessionId })),
+    [
+      { id: rootId, parent: undefined },
+      { id: childId, parent: rootId },
+      { id: manager.listSessions().find(s => s.parentSessionId === childId)!.id, parent: childId },
+    ],
+  );
+
+  release();
+  await Promise.all([rootBatch.resultsPromise, childBatch.resultsPromise, grandBatch.resultsPromise]);
+});
+
+test("AgentManager.subtreeOf orders siblings by createdAt and roots by input order", async () => {
+  let release!: () => void;
+  const blocker = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    await blocker;
+    return completedRun(agent, "ok");
+  };
+  const registry: FakeRegistry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 8, runner);
+
+  // Two roots; the second one starts first so we can later assert input order wins over createdAt.
+  const rootB = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "rootB" }],
+    undefined, { background: false },
+  );
+  await new Promise(r => setTimeout(r, 5));
+  const rootA = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "rootA" }],
+    undefined, { background: false },
+  );
+  await new Promise(r => setTimeout(r, 5));
+  const rootBId = manager.listSessions().find(s => s.id && manager.listSessions().filter(x => x.parentSessionId === undefined)[0].id === s.id)!.id;
+  const allRoots = manager.listSessions().filter(s => s.parentSessionId === undefined);
+  // rootB was created first, rootA second.
+  assert.equal(allRoots.length, 2);
+  const rootBActualId = allRoots[0].id;
+  const rootAActualId = allRoots[1].id;
+
+  // Under rootA, add two children — the SECOND one created should sort after the first.
+  const childA1 = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "child-a1" }],
+    undefined, { background: false, parentSessionId: rootAActualId },
+  );
+  await new Promise(r => setTimeout(r, 5));
+  const childA2 = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "child-a2" }],
+    undefined, { background: false, parentSessionId: rootAActualId },
+  );
+  await new Promise(r => setTimeout(r, 5));
+
+  const childAIds = manager.listSessions()
+    .filter(s => s.parentSessionId === rootAActualId)
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map(s => s.id);
+
+  // Caller passes rootA first, even though rootB was created earlier.
+  const subtree = manager.subtreeOf([rootAActualId, rootBActualId]);
+  assert.deepEqual(subtree.map(s => s.id), [rootAActualId, ...childAIds, rootBActualId]);
+
+  void rootBId;
+  release();
+  await Promise.all([rootB.resultsPromise, rootA.resultsPromise, childA1.resultsPromise, childA2.resultsPromise]);
+});
+
+test("AgentManager.subtreeOf returns an empty list when the requested root id is unknown", async () => {
+  const registry: FakeRegistry = { agents: new Map() };
+  const manager = new AgentManager(registry as any, 4, async () => ({ status: "completed" }) as any);
+  assert.deepEqual(manager.subtreeOf(["never-existed"]), []);
+});
+
 // Suppress unused-variable warnings for shared types.
 void undefined as unknown as AnyManager;

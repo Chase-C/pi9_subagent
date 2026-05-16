@@ -450,3 +450,121 @@ test("subagent action=run rejects a task carrying both agent and sessionId at pa
   assert.equal(runCalls, 0);
   assert.match(result.content[0].text, /both agent and sessionId/);
 });
+
+test("a late-arriving grandchild status change triggers a partial re-emit with the grandchild visible", async () => {
+  const partials: any[] = [];
+  const rootView = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  let grandchildArrived = false;
+  let capturedListener: any;
+  let resolveBatch!: () => void;
+
+  const fakeManager = {
+    listSessions(): any[] { return grandchildArrived ? [rootView, grandView()] : [rootView]; },
+    subtreeOf(rootIds: string[]) {
+      if (!rootIds.includes("root")) return [];
+      return grandchildArrived ? [rootView, grandView()] : [rootView];
+    },
+    onAgentUpdate(listener: any) {
+      capturedListener = listener;
+      return () => { capturedListener = undefined; };
+    },
+    suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
+    startBatch(_ctx: any, _signal: any, _tasks: any[], _onUpdate: any) {
+      // Don't emit any batch updates ourselves — let the cross-batch listener be the only source.
+      const resultsPromise = new Promise<any[]>(resolve => {
+        resolveBatch = () => resolve([{ agent: "root", prompt: "go", status: "completed", output: "ok", sessionId: "root", resumable: false, resumed: false }]);
+      });
+      return { groupId: "g1", sessions: [rootView], resultsPromise };
+    },
+  };
+
+  function grandView() {
+    return fakeAgent({ id: "grand", parentSessionId: "root", config: { name: "grand" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+  }
+
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
+  });
+
+  const executePromise = tool.execute(
+    "tool-call",
+    { action: "run", tasks: [{ agent: "root", prompt: "go" }] },
+    undefined,
+    (partial: any) => partials.push(partial),
+    baseCtx(),
+  );
+
+  // Wait for the tool to register its cross-batch listener.
+  await new Promise(r => setTimeout(r, 10));
+  assert.ok(capturedListener, "expected the tool to register an onAgentUpdate listener");
+
+  // Simulate the grandchild's first status change.
+  grandchildArrived = true;
+  capturedListener({ id: "grand", parentSessionId: "root", agentName: "grand" }, "status");
+
+  await new Promise(r => setTimeout(r, 50));
+  resolveBatch();
+  await executePromise;
+
+  const lastPartialWithSubtree = partials.filter(p => Array.isArray(p.details.subtree)).at(-1);
+  assert.ok(lastPartialWithSubtree, "expected at least one partial with a subtree");
+  assert.deepEqual(
+    lastPartialWithSubtree.details.subtree.map((s: any) => s.id),
+    ["root", "grand"],
+  );
+});
+
+test("partial tool results carry the full descendant subtree; final tool result stays flat", async () => {
+  const partials: any[] = [];
+  const rootView = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const childView = fakeAgent({ id: "child", parentSessionId: "root", config: { name: "child" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+
+  const fakeManager = {
+    listSessions(): any[] { return [rootView, childView]; },
+    subtreeOf(rootIds: string[]) {
+      // For any call that includes "root" as a root id, return both root and child.
+      if (rootIds.includes("root")) return [rootView, childView];
+      return [];
+    },
+    onAgentUpdate(_listener: any) { return () => {}; },
+    suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
+    startBatch(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
+      // Drive one partial update first, then resolve with the final flat result.
+      Promise.resolve().then(() => {
+        onUpdate({ sessions: [rootView], active: true });
+      });
+      const resultsPromise = new Promise<any[]>(resolve => {
+        setTimeout(() => resolve([{ agent: "root", prompt: "go", status: "completed", output: "ok", sessionId: "root", resumable: false, resumed: false }]), 10);
+      });
+      return { groupId: "g1", sessions: [rootView], resultsPromise };
+    },
+  };
+
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
+  });
+
+  const final = await tool.execute(
+    "tool-call",
+    { action: "run", tasks: [{ agent: "root", prompt: "go" }] },
+    undefined,
+    (partial: any) => partials.push(partial),
+    baseCtx(),
+  );
+
+  // Partial(s) include the subtree (both root and child visible)
+  assert.ok(partials.length >= 1, `expected at least one partial; got ${partials.length}`);
+  const lastPartial = partials[partials.length - 1];
+  assert.deepEqual(
+    (lastPartial.details.subtree ?? []).map((s: any) => s.id),
+    ["root", "child"],
+  );
+
+  // Final result does NOT include subtree — stays flat batch-only
+  assert.equal(final.details.subtree, undefined);
+  assert.deepEqual(final.details.group.sessions.map((s: any) => s.id), ["root"]);
+});

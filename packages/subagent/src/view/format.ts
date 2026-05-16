@@ -41,7 +41,7 @@ export type InventoryFilter = { status?: string[] };
 
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
-  | { view: "run"; group: AgentGroupView; results?: unknown; active?: boolean }
+  | { view: "run"; group: AgentGroupView; results?: unknown; active?: boolean; subtree?: AgentView[] }
   | { view: "inventory"; sessions: AgentView[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
   | { view: "background-started"; sessions: AgentView[]; background: true }
@@ -60,7 +60,7 @@ export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
 
 export function runDetails(
   group: AgentGroupView,
-  extras: { results?: unknown; active?: boolean } = {},
+  extras: { results?: unknown; active?: boolean; subtree?: AgentView[] } = {},
 ): RunDetails {
   return { view: "run", group, ...extras };
 }
@@ -212,6 +212,18 @@ function formatSubagentToolDisplayLines(
       return formatAgentListLines(narrowed.agents, expanded, bold).map(text => ({ text }));
 
     case "run": {
+      if (narrowed.subtree && narrowed.subtree.length > 0) {
+        const ordered = orderAsTree(narrowed.subtree);
+        const indent = (depth: number, line: DisplayLine): DisplayLine => ({
+          ...line,
+          text: `${"  ".repeat(depth)}${line.text}`,
+        });
+        if (!expanded) {
+          return ordered.map(({ agent: row, depth }) => indent(depth, formatRunSessionLine(row, now, bold)));
+        }
+        return ordered.flatMap(({ agent: row, depth }, index) =>
+          expandedLines(indent(depth, formatRunSessionLine(row, now, bold)), row, true, index < ordered.length - 1));
+      }
       const { sessions } = narrowed.group;
       if (!expanded) return sessions.map(row => formatRunSessionLine(row, now, bold));
       return sessions.flatMap((row, index) =>
@@ -350,9 +362,14 @@ function narrowDetails(details: unknown): SubagentDetails | undefined {
     case "agents":
       return Array.isArray(record.agents) ? { view: "agents", agents: record.agents as AgentListingEntry[] } : undefined;
     case "run":
-      return record.group && typeof record.group === "object"
-        ? { view: "run", group: record.group as AgentGroupView }
-        : undefined;
+      if (!record.group || typeof record.group !== "object") return undefined;
+      return {
+        view: "run",
+        group: record.group as AgentGroupView,
+        ...(Array.isArray((record as { subtree?: unknown }).subtree)
+          ? { subtree: (record as { subtree: AgentView[] }).subtree }
+          : {}),
+      };
     case "inventory":
       return Array.isArray(record.sessions)
         ? {

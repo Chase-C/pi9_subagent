@@ -6,6 +6,7 @@ import { Attempt } from "./agent-attempt.js";
 import { buildAgentResult, type AgentRunResult } from "./agent-result.js";
 import type { AgentUpdateKind, AgentView, AgentViewStatus } from "./agent-view.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
+import { timingMark } from "../runtime/timing.js";
 import { compact, compactMultiline, getSubagentDisplaySettings } from "../view/view-helpers.js";
 
 export type AgentStatus =
@@ -58,6 +59,7 @@ export class Agent {
 
   promoteToBackground() {
     if (this._background) return;
+    timingMark("agent.promoteToBackground", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId });
     this._background = true;
     this._emit("status");
   }
@@ -185,8 +187,12 @@ export class Agent {
 
   async abort(reason?: string): Promise<void> {
     const current = this._current;
-    if (!current) return;
+    if (!current) {
+      timingMark("agent.abort.noop", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId, reason });
+      return;
+    }
     const resumed = current.kind === "resume";
+    timingMark("agent.abort.invoke", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId, currentStateKind: current.state.kind, attemptKind: current.kind, reason });
     if (current.state.kind === "running") {
       const session = current.state.session;
       await Promise.resolve(session.abort()).catch(() => undefined);
@@ -204,6 +210,7 @@ export class Agent {
     if (!current || current.state.kind !== "queued") {
       throw new Error(`Cannot attach a session to an agent that is ${this._describe()}.`);
     }
+    timingMark("agent.attach", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId, attemptKind: current.kind });
     this._unsubscribe = this._activity.subscribe(session);
     current.attach(session);
     if (current.resumableOverride !== undefined) {
@@ -217,6 +224,7 @@ export class Agent {
   settle(result: AgentRunResult): void {
     const current = this._current;
     if (!current) return;
+    timingMark("agent.settle", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId, outcome: result.status, attemptKind: current.kind });
     this._finishSubscription();
     current.settle(result);
     this._lastAttempt = current;

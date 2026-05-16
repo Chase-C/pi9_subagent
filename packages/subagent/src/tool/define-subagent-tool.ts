@@ -2,7 +2,7 @@ import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-age
 import { Text } from "@earendil-works/pi-tui";
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
-import type { SubagentBatchUpdate } from "../domain/agent-view.js";
+import type { AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { timingMark, timingStart, timingSync } from "../runtime/timing.js";
 import { isSessionStatus, parseTask, SESSION_STATUSES, SubagentParams, type SessionStatus, type TaskRequest } from "../schema.js";
@@ -108,8 +108,11 @@ function errorResult(message: string, details: Record<string, unknown> = { }) {
   };
 }
 
-function partialToolResult(update: SubagentBatchUpdate) {
-  const details = runDetails(serializeGroup(update.sessions), { active: update.active });
+function partialToolResult(update: SubagentBatchUpdate, subtree?: AgentView[]) {
+  const details = runDetails(serializeGroup(update.sessions), {
+    active: update.active,
+    ...(subtree && subtree.length > 0 ? { subtree } : {}),
+  });
   return {
     content: [{ type: "text" as const, text: formatSubagentToolLines(details, true).join("\n") }],
     details,
@@ -215,15 +218,35 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
           }
 
           const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length, isChild: parentSessionId !== undefined });
-          const batch = agentManager.startBatch(ctx, signal, parsed, update => {
-            timingMark("tool.update.received", { sessionCount: update.sessions.length, active: update.active });
-            const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length }, () => partialToolResult(update));
+          let lastUpdate: SubagentBatchUpdate | undefined;
+          const emitPartial = () => {
+            if (!lastUpdate) return;
+            const update = lastUpdate;
+            const rootIds = update.sessions.map(s => s.id);
+            const subtree = agentManager.subtreeOf?.(rootIds) ?? [];
+            const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length, subtreeCount: subtree.length }, () => partialToolResult(update, subtree));
             timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
             timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, getCurrentSettings()));
+          };
+          const batch = agentManager.startBatch(ctx, signal, parsed, update => {
+            timingMark("tool.update.received", { sessionCount: update.sessions.length, active: update.active });
+            lastUpdate = update;
+            emitPartial();
           }, batchOptions);
+          // Cross-batch subscription: a descendant in our subtree (different batch's agent) changes
+          // status — re-emit so the parent's tool row reflects the live tree. Seed `lastUpdate`
+          // so a descendant firing before our own batch can still render against the initial roots.
+          if (!lastUpdate) lastUpdate = { sessions: batch.sessions, active: true };
+          const rootIdSet = new Set(batch.sessions.map(s => s.id));
+          const unsubscribeCrossBatch = agentManager.onAgentUpdate?.(updatedAgent => {
+            if (rootIdSet.has(updatedAgent.id)) return; // batch listener already handles roots
+            const subtree = agentManager.subtreeOf?.(Array.from(rootIdSet)) ?? [];
+            if (!subtree.some(s => s.id === updatedAgent.id)) return;
+            emitPartial();
+          });
           const results = parentSessionId !== undefined
-            ? await agentManager.suspendAgentSlotDuring(parentSessionId, () => batch.resultsPromise)
-            : await batch.resultsPromise;
+            ? await agentManager.suspendAgentSlotDuring(parentSessionId, () => batch.resultsPromise).finally(() => unsubscribeCrossBatch?.())
+            : await batch.resultsPromise.finally(() => unsubscribeCrossBatch?.());
           runEnd({ ok: true, resultCount: results.length });
           timingSync("tool.finalWidget", { sessionCount: agentManager.listSessions().length }, () => updateSubagentWidget(ctx, agentManager.listSessions(), getCurrentSettings()));
           const isError = results.some(result => result.status !== "completed");

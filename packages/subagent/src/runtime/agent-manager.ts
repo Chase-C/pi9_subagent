@@ -71,6 +71,32 @@ export class AgentManager {
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
   }
 
+  /**
+   * Returns the union of the named roots and every descendant reachable through `parentSessionId`,
+   * as `AgentView`s. Roots appear in input order; descendants under each parent are sorted by
+   * `createdAt` ascending. Missing root ids are skipped silently. Live-view helper for the `run`
+   * tool's partial updates; callers must not assume completeness across recursive `_agents` sweeps.
+   */
+  subtreeOf(rootIds: string[]): AgentView[] {
+    const byId = new Map<string, Agent>();
+    for (const agent of this._agents) byId.set(agent.id, agent);
+
+    const out: AgentView[] = [];
+    const seen = new Set<string>();
+    const visit = (id: string) => {
+      if (seen.has(id)) return;
+      const agent = byId.get(id);
+      if (!agent) return;
+      seen.add(id);
+      out.push(agent.toView());
+      const children = this._agents.filter(a => a.parentSessionId === id);
+      children.sort((a, b) => a.createdAt - b.createdAt);
+      for (const child of children) visit(child.id);
+    };
+    for (const id of rootIds) visit(id);
+    return out;
+  }
+
   configure(options: { maxRunning?: number }) {
     if (options.maxRunning !== undefined) this._queue.maxRunning = options.maxRunning;
   }
@@ -102,7 +128,9 @@ export class AgentManager {
    */
   async abortDescendantsOf(parentSessionId: string): Promise<void> {
     const directChildren = this._agents.filter(a => a.parentSessionId === parentSessionId);
+    timingMark("manager.abortDescendants.walk", { parentSessionId, directChildCount: directChildren.length });
     for (const child of directChildren) {
+      timingMark("manager.abortDescendants.child", { parentSessionId, childId: child.id, agent: child.agentName, statusKind: child.status.kind, background: child.background });
       await this.abortDescendantsOf(child.id);
       await child.abort();
     }
@@ -115,8 +143,13 @@ export class AgentManager {
    */
   async cancelNonBackgroundDescendantsOf(parentSessionId: string, reason: string): Promise<void> {
     const directChildren = this._agents.filter(a => a.parentSessionId === parentSessionId);
+    timingMark("manager.cancelNonBackgroundDescendants.walk", { parentSessionId, directChildCount: directChildren.length, reason });
     for (const child of directChildren) {
-      if (child.background) continue;
+      if (child.background) {
+        timingMark("manager.cancelNonBackgroundDescendants.skipBackground", { parentSessionId, childId: child.id, agent: child.agentName });
+        continue;
+      }
+      timingMark("manager.cancelNonBackgroundDescendants.child", { parentSessionId, childId: child.id, agent: child.agentName, statusKind: child.status.kind });
       await this.cancelNonBackgroundDescendantsOf(child.id, reason);
       await child.abort(reason);
     }
@@ -135,8 +168,16 @@ export class AgentManager {
    */
   async suspendAgentSlotDuring<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
     const lease = this._leases.get(sessionId);
-    if (!lease) return fn();
-    return lease.suspendDuring(fn);
+    if (!lease) {
+      timingMark("manager.suspendAgentSlot.skip", { sessionId, reason: "no-active-lease" });
+      return fn();
+    }
+    const end = timingStart("manager.suspendAgentSlot", { sessionId });
+    try {
+      return await lease.suspendDuring(fn);
+    } finally {
+      end({});
+    }
   }
 
   async backgroundResults(
@@ -252,7 +293,7 @@ export class AgentManager {
   ): { groupId: string; sessions: AgentView[]; resultsPromise: Promise<AgentRunResult[]> } {
     const groupId = randomUUID();
     const groupCreatedAt = Date.now();
-    timingMark("manager.run.start", { groupId, taskCount: tasks.length, background: options.background });
+    timingMark("manager.run.start", { groupId, taskCount: tasks.length, background: options.background, parentSessionId: options.parentSessionId });
 
     const controller = options.background ? new AbortController() : undefined;
     const batch = new BatchRun(groupId, onUpdate);
@@ -274,7 +315,7 @@ export class AgentManager {
             groupId, inputIndex, createdAt: groupCreatedAt, task, error,
           });
           batch.addStaticView(view, inputIndex, false);
-          timingMark("manager.task.preflightFailure", { groupId, inputIndex, agent: task.agent });
+          timingMark("manager.task.preflightFailure", { groupId, inputIndex, agent: task.agent, parentSessionId: options.parentSessionId });
           return Promise.resolve(result);
         }
 
@@ -284,7 +325,7 @@ export class AgentManager {
         });
         agent.on(this._agentUpdate.bind(this));
         batch.addAgent(agent, inputIndex, false);
-        timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id });
+        timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id, parentSessionId: options.parentSessionId, background: options.background });
         this._agents.push(agent);
         this._agentBatch.set(agent.id, groupId);
         touched.add(agent);
@@ -305,14 +346,14 @@ export class AgentManager {
           groupId, inputIndex, createdAt: groupCreatedAt, task, target, error: error!,
         });
         batch.addStaticView(view, inputIndex, true);
-        timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId });
+        timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId, parentSessionId: options.parentSessionId });
         return Promise.resolve(result);
       }
 
       const attempt = target.startResume(task);
       if (options.background) target.promoteToBackground();
       batch.addAgent(target, inputIndex, true);
-      timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id });
+      timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id, parentSessionId: options.parentSessionId, targetParentSessionId: target.parentSessionId, background: options.background });
       this._agentBatch.set(target.id, groupId);
       touched.add(target);
       return this._runAttempt(ctx, childSignal, target, attempt);
@@ -349,8 +390,19 @@ export class AgentManager {
   }
 
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
-    for (const listener of this._updateListeners) listener(agent, kind);
+    const status = agent.status;
     const groupId = this._agentBatch.get(agent.id);
+    timingMark("manager.agentUpdate", {
+      sessionId: agent.id,
+      agent: agent.agentName,
+      parentSessionId: agent.parentSessionId,
+      kind,
+      statusKind: status.kind,
+      ...(status.kind === "done" ? { outcome: status.result.status } : {}),
+      background: agent.background,
+      ...(groupId !== undefined ? { groupId } : {}),
+    });
+    for (const listener of this._updateListeners) listener(agent, kind);
     if (groupId) {
       const batch = this._activeBatches.get(groupId);
       if (batch) batch.handleAgentUpdate(kind);
@@ -363,8 +415,12 @@ export class AgentManager {
       const outcome = this._terminalOutcome(agent);
       if (outcome === "aborted" || outcome === "error") {
         const reason = `Parent ${agent.id} finalized as ${outcome}`;
+        const fanoutEnd = timingStart("manager.parentFinalize.fanout", { sessionId: agent.id, agent: agent.agentName, outcome });
         const promise = this.cancelNonBackgroundDescendantsOf(agent.id, reason)
-          .finally(() => this._pendingFanouts.delete(agent.id));
+          .finally(() => {
+            this._pendingFanouts.delete(agent.id);
+            fanoutEnd({});
+          });
         this._pendingFanouts.set(agent.id, promise);
       }
     }
@@ -384,7 +440,7 @@ export class AgentManager {
     const kind = attempt.kind;
     const resumed = kind === "resume";
     return this._queue.enqueue(async lease => {
-      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id });
+      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentSessionId });
       if (signal?.aborted || !this._agents.includes(agent)) {
         const result = skippedRun(agent, resumed);
         end({ status: result.status });
@@ -414,6 +470,6 @@ export class AgentManager {
       } finally {
         this._leases.delete(agent.id);
       }
-    }, { agent: agent.agentName, sessionId: agent.id, kind });
+    }, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentSessionId, kind });
   }
 }
