@@ -35,12 +35,20 @@ test("emits timing instrumentation events when PI_SUBAGENT_DEBUG_TIMING is enabl
   const badEntry = join(agentDir, "extensions", "bad.ts");
   await writeFile(okEntry, "export default () => {};");
   await writeFile(badEntry, "export default () => {};");
+  const invalidEntry = join(agentDir, "extensions", "invalid.ts");
+  await writeFile(invalidEntry, "export const value = 1;");
+  const removedEntry = join(agentDir, "extensions", "removed.ts");
+  await writeFile(removedEntry, "export default () => {};");
 
   let calls = 0;
   const cache = new ExtensionFactoryCache({
     importFactory: async (p: string) => {
       calls += 1;
-      if (p === badEntry) throw new Error("boom");
+      if (p === badEntry) {
+        await rm(removedEntry);
+        throw new Error("boom");
+      }
+      if (p === invalidEntry) return undefined;
       return () => {};
     },
   });
@@ -63,6 +71,8 @@ test("emits timing instrumentation events when PI_SUBAGENT_DEBUG_TIMING is enabl
     "extensionFactoryCache.fallbackOnError",
     "extensionFactoryCache.fallbackOnBypass",
     "extensionFactoryCache.invalidate",
+    "extensionFactoryCache.invalidModule",
+    "extensionFactoryCache.skip",
   ];
   for (const event of expected) {
     assert.match(log, new RegExp(`event=${event}\\b`), `missing event ${event}`);
@@ -317,7 +327,7 @@ test("discovers index.ts and index.js entrypoints in subdirectories", async () =
   assert.deepEqual([...imported].sort(), [tsEntry, jsEntry].sort());
 });
 
-test("discovers .ts and .js file entrypoints in agentDir/extensions and cwd/.pi/extensions", async () => {
+test("discovers project extension entrypoints before agentDir entrypoints", async () => {
   const { agentDir, cwd } = await makeWorkspace();
   const globalTs = join(agentDir, "extensions", "alpha.ts");
   const globalJs = join(agentDir, "extensions", "beta.js");
@@ -340,5 +350,9 @@ test("discovers .ts and .js file entrypoints in agentDir/extensions and cwd/.pi/
 
   assert.equal(result.factories.length, 4);
   assert.deepEqual(result.fallbackPaths, []);
-  assert.deepEqual([...imported].sort(), [globalTs, globalJs, projectTs, projectJs].sort());
+  assert.deepEqual(new Set(imported), new Set([globalTs, globalJs, projectTs, projectJs]));
+  assert.ok(imported.indexOf(projectTs) < imported.indexOf(globalTs));
+  assert.ok(imported.indexOf(projectTs) < imported.indexOf(globalJs));
+  assert.ok(imported.indexOf(projectJs) < imported.indexOf(globalTs));
+  assert.ok(imported.indexOf(projectJs) < imported.indexOf(globalJs));
 });

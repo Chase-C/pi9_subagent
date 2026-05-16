@@ -46,7 +46,7 @@ export class ExtensionFactoryCache {
   }
 
   async load(cwd: string, agentDir: string): Promise<ExtensionFactoryLoad> {
-    const roots = [path.join(agentDir, "extensions"), path.join(cwd, ".pi", "extensions")];
+    const roots = [path.join(cwd, ".pi", "extensions"), path.join(agentDir, "extensions")];
     const seen = new Set<string>();
     const paths: string[] = [];
     const endDiscover = timingStart("extensionFactoryCache.discover", { cwd, agentDir });
@@ -67,7 +67,10 @@ export class ExtensionFactoryCache {
     }
     for (const entry of paths) {
       const meta = await statMeta(entry);
-      if (!meta) continue;
+      if (!meta) {
+        timingMark("extensionFactoryCache.skip", { path: entry, reason: "statFailed" });
+        continue;
+      }
       const cached = this.entries.get(entry);
       if (cached && cached.mtimeMs === meta.mtimeMs && cached.size === meta.size) {
         timingMark("extensionFactoryCache.hit", { path: entry, kind: cached.kind });
@@ -92,6 +95,9 @@ export class ExtensionFactoryCache {
         this.entries.set(entry, { kind: "factory", ...meta, factory });
         factories.push(factory);
       } else {
+        if (failureReason === "noFactory") {
+          timingMark("extensionFactoryCache.invalidModule", { path: entry, reason: failureReason });
+        }
         timingMark("extensionFactoryCache.fallbackOnError", { path: entry, reason: failureReason });
         this.entries.set(entry, { kind: "fallback", ...meta });
         fallbackPaths.push(entry);
