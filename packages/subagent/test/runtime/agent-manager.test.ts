@@ -1975,5 +1975,197 @@ test("AgentManager.startBatch threads parentSessionId into views surfaced throug
   await batch.resultsPromise;
 });
 
+test("AgentManager.abortDescendantsOf aborts direct children of the given parent id", async () => {
+  const aborts: string[] = [];
+  const runner = async (_ctx: any, agent: any) => {
+    let resolveAbort: () => void;
+    const aborted = new Promise<void>(resolve => { resolveAbort = resolve; });
+    const session = {
+      messages: [],
+      subscribe: () => () => {},
+      prompt: async () => {},
+      abort: () => { aborts.push(agent.spawn.prompt); resolveAbort!(); },
+    };
+    agent.attach(session);
+    await aborted;
+    return interruptedRun(agent, "aborted");
+  };
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 4, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "child" }],
+    undefined,
+    { background: false, parentSessionId: "parent-1" },
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const childId = manager.listSessions()[0].id;
+  assert.equal(manager.listSessions()[0].status.kind, "running");
+
+  await manager.abortDescendantsOf("parent-1");
+  await batch.resultsPromise;
+
+  assert.deepEqual(aborts, ["child"]);
+  const finalChild = manager.listSessions().find(s => s.id === childId);
+  assert.equal(finalChild?.status.kind, "done");
+});
+
+test("AgentManager.abortDescendantsOf walks grandchildren first (post-order)", async () => {
+  const abortOrder: string[] = [];
+  const runner = async (_ctx: any, agent: any) => {
+    let resolveAbort: () => void;
+    const aborted = new Promise<void>(resolve => { resolveAbort = resolve; });
+    const session = {
+      messages: [],
+      subscribe: () => () => {},
+      prompt: async () => {},
+      abort: () => { abortOrder.push(agent.spawn.prompt); resolveAbort!(); },
+    };
+    agent.attach(session);
+    await aborted;
+    return interruptedRun(agent, "aborted");
+  };
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 4, runner);
+
+  // Manually build a 2-level tree under fake root id "root":
+  //   root → child → grandchild
+  const childBatch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "child" }],
+    undefined,
+    { background: false, parentSessionId: "root" },
+  );
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const childId = manager.listSessions().find(s => s.parentSessionId === "root")!.id;
+  const grandBatch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "grandchild" }],
+    undefined,
+    { background: false, parentSessionId: childId },
+  );
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  await manager.abortDescendantsOf("root");
+  await Promise.all([childBatch.resultsPromise, grandBatch.resultsPromise]);
+
+  // Post-order: grandchild's session.abort() must run before child's.
+  assert.deepEqual(abortOrder, ["grandchild", "child"]);
+});
+
+test("AgentManager.abortDescendantsOf is a no-op when the id has no descendants", async () => {
+  const registry: FakeRegistry = { agents: new Map() };
+  const manager = new AgentManager(registry as any, 4, async () => ({ status: "completed" }) as any);
+
+  await manager.abortDescendantsOf("nonexistent-id");
+  await manager.abortDescendantsOf("");
+  assert.deepEqual(manager.listSessions(), []);
+});
+
+test("AgentManager.abortDescendantsOf skips already-terminal descendants without re-aborting them", async () => {
+  const abortCalls: string[] = [];
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach({
+      messages: [],
+      subscribe: () => () => {},
+      prompt: async () => {},
+      abort: () => { abortCalls.push(agent.spawn.prompt); },
+    });
+    return completedRun(agent, "ok");
+  };
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 4, runner);
+
+  // Run a child under parent-1 to completion (becomes terminal "done").
+  await manager.run(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "completed-child" }],
+    undefined,
+    { parentSessionId: "parent-1" },
+  );
+  assert.equal(manager.listSessions().length, 1);
+  assert.equal(manager.listSessions()[0].status.kind, "done");
+
+  await manager.abortDescendantsOf("parent-1");
+  assert.deepEqual(abortCalls, [], "should not call abort() on already-terminal children");
+  // Final status snapshot unchanged.
+  const view = manager.listSessions()[0];
+  assert.equal(view.status.kind, "done");
+  assert.equal((view.status as any).outcome, "completed");
+});
+
+test("AgentManager.remove fans out abort across a 2-level subagent tree via Agent.abort observer", async () => {
+  const aborts: string[] = [];
+  const runner = async (_ctx: any, agent: any) => {
+    // Polling instead of microtask gate models production timing: session.abort() signals an
+    // abort flag, but the runner doesn't resume until a later macrotask — so Agent.abort()'s
+    // own settle("aborted") runs first.
+    const flag = { aborted: false };
+    agent.attach({
+      messages: [],
+      subscribe: () => () => {},
+      prompt: async () => {},
+      abort: () => { aborts.push(agent.spawn.prompt); flag.aborted = true; },
+    });
+    while (!flag.aborted) await new Promise(r => setTimeout(r, 5));
+    return interruptedRun(agent, "aborted");
+  };
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 4, runner);
+
+  const rootBatch = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "root" }],
+    undefined, { background: false },
+  );
+  await new Promise(r => setTimeout(r, 10));
+  const rootId = manager.listSessions().find(s => s.parentSessionId === undefined)!.id;
+
+  const childBatch = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "child" }],
+    undefined, { background: false, parentSessionId: rootId },
+  );
+  await new Promise(r => setTimeout(r, 10));
+  const childId = manager.listSessions().find(s => s.parentSessionId === rootId)!.id;
+
+  const grandBatch = manager.startBatch(
+    baseCtx(), undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "grandchild" }],
+    undefined, { background: false, parentSessionId: childId },
+  );
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(manager.listSessions().filter(s => s.status.kind === "running").length, 3);
+
+  const removeResult = await manager.remove({ sessionIds: [rootId] });
+  await Promise.all([rootBatch.resultsPromise, childBatch.resultsPromise, grandBatch.resultsPromise]);
+
+  assert.equal(removeResult.removed, 1);
+  assert.deepEqual(aborts.sort(), ["child", "grandchild", "root"]);
+  const final = manager.listSessions();
+  assert.equal(
+    final.filter(s => s.status.kind === "running" || s.status.kind === "queued").length,
+    0,
+    "no running or queued sessions should remain after fan-out",
+  );
+  const childView = final.find(s => s.id === childId);
+  const grandView = final.find(s => s.parentSessionId === childId);
+  assert.equal((childView?.status as any).outcome, "aborted", "child finalizes as aborted");
+  assert.equal((grandView?.status as any).outcome, "aborted", "grandchild finalizes as aborted");
+});
+
 // Suppress unused-variable warnings for shared types.
 void undefined as unknown as AnyManager;

@@ -38,6 +38,7 @@ export class AgentManager {
   private _agentBatch = new Map<string, string>();
   private _updateListeners = new Set<AgentUpdateListener>();
   private _leases = new Map<string, QueueLease>();
+  private _pendingFanouts = new Map<string, Promise<void>>();
   private _getCurrentSettings: () => SubagentSettings = () => DEFAULT_SUBAGENT_SETTINGS;
   private readonly _runner: AgentRunner;
 
@@ -91,6 +92,20 @@ export class AgentManager {
         parentSessionId: parent.id,
       }));
     };
+  }
+
+  /**
+   * Walks the descendant subtree of `parentSessionId` post-order (grandchildren before children)
+   * and awaits `abort()` on each. `Array.filter` snapshots the descendants before iterating so
+   * concurrent `remove()` / `startBatch()` mutations of `_agents` don't disturb the walk.
+   * `Agent.abort()` is a no-op for already-terminal agents, so re-calling it is safe.
+   */
+  async abortDescendantsOf(parentSessionId: string): Promise<void> {
+    const directChildren = this._agents.filter(a => a.parentSessionId === parentSessionId);
+    for (const child of directChildren) {
+      await this.abortDescendantsOf(child.id);
+      await child.abort();
+    }
   }
 
   onAgentUpdate(listener: AgentUpdateListener): () => void {
@@ -164,13 +179,17 @@ export class AgentManager {
     }
 
     let aborted = 0;
+    const fanouts: Promise<void>[] = [];
     for (const agent of targets) {
       const status = agent.status.kind;
       if (status === "running" || status === "queued") {
         await agent.abort();
         if (status === "running") aborted += 1;
+        const pending = this._pendingFanouts.get(agent.id);
+        if (pending) fanouts.push(pending);
       }
     }
+    if (fanouts.length > 0) await Promise.all(fanouts);
 
     const removedIds = new Set(targets.map(a => a.id));
     if (removedIds.size > 0) {
@@ -318,10 +337,22 @@ export class AgentManager {
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
     for (const listener of this._updateListeners) listener(agent, kind);
     const groupId = this._agentBatch.get(agent.id);
-    if (!groupId) return;
-    const batch = this._activeBatches.get(groupId);
-    if (!batch) return;
-    batch.handleAgentUpdate(kind);
+    if (groupId) {
+      const batch = this._activeBatches.get(groupId);
+      if (batch) batch.handleAgentUpdate(kind);
+    }
+    // Fan out abort across the subtree whenever an agent transitions to terminal "aborted".
+    // The promise is tracked so `remove()` (or any other caller) can await its completion.
+    if (kind === "status" && this._isAbortedTerminal(agent) && !this._pendingFanouts.has(agent.id)) {
+      const promise = this.abortDescendantsOf(agent.id)
+        .finally(() => this._pendingFanouts.delete(agent.id));
+      this._pendingFanouts.set(agent.id, promise);
+    }
+  }
+
+  private _isAbortedTerminal(agent: Agent): boolean {
+    const status = agent.status;
+    return status.kind === "done" && status.result.status === "aborted";
   }
 
   private _runAttempt(
