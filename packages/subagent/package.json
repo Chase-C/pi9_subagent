@@ -28,6 +28,9 @@
     "skills": [],
     "prompts": []
   },
+  "dependencies": {
+    "jiti": "^2.7.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
