@@ -1,15 +1,16 @@
-import { readFile, readdir, stat } from "node:fs/promises";
-import path from "node:path";
+import { stat } from "node:fs/promises";
 
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { DefaultPackageManager, SettingsManager, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
 
 import { timingMark, timingStart } from "./timing.js";
 
 export type ExtensionFactoryImport = (path: string) => Promise<ExtensionFactory | undefined>;
+export type ExtensionPathDiscovery = (cwd: string, agentDir: string) => Promise<string[]>;
 
 export interface ExtensionFactoryCacheOptions {
   importFactory?: ExtensionFactoryImport;
+  discoverPaths?: ExtensionPathDiscovery;
   bypass?: boolean;
 }
 
@@ -17,8 +18,6 @@ export interface ExtensionFactoryLoad {
   factories: ExtensionFactory[];
   fallbackPaths: string[];
 }
-
-const EXTENSION_FILE_EXTS = new Set([".ts", ".js"]);
 
 interface CachedFactoryEntry {
   kind: "factory";
@@ -37,25 +36,24 @@ type CachedEntry = CachedFactoryEntry | CachedFallbackEntry;
 
 export class ExtensionFactoryCache {
   private readonly importFactory: ExtensionFactoryImport;
+  private readonly discoverPaths: ExtensionPathDiscovery;
   private readonly entries = new Map<string, CachedEntry>();
   private readonly bypass: boolean;
 
   constructor(options: ExtensionFactoryCacheOptions = {}) {
     this.importFactory = options.importFactory ?? defaultImportFactory;
+    this.discoverPaths = options.discoverPaths ?? discoverExtensionPaths;
     this.bypass = options.bypass ?? false;
   }
 
   async load(cwd: string, agentDir: string): Promise<ExtensionFactoryLoad> {
-    const roots = [path.join(cwd, ".pi", "extensions"), path.join(agentDir, "extensions")];
     const seen = new Set<string>();
     const paths: string[] = [];
     const endDiscover = timingStart("extensionFactoryCache.discover", { cwd, agentDir });
-    for (const root of roots) {
-      for (const entry of await discoverEntries(root)) {
-        if (seen.has(entry)) continue;
-        seen.add(entry);
-        paths.push(entry);
-      }
+    for (const entry of await this.discoverPaths(cwd, agentDir)) {
+      if (seen.has(entry)) continue;
+      seen.add(entry);
+      paths.push(entry);
     }
     endDiscover({ count: paths.length });
 
@@ -131,62 +129,14 @@ async function statMeta(file: string): Promise<{ mtimeMs: number; size: number }
   }
 }
 
-async function discoverEntries(root: string): Promise<string[]> {
-  let dirents;
-  try {
-    dirents = await readdir(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const results: string[] = [];
-  for (const dirent of dirents) {
-    if (dirent.name.startsWith(".") || dirent.name === "node_modules") continue;
-    const full = path.join(root, dirent.name);
-    if (dirent.isFile() && EXTENSION_FILE_EXTS.has(path.extname(dirent.name))) {
-      results.push(full);
-      continue;
-    }
-    if (dirent.isDirectory()) {
-      const manifestEntries = await readManifestEntries(full);
-      if (manifestEntries.length > 0) {
-        results.push(...manifestEntries);
-        continue;
-      }
-      const indexEntry = await findIndexEntry(full);
-      if (indexEntry) results.push(indexEntry);
-    }
-  }
-  return results;
-}
+async function discoverExtensionPaths(cwd: string, agentDir: string): Promise<string[]> {
+  const settingsManager = SettingsManager.create(cwd, agentDir);
+  await settingsManager.reload();
 
-async function readManifestEntries(dir: string): Promise<string[]> {
-  try {
-    const raw = await readFile(path.join(dir, "package.json"), "utf8");
-    const parsed = JSON.parse(raw) as { pi?: { extensions?: unknown } };
-    const list = parsed.pi?.extensions;
-    if (!Array.isArray(list)) return [];
-    const resolved: string[] = [];
-    for (const entry of list) {
-      if (typeof entry !== "string") continue;
-      const candidate = path.resolve(dir, entry);
-      try {
-        const info = await stat(candidate);
-        if (info.isFile()) resolved.push(candidate);
-      } catch {}
-    }
-    return resolved;
-  } catch {
-    return [];
-  }
-}
+  const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+  const resolved = await packageManager.resolve();
 
-async function findIndexEntry(dir: string): Promise<string | undefined> {
-  for (const name of ["index.ts", "index.js"]) {
-    const candidate = path.join(dir, name);
-    try {
-      const info = await stat(candidate);
-      if (info.isFile()) return candidate;
-    } catch {}
-  }
-  return undefined;
+  return resolved.extensions
+    .filter((entry) => entry.enabled)
+    .map((entry) => entry.path);
 }

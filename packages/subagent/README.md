@@ -333,6 +333,21 @@ Session management is intentionally process-lifetime only.
 - `status: "completed"` resumable sessions can be resumed. A resume attempt that fails before re-attaching to the retained session is also retryable because the retained SDK session is untouched. Post-attach failed, aborted, and interrupted resumable sessions are inspect/remove-only.
 - Command-driven resume messages include bounded metadata plus output/error snippets, not the full child transcript.
 
+## Child session extensions
+
+Each subagent child session discovers enabled extension paths through Pi's `DefaultPackageManager`, matching Pi's normal resolver for the child's working directory. This includes auto-discovered extensions, `settings.json` extension entries, and package manifest entries that Pi enables for that child session.
+
+Imported factory functions are cached process-wide and reused across child sessions, but each child still receives fresh Pi `Extension` registrations. If the cache cannot import an entry (for example, an unusual package alias), it transparently falls back to Pi's path-based loader for that single entry; the fallback shows up in `PI_SUBAGENT_DEBUG_TIMING` logs and requires no action.
+
+Constraints:
+
+- Project discovery is based on the child's resolved working directory.
+- Cached factories appear with inline source metadata in child sessions.
+- The cache stores imported factory functions, not instantiated `Extension` objects, so each child gets fresh registrations.
+- Because the imported module is reused, module-level state inside an extension can be shared across child sessions. Extensions that need per-session module isolation must avoid module-level mutable state.
+
+Troubleshooting: if an extension behaves differently inside a subagent than at top level, set `PI_SUBAGENT_BYPASS_EXTENSION_CACHE=1` to route every entry through Pi's path-based loader. If behavior changes under bypass, file an issue with the extension name and what differed.
+
 ## Status meanings
 
 Tool results and UI session rows use these terminal states:
