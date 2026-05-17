@@ -10,9 +10,18 @@ export interface NotifierManager {
 
 const MAX_LISTED_COMPLETIONS = 20;
 
+export interface NotifierContext {
+  isIdle(): boolean;
+}
+
+type PiEventHandler = (event: unknown, ctx?: NotifierContext) => void;
+
 export interface NotifierPi {
-  on(event: "agent_end", handler: (event: unknown) => void): void;
-  on(event: "tool_execution_start", handler: (event: unknown) => void): void;
+  on(event: "agent_end", handler: PiEventHandler): void;
+  on(event: "turn_end", handler: PiEventHandler): void;
+  on(event: "tool_execution_start", handler: PiEventHandler): void;
+  on(event: "session_start", handler: PiEventHandler): void;
+  on(event: "session_shutdown", handler: PiEventHandler): void;
   sendMessage(
     message: { customType: string; content: string; details?: unknown },
     options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
@@ -23,7 +32,21 @@ export interface BackgroundNotifierDeps {
   pi: NotifierPi;
   manager: NotifierManager;
   getMode: () => BackgroundNotifyMode;
+  /**
+   * Schedule a delayed retry of the idle flush. Returns a cancel function.
+   * Defaults to a setTimeout-based implementation.
+   */
+  scheduleRetry?: (fn: () => void, delayMs: number) => () => void;
+  /** Delay between idle-flush retry attempts. Defaults to 500ms. */
+  retryDelayMs?: number;
 }
+
+const DEFAULT_RETRY_DELAY_MS = 500;
+
+const defaultScheduleRetry = (fn: () => void, delayMs: number): (() => void) => {
+  const handle = setTimeout(fn, delayMs);
+  return () => clearTimeout(handle);
+};
 
 interface CompletionEntry {
   sessionId: string;
@@ -38,14 +61,24 @@ export class BackgroundNotifier {
   private _notifiedTerminalSessionIds = new Set<string>();
   private _unsubAgent: () => void = () => {};
   private _disposed = false;
+  private _ctx: NotifierContext | undefined;
+  private _ctxGen = 0;
+  private _retryCancel: (() => void) | undefined;
+  private readonly _scheduleRetry: (fn: () => void, delayMs: number) => () => void;
+  private readonly _retryDelayMs: number;
 
   constructor(private readonly deps: BackgroundNotifierDeps) {
+    this._scheduleRetry = deps.scheduleRetry ?? defaultScheduleRetry;
+    this._retryDelayMs = deps.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
     if (typeof deps.manager.onAgentUpdate === "function") {
       this._unsubAgent = deps.manager.onAgentUpdate(this._handleAgentUpdate);
     }
     if (typeof deps.pi.on === "function") {
-      deps.pi.on("agent_end", () => this._onDispatchEvent("auto"));
-      deps.pi.on("tool_execution_start", () => this._onDispatchEvent("steer"));
+      deps.pi.on("session_start", ((_event: unknown, ctx?: NotifierContext) => this._onSessionStart(ctx)) as PiEventHandler);
+      deps.pi.on("session_shutdown", (() => this._onSessionShutdown()) as PiEventHandler);
+      deps.pi.on("agent_end", (() => this._onDispatchEvent("auto")) as PiEventHandler);
+      deps.pi.on("turn_end", (() => this._onDispatchEvent("auto")) as PiEventHandler);
+      deps.pi.on("tool_execution_start", (() => this._onDispatchEvent("steer")) as PiEventHandler);
     }
   }
 
@@ -53,8 +86,25 @@ export class BackgroundNotifier {
     if (this._disposed) return;
     this._disposed = true;
     this._unsubAgent();
+    this._cancelRetry();
+    this._ctx = undefined;
     this._queue = [];
     this._notifiedTerminalSessionIds.clear();
+  }
+
+  private _onSessionStart(ctx: NotifierContext | undefined): void {
+    if (this._disposed) return;
+    this._ctx = ctx;
+    this._ctxGen++;
+    this._cancelRetry();
+    if (this._queue.length > 0 && this.deps.getMode() === "auto") this._tryFlushAuto();
+  }
+
+  private _onSessionShutdown(): void {
+    if (this._disposed) return;
+    this._ctx = undefined;
+    this._ctxGen++;
+    this._cancelRetry();
   }
 
   private _handleAgentUpdate = (agent: Agent, kind: AgentUpdateKind): void => {
@@ -85,10 +135,45 @@ export class BackgroundNotifier {
     const mode = this.deps.getMode();
     if (mode === "none") {
       this._queue = [];
+      this._cancelRetry();
       return;
     }
     if (mode !== dispatchMode) return;
-    this._dispatch(dispatchMode);
+    if (mode === "auto") this._tryFlushAuto();
+    else this._dispatch(dispatchMode);
+  }
+
+  private _tryFlushAuto(): void {
+    if (this._disposed) return;
+    if (this._queue.length === 0) {
+      this._cancelRetry();
+      return;
+    }
+    if (!this._ctx || !this._ctx.isIdle()) {
+      this._scheduleAutoRetry();
+      return;
+    }
+    this._cancelRetry();
+    this._dispatch("auto");
+  }
+
+  private _scheduleAutoRetry(): void {
+    if (this._disposed) return;
+    if (this._retryCancel) return;
+    const gen = this._ctxGen;
+    this._retryCancel = this._scheduleRetry(() => {
+      this._retryCancel = undefined;
+      if (this._disposed) return;
+      if (this._ctxGen !== gen) return;
+      this._tryFlushAuto();
+    }, this._retryDelayMs);
+  }
+
+  private _cancelRetry(): void {
+    if (this._retryCancel) {
+      this._retryCancel();
+      this._retryCancel = undefined;
+    }
   }
 
   private _dispatch(dispatchMode: Exclude<BackgroundNotifyMode, "none">): void {

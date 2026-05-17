@@ -25,12 +25,11 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
   agentManager.setCurrentSettings?.(() => currentSettings);
-  const notifier = new BackgroundNotifier({
+  new BackgroundNotifier({
     pi: pi as any,
     manager: agentManager,
     getMode: () => currentSettings.runtime.backgroundNotify,
   });
-  try { pi.on("session_shutdown", () => notifier.dispose()); } catch { }
 
   registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry, settings => {
     currentSettings = settings;
