@@ -6,10 +6,10 @@ export const TaskSchema = Type.Object({
   sessionId: Type.Optional(Type.String({ description: "Retained session id (resume). Mutually exclusive with agent." })),
   prompt: Type.String({ description: "Task or follow-up to send to the subagent." }),
   label: Type.Optional(Type.String({
-    description: "Human-readable label shown in widgets and logs; falls back to the agent name."
+    description: "Human-readable label shown in widgets and logs."
   })),
   resumable: Type.Optional(Type.Boolean({
-    description: "Override the agent's resumable default. One-way at completion: false discards the session."
+    description: "Override the agent's resumable default. `true` retains the session after completion so its sessionId can be passed in a later ResumeTask; `false` discards it at completion."
   })),
   model: Type.Optional(Type.String({ description: "Model override." })),
   thinking: Type.Optional(Type.String({ description: "Thinking-level override." })),
@@ -23,16 +23,16 @@ export const SubagentParams = Type.Object({
   action: Type.String({
     description: "One of: agents, list, run, results, remove.",
   }),
-  tasks: Type.Optional(Type.Array(TaskSchema, { description: "Tasks for action=run." })),
+  tasks: Type.Optional(Type.Array(TaskSchema, { description: "Tasks for action=run. Multiple tasks run concurrently — they must not write to overlapping files." })),
   background: Type.Optional(Type.Boolean({
-    description: "Batch-level flag for action=run. When true, returns immediately and children continue in the background.",
+    description: "Batch-level flag on action=run. Default false (blocking — wait for subagents to complete). Set true only when the user explicitly asks for fire-and-forget work, or a long-running task's output isn't needed for your next step. Background returns immediately with sessionIds and auto-notifies on completion; fetch output with { action: 'results' }.",
   })),
   status: Type.Optional(Type.Array(Type.String(), {
-    description: "Status filter for action=list.",
+    description: "Status filter for action=list. Values: queued, running, completed, error, aborted, interrupted, skipped.",
   })),
   sessionIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "Session ids for action=remove or action=results." })),
   scope: Type.Optional(Type.String({
-    description: "Removal scope for action=remove. Mutually exclusive with sessionIds.",
+    description: "Removal scope for action=remove. One of: background, retained, non-running. Mutually exclusive with sessionIds.",
   })),
   remove: Type.Optional(Type.Boolean({
     description: "For action=results: sweep terminal entries after returning.",

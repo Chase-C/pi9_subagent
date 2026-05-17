@@ -22,14 +22,11 @@ test("subagent extension still registers the tool when custom resume renderer re
   assert.equal(registeredTool.name, "subagent");
 });
 
-test("subagent tool registers prompt metadata with a non-empty snippet and guidelines", () => {
+test("subagent tool registers a non-empty description", () => {
   const tool = registerExtension();
 
-  assert.equal(typeof tool.promptSnippet, "string");
-  assert.ok(tool.promptSnippet.length > 0);
-  assert.ok(Array.isArray(tool.promptGuidelines));
-  assert.ok(tool.promptGuidelines.length > 0);
-  for (const guideline of tool.promptGuidelines) assert.equal(typeof guideline, "string");
+  assert.equal(typeof tool.description, "string");
+  assert.ok(tool.description.length > 0);
 });
 
 test("tool execution requires action", async () => {
