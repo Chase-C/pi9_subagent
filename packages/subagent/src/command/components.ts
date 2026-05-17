@@ -10,7 +10,7 @@ import {
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
 } from "../view/format.js";
-import type { SubagentUiSettings, WidgetPlacement } from "../ui/settings.js";
+import type { BackgroundNotifyMode, SubagentSettings, WidgetPlacement } from "../ui/settings.js";
 import {
   agentInspectHelp,
   agentListHelp,
@@ -29,29 +29,45 @@ import {
 export type SubagentResumeCommandResult = { action: "resume"; sessionId: string; agent: string };
 export type SubagentsCommandResult = SubagentResumeCommandResult | { action: "settings" };
 
+export type SubagentSettingsChange =
+  | { kind: "widgetPlacement"; value: WidgetPlacement }
+  | { kind: "backgroundNotify"; value: BackgroundNotifyMode };
+
 export class SubagentSettingsComponent implements Component {
   private readonly settingsList: SettingsList;
   private readonly theme: SubagentSessionsTheme;
 
   constructor(
-    settings: SubagentUiSettings,
+    settings: SubagentSettings,
     theme: SubagentSessionsTheme,
     private readonly keybindings: SubagentKeybindings,
-    onChange: (placement: WidgetPlacement) => void,
+    onChange: (change: SubagentSettingsChange) => void,
     private readonly done: () => void,
   ) {
-    const items: SettingItem[] = [{
-      id: "widgetPlacement",
-      label: "Widget placement",
-      currentValue: settings.widgetPlacement,
-      values: ["belowEditor", "aboveEditor", "off"],
-      description: "Values: belowEditor, aboveEditor, off. off hides only the progress widget.",
-    }];
+    const items: SettingItem[] = [
+      {
+        id: "widgetPlacement",
+        label: "Widget placement",
+        currentValue: settings.widgetPlacement,
+        values: ["belowEditor", "aboveEditor", "off"],
+        description: "Values: belowEditor, aboveEditor, off. off hides only the progress widget.",
+      },
+      {
+        id: "backgroundNotify",
+        label: "Background notify",
+        currentValue: settings.runtime.backgroundNotify,
+        values: ["auto", "steer", "none"],
+        description: "Values: auto, steer, none. auto fires once the parent is idle; steer injects into the next tool call.",
+      },
+    ];
     this.settingsList = new SettingsList(
       items,
       6,
       getSubagentSettingsListTheme(theme),
-      (_id, newValue) => onChange(newValue as WidgetPlacement),
+      (id, newValue) => {
+        if (id === "widgetPlacement") onChange({ kind: "widgetPlacement", value: newValue as WidgetPlacement });
+        else if (id === "backgroundNotify") onChange({ kind: "backgroundNotify", value: newValue as BackgroundNotifyMode });
+      },
       done,
     );
     this.theme = theme;

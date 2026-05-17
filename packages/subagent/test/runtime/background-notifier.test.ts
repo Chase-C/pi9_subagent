@@ -80,10 +80,10 @@ const completingRunner = async (_ctx: any, agent: any, attempt: any) => { const 
   return completedRun(agent, "ok");
 };
 
-test("BackgroundNotifier in end-of-turn mode fires no message until agent_end, then exactly one with the completed sessionId", async () => {
+test("BackgroundNotifier in auto mode fires no message until agent_end, then exactly one with the completed sessionId", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
-  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "end-of-turn" });
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "auto" });
 
   const sessionId = await runBackgroundOne(manager);
 
@@ -104,7 +104,7 @@ test("BackgroundNotifier payload references subagent results, includes per-sessi
     return completedRun(agent, "SUPER-SECRET-CHILD-OUTPUT");
   });
   const pi = fakePi();
-  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "end-of-turn" });
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "auto" });
 
   const batch = manager.startBatch(
     baseCtx(),
@@ -134,7 +134,7 @@ test("BackgroundNotifier payload references subagent results, includes per-sessi
 test("BackgroundNotifier in none mode drops queued completions on dispatch events and never re-emits later", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
-  let mode: BackgroundNotifyMode = "end-of-turn";
+  let mode: BackgroundNotifyMode = "auto";
   const notifier = new BackgroundNotifier({ pi, manager, getMode: () => mode });
 
   await runBackgroundOne(manager);
@@ -145,8 +145,8 @@ test("BackgroundNotifier in none mode drops queued completions on dispatch event
   pi.fireToolExecutionStart();
   assert.equal(pi.sent.length, 0);
 
-  // Switching back to end-of-turn must not resurrect the drained completion.
-  mode = "end-of-turn";
+  // Switching back to auto must not resurrect the drained completion.
+  mode = "auto";
   pi.fireAgentEnd();
   assert.equal(pi.sent.length, 0);
 
@@ -156,7 +156,7 @@ test("BackgroundNotifier in none mode drops queued completions on dispatch event
 test("BackgroundNotifier coalesces three quick completions into a single dispatched message", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
-  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "end-of-turn" });
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "auto" });
 
   const id1 = await runBackgroundOne(manager, "one");
   const id2 = await runBackgroundOne(manager, "two");
@@ -171,15 +171,15 @@ test("BackgroundNotifier coalesces three quick completions into a single dispatc
   notifier.dispose();
 });
 
-test("BackgroundNotifier in next-tool-call mode fires no message until tool_execution_start, then exactly one", async () => {
+test("BackgroundNotifier in steer mode fires no message until tool_execution_start, then exactly one", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
-  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "next-tool-call" });
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "steer" });
 
   const sessionId = await runBackgroundOne(manager);
 
   pi.fireAgentEnd();
-  assert.equal(pi.sent.length, 0, "agent_end does not trigger next-tool-call dispatch");
+  assert.equal(pi.sent.length, 0, "agent_end does not trigger steer dispatch");
 
   pi.fireToolExecutionStart();
   assert.equal(pi.sent.length, 1, "one message on tool_execution_start");
@@ -200,7 +200,7 @@ test("BackgroundNotifier notifies again when a background session resumes and co
   };
   const manager = makeManager(runner, resumeRunner);
   const pi = fakePi();
-  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "end-of-turn" });
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "auto" });
 
   const batch = manager.startBatch(
     baseCtx(),

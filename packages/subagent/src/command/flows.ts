@@ -120,12 +120,19 @@ export async function openSubagentSettings(
       settings,
       theme,
       keybindings,
-      placement => {
-        settings = { ...settings, widgetPlacement: placement };
-        updateSubagentWidget(ctx, agentManager.listSessions(), settings);
+      change => {
+        let confirmation: string;
+        if (change.kind === "widgetPlacement") {
+          settings = { ...settings, widgetPlacement: change.value };
+          updateSubagentWidget(ctx, agentManager.listSessions(), settings);
+          confirmation = `Subagent widget placement set to ${change.value}.`;
+        } else {
+          settings = { ...settings, runtime: { ...settings.runtime, backgroundNotify: change.value } };
+          confirmation = `Subagent background notify set to ${change.value}.`;
+        }
         const settingsToSave = settings;
         saveQueue = saveQueue.then(() => settingsStore.save(settingsToSave).then(
-          () => notify(ctx, `Subagent widget placement set to ${placement}.`, "info"),
+          () => notify(ctx, confirmation, "info"),
           error => notify(ctx, `Failed to save subagent settings: ${errorMessage(error)}`, "warning"),
         ));
       },

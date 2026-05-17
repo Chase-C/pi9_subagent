@@ -63,6 +63,45 @@ test("/subagents settings exposes placement values, saves changes, and updates a
   assert.deepEqual(widgets.at(-1)[2], { placement: "aboveEditor" });
 });
 
+test("/subagents settings exposes backgroundNotify with auto, steer, none and persists the chosen value", async () => {
+  const fakeManager = { listSessions(): any[] { return []; } };
+  const saved: any[] = [];
+  const fakeSettingsStore = {
+    async load() { return { settings: { widgetPlacement: "belowEditor", runtime: { backgroundNotify: "auto" } } }; },
+    async save(settings: any) { saved.push(settings); },
+  };
+  const commands = registerCommand({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore: fakeSettingsStore,
+  });
+
+  let renderedInitial = "";
+  let renderedOnBackgroundNotify = "";
+  await commands.get("subagents").handler("settings", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget() {},
+      custom(factory: any) {
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        renderedInitial = component.render(120).join("\n");
+        component.handleInput("\x1b[B"); // down arrow to select backgroundNotify
+        renderedOnBackgroundNotify = component.render(120).join("\n");
+        component.handleInput("\r"); // cycle auto -> steer
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.match(renderedInitial, /Background notify/);
+  assert.match(renderedOnBackgroundNotify, /Values: auto, steer, none/);
+  const last = saved.at(-1);
+  assert.ok(last, "expected at least one save");
+  assert.equal(last.runtime.backgroundNotify, "steer");
+});
+
 test("/subagents settings persists the latest rapid placement change before command completion", async () => {
   const runningSession = fakeAgent({ status: { kind: "running", startedAt: 1 }, turns: 1 });
   const fakeManager = {

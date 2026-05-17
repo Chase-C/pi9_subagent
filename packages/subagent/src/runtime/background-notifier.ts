@@ -44,8 +44,8 @@ export class BackgroundNotifier {
       this._unsubAgent = deps.manager.onAgentUpdate(this._handleAgentUpdate);
     }
     if (typeof deps.pi.on === "function") {
-      deps.pi.on("agent_end", () => this._onDispatchEvent("end-of-turn"));
-      deps.pi.on("tool_execution_start", () => this._onDispatchEvent("next-tool-call"));
+      deps.pi.on("agent_end", () => this._onDispatchEvent("auto"));
+      deps.pi.on("tool_execution_start", () => this._onDispatchEvent("steer"));
     }
   }
 
@@ -102,7 +102,7 @@ export class BackgroundNotifier {
         content,
         details: { completions: entries.map(e => ({ ...e })) },
       },
-      dispatchMode === "next-tool-call" ? { deliverAs: "steer" } : { triggerTurn: true },
+      dispatchMode === "steer" ? { deliverAs: "steer" } : { triggerTurn: true },
     );
   }
 }
