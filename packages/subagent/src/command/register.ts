@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { formatAgentConfigSummary, formatSubagentToolLines, inventoryDetails } from "../view/format.js";
-import { SubagentUiSettingsStore } from "../ui/settings.js";
+import { SubagentUiSettingsStore, type SubagentSettings } from "../ui/settings.js";
 import { loadSubagentUiSettings } from "../ui/widget.js";
 import { configureSubagentDisplay } from "../view/view-helpers.js";
 import {
@@ -19,12 +19,13 @@ export function registerSubagentsCommand(
   agentManager: AgentManager,
   settingsStore: Pick<SubagentUiSettingsStore, "load" | "save"> = new SubagentUiSettingsStore(),
   agentRegistry?: AgentRegistry,
+  onSettingsUpdated?: (settings: SubagentSettings) => void,
 ) {
   pi.registerCommand?.("subagents", {
     description: "Manage active and retained subagent sessions",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       if (args.trim() === "settings") {
-        await openSubagentSettings(ctx, agentManager, settingsStore);
+        await openSubagentSettings(ctx, agentManager, settingsStore, onSettingsUpdated);
         return;
       }
 
@@ -60,7 +61,7 @@ export function registerSubagentsCommand(
           notify(ctx, `Subagents UI failed: ${errorMessage(error)}`, "warning");
           return;
         }
-        if (action?.action === "settings") await openSubagentSettings(ctx, agentManager, settingsStore);
+        if (action?.action === "settings") await openSubagentSettings(ctx, agentManager, settingsStore, onSettingsUpdated);
         return;
       }
 

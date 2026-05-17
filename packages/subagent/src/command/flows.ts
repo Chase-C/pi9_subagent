@@ -3,7 +3,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { createSubagentResumeMessage } from "../view/resume-message.js";
-import type { SubagentUiSettingsStore } from "../ui/settings.js";
+import type { SubagentSettings, SubagentUiSettingsStore } from "../ui/settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "../ui/widget.js";
 import { configureSubagentDisplay } from "../view/view-helpers.js";
 import {
@@ -105,6 +105,7 @@ export async function openSubagentSettings(
   ctx: ExtensionCommandContext,
   agentManager: AgentManager,
   settingsStore: Pick<SubagentUiSettingsStore, "load" | "save">,
+  onSettingsUpdated?: (settings: SubagentSettings) => void,
 ) {
   let settings = await loadSubagentUiSettings(ctx, settingsStore);
   configureSubagentDisplay(settings.display);
@@ -128,6 +129,7 @@ export async function openSubagentSettings(
           confirmation = `Subagent widget placement set to ${change.value}.`;
         } else {
           settings = { ...settings, runtime: { ...settings.runtime, backgroundNotify: change.value } };
+          onSettingsUpdated?.(settings);
           confirmation = `Subagent background notify set to ${change.value}.`;
         }
         const settingsToSave = settings;

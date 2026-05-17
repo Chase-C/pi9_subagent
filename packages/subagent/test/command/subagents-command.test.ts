@@ -12,6 +12,7 @@ function registerCommand(dependencies: any = {}) {
     registerTool() {},
     registerCommand: (name: string, command: any) => commands.set(name, command),
     registerMessageRenderer() {},
+    on: (event: string, handler: any) => dependencies.__events?.set(event, handler),
     sendMessage: (message: any, options?: any) => dependencies.__sentMessages?.push({ message, options }),
   } as any, dependencies);
   return commands;
@@ -100,6 +101,55 @@ test("/subagents settings exposes backgroundNotify with auto, steer, none and pe
   const last = saved.at(-1);
   assert.ok(last, "expected at least one save");
   assert.equal(last.runtime.backgroundNotify, "steer");
+});
+
+test("/subagents settings backgroundNotify changes update live notifier mode immediately", async () => {
+  let agentUpdate: ((agent: any, kind: string) => void) | undefined;
+  const fakeManager = {
+    listSessions(): any[] { return []; },
+    onAgentUpdate(listener: any) { agentUpdate = listener; return () => {}; },
+  };
+  const fakeSettingsStore = {
+    async load() { return { settings: { widgetPlacement: "belowEditor", runtime: { backgroundNotify: "auto" } } }; },
+    async save() {},
+  };
+  const events = new Map<string, any>();
+  const sentMessages: any[] = [];
+  const commands = registerCommand({
+    __events: events,
+    __sentMessages: sentMessages,
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore: fakeSettingsStore,
+  });
+
+  await commands.get("subagents").handler("settings", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget() {},
+      custom(factory: any) {
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        component.handleInput("\x1b[B"); // select backgroundNotify
+        component.handleInput("\r"); // auto -> steer
+        component.handleInput("\r"); // steer -> none
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.equal(typeof agentUpdate, "function");
+  agentUpdate!({
+    id: "s1",
+    agentName: "helper",
+    background: true,
+    createdAt: 1,
+    status: { kind: "completed", startedAt: 1, completedAt: 2, result: { status: "completed" } },
+  }, "status");
+  events.get("agent_end")?.({});
+
+  assert.deepEqual(sentMessages, []);
 });
 
 test("/subagents settings persists the latest rapid placement change before command completion", async () => {

@@ -32,7 +32,9 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   });
   try { pi.on("session_shutdown", () => notifier.dispose()); } catch { }
 
-  registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry);
+  registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry, settings => {
+    currentSettings = settings;
+  });
   try {
     pi.registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
       const content = typeof message.content === "string"
