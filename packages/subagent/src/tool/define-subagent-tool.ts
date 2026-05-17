@@ -16,6 +16,8 @@ import {
   formatSubagentToolLines,
   inventoryDetails,
   runDetails,
+  runResultsDetails,
+  type RunOutcome,
 } from "../view/format.js";
 import { configureSubagentDisplay, getSubagentDisplaySettings } from "../view/view-helpers.js";
 import { listAgentDefinitions, serializeGroup } from "../view/serialize.js";
@@ -34,25 +36,26 @@ export interface SubagentToolDeps {
   parentSessionId?: string;
 }
 
-const TOOL_DESCRIPTION = `Delegate focused work to a specialized subagent in an isolated context window. The subagent sees only its system prompt plus the prompt you provide — make prompts self-contained: name the objective, relevant files/dirs, constraints, and the expected output format.
+const TOOL_DESCRIPTION = `Delegate focused work to a specialized subagent in an isolated context window. Your prompt is the subagent's only context (beyond its system prompt), so include everything it needs: objective, files/dirs, constraints, output format.
 
-When the user names a specific agent, just call { action: "run" } with that name — unknown-agent errors already list what's available. Otherwise call { action: "agents" } to see which specialized agents are configured and pick one whose tools/skills/prompt actually fit. If nothing fits, do the work yourself rather than spawning a generic delegate.
+Delegate when:
+- the work would otherwise crowd this conversation (large searches/reads, or long-running work with a clean summary back)
+- the work benefits from independent context (e.g. a reviewer)
 
-Prefer doing the work yourself when:
-- You can finish it in a handful of tool calls.
-- You'd need to read the subagent's output and act on it yourself anyway — delegation just adds steps without offloading context.
-- The subagent would mostly re-do work you already have context for.
+Skip delegation when:
+- you would finish it in a handful of tool calls, given the context you already have
+- using the subagent's output would require redoing the work yourself
 
-Subagents pay off for searches or reads that would otherwise crowd this conversation, long-horizon focused tasks with a clean handoff back, or work that benefits from an independent context (e.g. a reviewer).
+When the user names a specific agent, immediately call { action: "run" }. Otherwise, call { action: "agents" } and pick one whose tools/skills/prompt fit — if nothing fits, do the work yourself.
 
 Call shapes:
 
-  { action: "agents" }
-  { action: "list", status?: [SessionStatus, ...] }
-  { action: "run", background?: boolean, tasks: [SpawnTask | ResumeTask, ...] }
-  { action: "results", sessionIds: [string, ...], remove?: boolean }
-  { action: "remove", sessionIds: [string, ...] }
-  { action: "remove", scope: Scope }
+  { action: "agents" } — list known agents
+  { action: "list", status?: [SessionStatus, ...] } — list active and retained sessions
+  { action: "run", background?: boolean, tasks: [SpawnTask | ResumeTask, ...] } — spawn or resume tasks (in parallel)
+  { action: "results", sessionIds: [string, ...], remove?: boolean } — fetch output (set \`remove: true\` to sweep)
+  { action: "remove", sessionIds: [string, ...] } — remove specific sessions (running ones abort)
+  { action: "remove", scope: Scope } — remove all sessions matching a scope
 
   SpawnTask     = { agent, prompt, label?, resumable?, model?, thinking?, cwd?, skills? }
   ResumeTask    = { sessionId, prompt, label?, resumable? }
@@ -61,17 +64,9 @@ Call shapes:
   Scope         = "background"    // background-dispatched sessions
                 | "retained"      // resumable foreground sessions kept after completion
                 | "non-running"   // everything except currently-running sessions
-
-\`resumable: true\` keeps the session alive after completion so its sessionId can be passed in a ResumeTask later. The flag is one-way at completion — \`resumable: false\` discards the session immediately, on either spawn or resume.
-
-With background: true the run dispatches non-blocking; you'll be notified automatically when children complete (no need to poll). Fetch output with { action: "results" } once notified. One writer at a time — parallel tasks should be independent and should not edit overlapping files. Results preserve input order.
 `;
 
-const PROMPT_GUIDELINES = [
-  "Use subagent for work that benefits from independent context, such as codebase reconnaissance, long-running investigation, review, or parallel research; prefer doing the work yourself for small direct tasks.",
-  "Before using subagent without a named agent from the user, call subagent with action: \"agents\" and choose an agent whose prompt, tools, or skills fit the task.",
-  "When calling subagent, make each child prompt self-contained with the objective, relevant files or directories, constraints, and expected output format.",
-];
+const CROSS_BATCH_MESSAGE_UPDATE_THROTTLE_MS = 100;
 
 function validateTaskCount(tasks: SubagentParams["tasks"] | undefined, maxTasks: number) {
   if (!Array.isArray(tasks)) return "Provide a tasks array for action=run.";
@@ -125,8 +120,6 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     name: "subagent",
     label: "Subagent",
     description: TOOL_DESCRIPTION,
-    promptSnippet: "Delegate focused work to specialized subagents in isolated context windows",
-    promptGuidelines: PROMPT_GUIDELINES,
     parameters: SubagentParams,
     renderCall(args: any, theme: any) {
       const action = typeof args?.action === "string" ? args.action : "pending";
@@ -219,11 +212,12 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
 
           const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length, isChild: parentSessionId !== undefined });
           let lastUpdate: SubagentBatchUpdate | undefined;
-          const emitPartial = () => {
+          let crossBatchMessageTimer: NodeJS.Timeout | undefined;
+          const emitPartial = (knownSubtree?: AgentView[]) => {
             if (!lastUpdate) return;
             const update = lastUpdate;
             const rootIds = update.sessions.map(s => s.id);
-            const subtree = agentManager.subtreeOf?.(rootIds) ?? [];
+            const subtree = knownSubtree ?? agentManager.subtreeOf?.(rootIds) ?? [];
             const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length, subtreeCount: subtree.length }, () => partialToolResult(update, subtree));
             timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
             timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, getCurrentSettings()));
@@ -237,20 +231,51 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
           // status — re-emit so the parent's tool row reflects the live tree. Seed `lastUpdate`
           // so a descendant firing before our own batch can still render against the initial roots.
           if (!lastUpdate) lastUpdate = { sessions: batch.sessions, active: true };
-          const rootIdSet = new Set(batch.sessions.map(s => s.id));
-          const unsubscribeCrossBatch = agentManager.onAgentUpdate?.(updatedAgent => {
+          const rootIds = batch.sessions.map(s => s.id);
+          const rootIdSet = new Set(rootIds);
+          const scheduleCrossBatchMessageEmit = () => {
+            if (crossBatchMessageTimer) return;
+            crossBatchMessageTimer = setTimeout(() => {
+              crossBatchMessageTimer = undefined;
+              emitPartial(agentManager.subtreeOf?.(rootIds) ?? []);
+            }, CROSS_BATCH_MESSAGE_UPDATE_THROTTLE_MS);
+            crossBatchMessageTimer.unref?.();
+          };
+          const unsubscribeCrossBatch = agentManager.onAgentUpdate?.((updatedAgent, kind) => {
             if (rootIdSet.has(updatedAgent.id)) return; // batch listener already handles roots
-            const subtree = agentManager.subtreeOf?.(Array.from(rootIdSet)) ?? [];
+            if (kind === "message" && crossBatchMessageTimer) return;
+            const subtree = agentManager.subtreeOf?.(rootIds) ?? [];
             if (!subtree.some(s => s.id === updatedAgent.id)) return;
-            emitPartial();
+            if (kind === "message") {
+              scheduleCrossBatchMessageEmit();
+              return;
+            }
+            emitPartial(subtree);
           });
+          const cleanupCrossBatch = () => {
+            unsubscribeCrossBatch?.();
+            if (crossBatchMessageTimer) {
+              clearTimeout(crossBatchMessageTimer);
+              crossBatchMessageTimer = undefined;
+            }
+          };
           const results = parentSessionId !== undefined
-            ? await agentManager.suspendAgentSlotDuring(parentSessionId, () => batch.resultsPromise).finally(() => unsubscribeCrossBatch?.())
-            : await batch.resultsPromise.finally(() => unsubscribeCrossBatch?.());
+            ? await agentManager.suspendAgentSlotDuring(parentSessionId, () => batch.resultsPromise).finally(cleanupCrossBatch)
+            : await batch.resultsPromise.finally(cleanupCrossBatch);
           runEnd({ ok: true, resultCount: results.length });
           timingSync("tool.finalWidget", { sessionCount: agentManager.listSessions().length }, () => updateSubagentWidget(ctx, agentManager.listSessions(), getCurrentSettings()));
           const isError = results.some(result => result.status !== "completed");
-          return toolResult(runDetails(serializeGroup(batch.sessions), { results }), isError);
+          const outcomes: RunOutcome[] = results.map((result, inputIndex) => ({
+            inputIndex,
+            agent: result.agent,
+            status: result.status,
+            ...(result.label !== undefined ? { label: result.label } : {}),
+            ...(result.sessionId !== undefined ? { sessionId: result.sessionId } : {}),
+            ...(result.output !== undefined ? { output: result.output } : {}),
+            ...(result.error !== undefined ? { error: result.error } : {}),
+            ...(result.resumed ? { resumed: true } : {}),
+          }));
+          return toolResult(runResultsDetails(outcomes, isError), isError);
         }
 
         case "results": {

@@ -66,7 +66,7 @@ test("tool run action returns full output only once in JSON details for a resume
   }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.results[0].output, fullOutput);
+  assert.equal(result.details.outcomes[0].output, fullOutput);
   assert.equal((result.content[0].text.match(new RegExp(fullOutput, "g")) ?? []).length, 1);
 });
 
@@ -80,9 +80,10 @@ test("tool execution returns structured failed run for unknown agents", async ()
   }, undefined, undefined, { cwd: root });
 
   assert.equal(result.isError, true);
-  assert.deepEqual(result.details.results.map((r: any) => r.agent), ["missing"]);
-  assert.equal(result.details.results[0].status, "error");
-  assert.match(result.content[0].text, /"results"/);
+  assert.equal(result.details.view, "run-results");
+  assert.deepEqual(result.details.outcomes.map((r: any) => r.agent), ["missing"]);
+  assert.equal(result.details.outcomes[0].status, "error");
+  assert.match(result.content[0].text, /"outcomes"/);
 });
 
 test("subagent tool returns one ordered final group for mixed success, unknown, and failed children", async () => {
@@ -112,14 +113,11 @@ test("subagent tool returns one ordered final group for mixed success, unknown, 
   }, undefined, undefined, baseCtx());
 
   assert.equal(result.isError, true);
-  assert.deepEqual(result.details.results.map((run: any) => run.agent), ["helper", "missing", "flaky"]);
-  assert.equal(result.details.results[0].output, "done:first");
-  assert.deepEqual(result.details.results.map((run: any) => run.status), ["completed", "error", "error"]);
-  assert.deepEqual(result.details.group.sessions.map((s: any) => s.config.name), ["helper", "missing", "flaky"]);
-  assert.deepEqual(result.details.group.sessions.map((s: any) => s.status.kind === "done" ? s.status.outcome : s.status.kind), ["completed", "error", "error"]);
-  assert.equal(result.details.group.statusCounts.completed, 1);
-  assert.equal(result.details.group.statusCounts.error, 2);
-  assert.equal(result.details.group.isError, true);
+  assert.deepEqual(result.details.outcomes.map((run: any) => run.agent), ["helper", "missing", "flaky"]);
+  assert.equal(result.details.outcomes[0].output, "done:first");
+  assert.deepEqual(result.details.outcomes.map((run: any) => run.status), ["completed", "error", "error"]);
+  assert.deepEqual(result.details.outcomes.map((run: any) => run.inputIndex), [0, 1, 2]);
+  assert.equal(result.details.isError, true);
 });
 
 test("subagent tool notifies invalid settings fallback without breaking execution", async () => {
@@ -156,7 +154,7 @@ test("subagent tool notifies invalid settings fallback without breaking executio
   });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.results[0].output, "done");
+  assert.equal(result.details.outcomes[0].output, "done");
   assert.match(notifications[0][0], /Invalid subagent UI settings/);
   assert.equal(notifications[0][1], "warning");
   assert.deepEqual(widgets[0][2], { placement: "belowEditor" });
@@ -196,7 +194,7 @@ test("subagent tool falls back to default UI settings when settings load rejects
   });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.results[0].output, "done");
+  assert.equal(result.details.outcomes[0].output, "done");
   assert.match(notifications[0][0], /Failed to load subagent UI settings/);
   assert.equal(notifications[0][1], "warning");
   assert.deepEqual(widgets[0][2], { placement: "belowEditor" });
@@ -236,8 +234,8 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
   });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.results[0].output, "done");
-  assert.equal(result.details.group.sessions[0].config.name, "helper");
+  assert.equal(result.details.outcomes[0].output, "done");
+  assert.equal(result.details.outcomes[0].agent, "helper");
   assert.ok(widgets.length > 0);
   assert.equal(widgets.every((call: any[]) => call[0] === "subagent" && call[1] === undefined), true);
 });
@@ -283,8 +281,7 @@ test("subagent tool forwards live manager updates to onUpdate and widget UI", as
   });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.results[0].output, "done");
-  assert.equal(result.details.group.sessions[0].activity.toolHistory.at(-1)?.name, "read");
+  assert.equal(result.details.outcomes[0].output, "done");
   assert.equal(partials[0].details.group.sessions[0].activity.toolHistory.at(-1)?.name, "read");
   assert.doesNotMatch(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], "subagent");
@@ -333,8 +330,8 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   assert.equal(result.isError, false);
   assert.deepEqual(receivedTasks.map((t: any) => t.kind), ["spawn", "resume"]);
   assert.equal(receivedTasks[1].sessionId, "s-1");
-  assert.equal(result.details.results[0].resumed, false);
-  assert.equal(result.details.results[1].resumed, true);
+  assert.equal(result.details.outcomes[0].resumed, undefined);
+  assert.equal(result.details.outcomes[1].resumed, true);
 });
 
 test("subagent action=run background:true returns view:background-started immediately with initial session views", async () => {
@@ -362,8 +359,12 @@ test("subagent action=run background:true returns view:background-started immedi
   assert.equal(result.isError, false);
   assert.equal(result.details.view, "background-started");
   assert.equal(result.details.background, true);
-  assert.equal(result.details.sessions.length, 1);
-  assert.equal(result.details.sessions[0].kind, "background");
+  assert.equal(result.details.count, 1);
+  assert.equal(result.details.handles.length, 1);
+  const handle = result.details.handles[0];
+  assert.equal(typeof handle.sessionId, "string");
+  assert.equal(handle.inputIndex, 0);
+  assert.deepEqual(Object.keys(handle).sort(), ["inputIndex", "sessionId"]);
   const liveStatus = manager.listSessions()[0].status.kind;
   assert.ok(liveStatus === "queued" || liveStatus === "running", `expected non-terminal status, got ${liveStatus}`);
 
@@ -516,6 +517,66 @@ test("a late-arriving grandchild status change triggers a partial re-emit with t
   );
 });
 
+test("cross-batch message updates are throttled for descendant partial re-emits", async () => {
+  const partials: any[] = [];
+  const rootView = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const childView = fakeAgent({ id: "child", parentSessionId: "root", config: { name: "child" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+  let capturedListener: any;
+  let resolveBatch!: () => void;
+  let subtreeCalls = 0;
+
+  const fakeManager = {
+    listSessions(): any[] { return [rootView, childView]; },
+    subtreeOf(rootIds: string[]) {
+      subtreeCalls += 1;
+      if (rootIds.includes("root")) return [rootView, childView];
+      return [];
+    },
+    onAgentUpdate(listener: any) {
+      capturedListener = listener;
+      return () => { capturedListener = undefined; };
+    },
+    suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
+    startBatch(_ctx: any, _signal: any, _tasks: any[], _onUpdate: any) {
+      const resultsPromise = new Promise<any[]>(resolve => {
+        resolveBatch = () => resolve([{ agent: "root", prompt: "go", status: "completed", output: "ok", sessionId: "root", resumable: false, resumed: false }]);
+      });
+      return { groupId: "g1", sessions: [rootView], resultsPromise };
+    },
+  };
+
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
+  });
+
+  const executePromise = tool.execute(
+    "tool-call",
+    { action: "run", tasks: [{ agent: "root", prompt: "go" }] },
+    undefined,
+    (partial: any) => partials.push(partial),
+    baseCtx(),
+  );
+
+  await new Promise(r => setTimeout(r, 10));
+  assert.ok(capturedListener, "expected the tool to register an onAgentUpdate listener");
+
+  capturedListener({ id: "child", parentSessionId: "root", agentName: "child" }, "message");
+  capturedListener({ id: "child", parentSessionId: "root", agentName: "child" }, "message");
+  capturedListener({ id: "child", parentSessionId: "root", agentName: "child" }, "message");
+
+  assert.equal(partials.length, 0, "message updates should wait for the throttle window");
+  await new Promise(r => setTimeout(r, 150));
+
+  assert.equal(partials.length, 1);
+  assert.deepEqual(partials[0].details.subtree.map((s: any) => s.id), ["root", "child"]);
+  assert.equal(subtreeCalls, 2, "first message checks membership, timer reuses one later subtree for the partial");
+
+  resolveBatch();
+  await executePromise;
+});
+
 test("partial tool results carry the full descendant subtree; final tool result stays flat", async () => {
   const partials: any[] = [];
   const rootView = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
@@ -564,7 +625,9 @@ test("partial tool results carry the full descendant subtree; final tool result 
     ["root", "child"],
   );
 
-  // Final result does NOT include subtree — stays flat batch-only
+  // Final result is the slim outcomes view; no subtree, no per-session AgentView dump
+  assert.equal(final.details.view, "run-results");
   assert.equal(final.details.subtree, undefined);
-  assert.deepEqual(final.details.group.sessions.map((s: any) => s.id), ["root"]);
+  assert.equal(final.details.group, undefined);
+  assert.deepEqual(final.details.outcomes.map((o: any) => o.agent), ["root"]);
 });

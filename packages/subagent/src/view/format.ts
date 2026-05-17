@@ -2,7 +2,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import type { AgentConfig } from "../domain/agent-config.js";
-import type { AgentGroupView, AgentView, AgentViewStatus } from "../domain/agent-view.js";
+import type { AgentGroupView, AgentRunStatus, AgentView, AgentViewStatus } from "../domain/agent-view.js";
 import type { BackgroundResult } from "../runtime/agent-manager.js";
 import { serializeGroup } from "./serialize.js";
 import {
@@ -39,16 +39,35 @@ export type RemoveSummary = {
 
 export type InventoryFilter = { status?: string[] };
 
+export type BackgroundSpawnHandle = {
+  sessionId: string;
+  inputIndex: number;
+  label?: string;
+};
+
+export type RunOutcome = {
+  inputIndex: number;
+  agent: string;
+  status: AgentRunStatus;
+  label?: string;
+  sessionId?: string;
+  output?: string;
+  error?: string;
+  resumed?: boolean;
+};
+
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
-  | { view: "run"; group: AgentGroupView; results?: unknown; active?: boolean; subtree?: AgentView[] }
+  | { view: "run"; group: AgentGroupView; active?: boolean; subtree?: AgentView[] }
+  | { view: "run-results"; outcomes: RunOutcome[]; isError: boolean }
   | { view: "inventory"; sessions: AgentView[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
-  | { view: "background-started"; sessions: AgentView[]; background: true }
+  | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number; background: true }
   | { view: "background-results"; results: BackgroundResult[] };
 
 export type AgentsDetails = Extract<SubagentDetails, { view: "agents" }>;
 export type RunDetails = Extract<SubagentDetails, { view: "run" }>;
+export type RunResultsDetails = Extract<SubagentDetails, { view: "run-results" }>;
 export type InventoryDetails = Extract<SubagentDetails, { view: "inventory" }>;
 export type RemoveSummaryDetails = Extract<SubagentDetails, { view: "remove-summary" }>;
 export type BackgroundStartedDetails = Extract<SubagentDetails, { view: "background-started" }>;
@@ -60,9 +79,13 @@ export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
 
 export function runDetails(
   group: AgentGroupView,
-  extras: { results?: unknown; active?: boolean; subtree?: AgentView[] } = {},
+  extras: { active?: boolean; subtree?: AgentView[] } = {},
 ): RunDetails {
   return { view: "run", group, ...extras };
+}
+
+export function runResultsDetails(outcomes: RunOutcome[], isError: boolean): RunResultsDetails {
+  return { view: "run-results", outcomes, isError };
 }
 
 export function inventoryDetails(sessions: AgentView[], filter?: InventoryFilter): InventoryDetails {
@@ -70,7 +93,12 @@ export function inventoryDetails(sessions: AgentView[], filter?: InventoryFilter
 }
 
 export function backgroundStartedDetails(sessions: AgentView[]): BackgroundStartedDetails {
-  return { view: "background-started", sessions, background: true };
+  const handles: BackgroundSpawnHandle[] = sessions.map((session, index) => ({
+    sessionId: session.id,
+    inputIndex: session.inputIndex ?? index,
+    ...(session.label !== undefined ? { label: session.label } : {}),
+  }));
+  return { view: "background-started", handles, count: sessions.length, background: true };
 }
 
 export function backgroundResultsDetails(results: BackgroundResult[]): BackgroundResultsDetails {
@@ -211,6 +239,9 @@ function formatSubagentToolDisplayLines(
     case "agents":
       return formatAgentListLines(narrowed.agents, expanded, bold).map(text => ({ text }));
 
+    case "run-results":
+      return formatRunResultsLines(narrowed.outcomes, expanded, bold);
+
     case "run": {
       if (narrowed.subtree && narrowed.subtree.length > 0) {
         const ordered = orderAsTree(narrowed.subtree);
@@ -251,11 +282,46 @@ function formatSubagentToolDisplayLines(
       return formatRemoveSummaryLines(narrowed.summary, expanded);
 
     case "background-started":
-      return formatBackgroundStartedLines(narrowed.sessions, expanded, bold);
+      return formatBackgroundStartedLines(narrowed.handles, narrowed.count, expanded, bold);
 
     case "background-results":
       return formatBackgroundResultsLines(narrowed.results, expanded, bold);
   }
+}
+
+function formatRunResultsLines(outcomes: RunOutcome[], expanded: boolean, bold?: Bold): DisplayLine[] {
+  const counts = new Map<AgentRunStatus, number>();
+  for (const outcome of outcomes) counts.set(outcome.status, (counts.get(outcome.status) ?? 0) + 1);
+  const ordered: AgentRunStatus[] = ["completed", "error", "aborted", "interrupted", "skipped"];
+  const segments = [plural(outcomes.length, "subagent")];
+  for (const status of ordered) {
+    const count = counts.get(status);
+    if (count) segments.push(`${count} ${status}`);
+  }
+  const head: DisplayLine = {
+    text: segments.join(" · "),
+    status: outcomes.some(o => o.status !== "completed") ? "error" : "completed",
+  };
+  if (!expanded) return [head];
+
+  const lines: DisplayLine[] = [head];
+  for (const outcome of outcomes) {
+    lines.push({ text: "" });
+    const color = statusColorForOutcome(outcome.status);
+    const labelSegment = outcome.label ? `  ${outcome.label}` : "";
+    const sessionSegment = outcome.sessionId ? ` · session:${outcome.sessionId}` : "";
+    const resumedSegment = outcome.resumed ? " · resumed" : "";
+    lines.push({
+      text: `${applyBold(bold, outcome.agent)}${labelSegment} · ${outcome.status}${sessionSegment}${resumedSegment}`,
+      status: color,
+    });
+    const snippet = outcome.status === "completed" ? outcome.output : outcome.error;
+    if (snippet) {
+      const snippetLabel = outcome.status === "completed" ? "Result" : "Error";
+      lines.push(...snippetLines(snippetLabel, snippet, 2, color));
+    }
+  }
+  return lines;
 }
 
 function formatBackgroundResultsLines(results: BackgroundResult[], expanded: boolean, bold?: Bold): DisplayLine[] {
@@ -311,29 +377,16 @@ function statusColorForOutcome(status: string): DisplayStatus {
   return "warning";
 }
 
-function formatBackgroundStartedLines(sessions: AgentView[], expanded: boolean, bold?: Bold): DisplayLine[] {
-  const counts = new Map<string, number>();
-  for (const session of sessions) {
-    const status = effectiveStatus(session.status);
-    counts.set(status, (counts.get(status) ?? 0) + 1);
-  }
-  const orderedStatuses = ["queued", "running", "completed", "error", "interrupted", "skipped", "aborted"];
-  const knownParts = orderedStatuses
-    .filter(status => counts.get(status))
-    .map(status => `${counts.get(status)} ${status}`);
-  const extraParts = Array.from(counts.keys())
-    .filter(status => !orderedStatuses.includes(status))
-    .sort()
-    .map(status => `${counts.get(status)} ${status}`);
-  const head: DisplayLine = {
-    text: [`${plural(sessions.length, "background subagent")} started`, ...knownParts, ...extraParts].join(" · "),
-  };
+function formatBackgroundStartedLines(handles: BackgroundSpawnHandle[], count: number, expanded: boolean, bold?: Bold): DisplayLine[] {
+  const head: DisplayLine = { text: `${plural(count, "background subagent")} started` };
   if (!expanded) return [head];
   const lines: DisplayLine[] = [head];
-  for (const session of sessions) {
-    const label = session.label ?? session.config.name;
-    const status = effectiveStatus(session.status);
-    lines.push({ text: `  ${applyBold(bold, label)} · ${session.id} · ${status}` });
+  for (const handle of handles) {
+    const label = handle.label ?? handle.sessionId;
+    const text = handle.label
+      ? `  ${applyBold(bold, label)} · ${handle.sessionId}`
+      : `  ${applyBold(bold, handle.sessionId)}`;
+    lines.push({ text });
   }
   return lines;
 }
@@ -370,6 +423,12 @@ function narrowDetails(details: unknown): SubagentDetails | undefined {
           ? { subtree: (record as { subtree: AgentView[] }).subtree }
           : {}),
       };
+    case "run-results": {
+      const outcomes = (record as { outcomes?: unknown }).outcomes;
+      const isError = (record as { isError?: unknown }).isError;
+      if (!Array.isArray(outcomes) || typeof isError !== "boolean") return undefined;
+      return { view: "run-results", outcomes: outcomes as RunOutcome[], isError };
+    }
     case "inventory":
       return Array.isArray(record.sessions)
         ? {
@@ -382,10 +441,12 @@ function narrowDetails(details: unknown): SubagentDetails | undefined {
       return record.summary && typeof record.summary === "object"
         ? { view: "remove-summary", summary: record.summary as RemoveSummary }
         : undefined;
-    case "background-started":
-      return Array.isArray(record.sessions)
-        ? { view: "background-started", sessions: record.sessions as AgentView[], background: true }
-        : undefined;
+    case "background-started": {
+      const handles = (record as { handles?: unknown }).handles;
+      const count = (record as { count?: unknown }).count;
+      if (!Array.isArray(handles) || typeof count !== "number") return undefined;
+      return { view: "background-started", handles: handles as BackgroundSpawnHandle[], count, background: true };
+    }
     case "background-results":
       return Array.isArray((record as { results?: unknown }).results)
         ? { view: "background-results", results: (record as { results: BackgroundResult[] }).results }

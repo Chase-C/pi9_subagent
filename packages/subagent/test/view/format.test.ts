@@ -9,6 +9,7 @@ import {
   formatWidgetLines,
   inventoryDetails,
   runDetails,
+  runResultsDetails,
 } from "../../src/view/format.js";
 import { serializeGroup } from "../../src/view/serialize.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
@@ -72,7 +73,7 @@ test("the kind:background segment surfaces in both inspect summary and inventory
   assert.match(formatSubagentToolLines(inventoryDetails([background]), false, 0).join("\n"), /kind:background/);
 });
 
-test("background-started view collapsed line shows count summary by status", () => {
+test("background-started view collapsed line shows total count", () => {
   const sessions = [
     fakeAgent({ id: "s1", kind: "background", config: { name: "scout" }, status: { kind: "queued" } }),
     fakeAgent({ id: "s2", kind: "background", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
@@ -80,25 +81,77 @@ test("background-started view collapsed line shows count summary by status", () 
   ];
 
   const collapsed = formatSubagentToolLines(backgroundStartedDetails(sessions), false, 0);
-  const joined = collapsed.join("\n");
-  assert.match(joined, /3 background subagents started/);
-  assert.match(joined, /2 queued/);
-  assert.match(joined, /1 running/);
+  assert.deepEqual(collapsed, ["3 background subagents started"]);
 });
 
-test("background-started view expanded shows one line per session with session id and initial status", () => {
+test("background-started view expanded shows one line per session with session id and label when present", () => {
   const sessions = [
     fakeAgent({ id: "scout-1", kind: "background", config: { name: "scout" }, label: "frontend auth", status: { kind: "queued" } }),
     fakeAgent({ id: "rev-1", kind: "background", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
   ];
 
   const expanded = formatSubagentToolLines(backgroundStartedDetails(sessions), true, 0).join("\n");
-  assert.match(expanded, /frontend auth/);
-  assert.match(expanded, /scout-1/);
-  assert.match(expanded, /queued/);
-  assert.match(expanded, /reviewer/);
+  assert.match(expanded, /frontend auth · scout-1/);
   assert.match(expanded, /rev-1/);
-  assert.match(expanded, /running/);
+  assert.doesNotMatch(expanded, /reviewer/);
+  assert.doesNotMatch(expanded, /queued/);
+  assert.doesNotMatch(expanded, /running/);
+});
+
+test("run-results view collapsed shows count summary by outcome status", () => {
+  const details = runResultsDetails(
+    [
+      { inputIndex: 0, agent: "helper", status: "completed", output: "ok" },
+      { inputIndex: 1, agent: "flaky", status: "error", error: "boom" },
+      { inputIndex: 2, agent: "stop", status: "aborted", error: "Agent aborted." },
+    ],
+    true,
+  );
+  const collapsed = formatSubagentToolLines(details, false, 0);
+  const joined = collapsed.join("\n");
+  assert.match(joined, /3 subagents/);
+  assert.match(joined, /1 completed/);
+  assert.match(joined, /1 error/);
+  assert.match(joined, /1 aborted/);
+});
+
+test("run-results view expanded shows agent, status, snippet, and session handle when resumable", () => {
+  const details = runResultsDetails(
+    [
+      {
+        inputIndex: 0, agent: "helper", label: "phase 1", status: "completed",
+        output: "all done", sessionId: "sess-1", resumed: true,
+      },
+      { inputIndex: 1, agent: "flaky", status: "error", error: "boom" },
+    ],
+    true,
+  );
+  const expanded = formatSubagentToolLines(details, true, 0).join("\n");
+  assert.match(expanded, /helper/);
+  assert.match(expanded, /phase 1/);
+  assert.match(expanded, /completed/);
+  assert.match(expanded, /Result: all done/);
+  assert.match(expanded, /session:sess-1/);
+  assert.match(expanded, /resumed/);
+  assert.match(expanded, /flaky/);
+  assert.match(expanded, /error/);
+  assert.match(expanded, /Error: boom/);
+});
+
+test("background-started details project handles with sessionId, inputIndex, and optional label", () => {
+  const sessions = [
+    fakeAgent({ id: "a", kind: "background", config: { name: "scout" }, inputIndex: 0, label: "alpha", status: { kind: "queued" } }),
+    fakeAgent({ id: "b", kind: "background", config: { name: "reviewer" }, inputIndex: 1, status: { kind: "queued" } }),
+  ];
+
+  const details = backgroundStartedDetails(sessions);
+  assert.equal(details.view, "background-started");
+  assert.equal(details.background, true);
+  assert.equal(details.count, 2);
+  assert.deepEqual(details.handles, [
+    { sessionId: "a", inputIndex: 0, label: "alpha" },
+    { sessionId: "b", inputIndex: 1 },
+  ]);
 });
 
 test("flat sessions (no parentSessionId) render in caller order with no indentation in widget and inventory", () => {
