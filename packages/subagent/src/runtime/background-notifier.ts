@@ -145,6 +145,16 @@ export class BackgroundNotifier {
 
   private _tryFlushAuto(): void {
     if (this._disposed) return;
+    const mode = this.deps.getMode();
+    if (mode === "none") {
+      this._queue = [];
+      this._cancelRetry();
+      return;
+    }
+    if (mode !== "auto") {
+      this._cancelRetry();
+      return;
+    }
     if (this._queue.length === 0) {
       this._cancelRetry();
       return;

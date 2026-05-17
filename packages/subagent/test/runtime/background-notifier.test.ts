@@ -327,6 +327,73 @@ test("BackgroundNotifier in auto mode defers send while ctx.isIdle() is false, t
   notifier.dispose();
 });
 
+test("BackgroundNotifier drops pending auto notification if mode flips to none before retry sees idle", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const retry = manualRetry();
+  let mode: BackgroundNotifyMode = "auto";
+  let idle = false;
+  const ctx: FakeCtx = { isIdle: () => idle };
+  const notifier = new BackgroundNotifier({
+    pi,
+    manager,
+    getMode: () => mode,
+    scheduleRetry: retry.schedule,
+  });
+
+  pi.fireSessionStart(ctx);
+  await runBackgroundOne(manager);
+  pi.fireAgentEnd();
+  assert.equal(retry.pending(), 1, "retry scheduled while not idle");
+
+  mode = "none";
+  idle = true;
+  retry.flushOne();
+
+  assert.equal(pi.sent.length, 0, "no auto delivery after mode flips to none");
+  assert.equal(retry.pending(), 0, "no retry remains after mode flips to none");
+
+  mode = "auto";
+  pi.fireAgentEnd();
+  assert.equal(pi.sent.length, 0, "dropped completion is not resurrected later");
+
+  notifier.dispose();
+});
+
+test("BackgroundNotifier leaves pending auto notification for steer delivery if mode flips to steer before retry sees idle", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const retry = manualRetry();
+  let mode: BackgroundNotifyMode = "auto";
+  let idle = false;
+  const ctx: FakeCtx = { isIdle: () => idle };
+  const notifier = new BackgroundNotifier({
+    pi,
+    manager,
+    getMode: () => mode,
+    scheduleRetry: retry.schedule,
+  });
+
+  pi.fireSessionStart(ctx);
+  const sessionId = await runBackgroundOne(manager);
+  pi.fireAgentEnd();
+  assert.equal(retry.pending(), 1, "retry scheduled while not idle");
+
+  mode = "steer";
+  idle = true;
+  retry.flushOne();
+
+  assert.equal(pi.sent.length, 0, "pending retry does not auto-deliver after mode flips to steer");
+  assert.equal(retry.pending(), 0, "auto retry stops in steer mode");
+
+  pi.fireToolExecutionStart();
+  assert.equal(pi.sent.length, 1, "queued completion remains available for steer delivery");
+  assert.equal(pi.sent[0].options?.deliverAs, "steer");
+  assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+
+  notifier.dispose();
+});
+
 test("BackgroundNotifier payload references subagent results, includes per-session metadata, and never includes output or error from the child", async () => {
   const manager = makeManager(async (_ctx: any, agent: any, _attempt: any) => {
     agent.attach(makeSession());
