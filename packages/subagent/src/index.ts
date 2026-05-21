@@ -18,6 +18,7 @@ import { defineSubagentTool } from "./tool/define-subagent-tool.js";
 interface SubagentExtensionDependencies {
   agentRegistry?: AgentRegistry;
   agentManager?: AgentManager;
+  orchestrator?: BatchOrchestrator;
   settingsStore?: Pick<SubagentUiSettingsStore, "load" | "save">;
 }
 
@@ -25,13 +26,15 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
   const settingsStore = dependencies.settingsStore ?? new SubagentUiSettingsStore();
-  const orchestrator = new BatchOrchestrator({ manager: agentManager, registry: agentRegistry });
+  const orchestrator = dependencies.orchestrator ?? new BatchOrchestrator({ manager: agentManager, registry: agentRegistry });
 
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
   const getCurrentSettings = () => currentSettings;
-  agentManager.runner.setChildFactory(parent =>
+  agentManager.runner?.setChildFactory?.(parent =>
     makeChildSubagentFactory({ manager: agentManager, orchestrator, registry: agentRegistry, parent, getCurrentSettings }));
-  new ParentFinalizePolicy({ manager: agentManager });
+  if (typeof agentManager.onAgentUpdate === "function" && typeof agentManager.cancelNonBackgroundDescendantsOf === "function") {
+    new ParentFinalizePolicy({ manager: agentManager });
+  }
   new BackgroundNotifier({
     pi: pi as any,
     manager: agentManager,

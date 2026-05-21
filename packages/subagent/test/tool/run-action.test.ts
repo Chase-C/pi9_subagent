@@ -41,6 +41,8 @@ test("tool run action returns full output only once in JSON details for a resume
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
+  };
+  const fakeOrchestrator = {
     startBatch(_ctx: any, _signal: any, tasks: any[]) {
       const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
         agent: "helper",
@@ -58,6 +60,7 @@ test("tool run action returns full output only once in JSON details for a resume
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: fakeManager,
+    orchestrator: fakeOrchestrator,
   });
 
   const result = await tool.execute("tool-call", {
@@ -130,6 +133,8 @@ test("subagent tool notifies invalid settings fallback without breaking executio
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
+  };
+  const fakeOrchestrator = {
     startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
@@ -139,6 +144,7 @@ test("subagent tool notifies invalid settings fallback without breaking executio
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
+    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" }, warning: "Invalid subagent UI settings." }; } },
   });
 
@@ -170,6 +176,8 @@ test("subagent tool falls back to default UI settings when settings load rejects
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
+  };
+  const fakeOrchestrator = {
     startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
@@ -179,6 +187,7 @@ test("subagent tool falls back to default UI settings when settings load rejects
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
+    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { throw new Error("disk unreadable"); } },
   });
 
@@ -210,6 +219,8 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [runningAgent],
+  };
+  const fakeOrchestrator = {
     startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
@@ -220,6 +231,7 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
+    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "off" } }; } },
   });
 
@@ -256,6 +268,8 @@ test("subagent tool forwards live manager updates to onUpdate and widget UI", as
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
+  };
+  const fakeOrchestrator = {
     startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
@@ -266,6 +280,7 @@ test("subagent tool forwards live manager updates to onUpdate and widget UI", as
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
+    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; }, async save() {} },
   });
 
@@ -294,6 +309,8 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
+  };
+  const fakeOrchestrator = {
     startBatch(_ctx: any, _signal: any, tasks: any[]) {
       receivedTasks = tasks;
       const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
@@ -316,6 +333,7 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
+    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
   });
 
@@ -470,6 +488,8 @@ test("a late-arriving grandchild status change triggers a partial re-emit with t
       return () => { capturedListener = undefined; };
     },
     suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
+  };
+  const fakeOrchestrator = {
     startBatch(_ctx: any, _signal: any, _tasks: any[], _onUpdate: any) {
       // Don't emit any batch updates ourselves — let the cross-batch listener be the only source.
       const resultsPromise = new Promise<any[]>(resolve => {
@@ -486,6 +506,7 @@ test("a late-arriving grandchild status change triggers a partial re-emit with t
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: fakeManager,
+    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
   });
 
@@ -537,6 +558,8 @@ test("cross-batch message updates are throttled for descendant partial re-emits"
       return () => { capturedListener = undefined; };
     },
     suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
+  };
+  const fakeOrchestrator = {
     startBatch(_ctx: any, _signal: any, _tasks: any[], _onUpdate: any) {
       const resultsPromise = new Promise<any[]>(resolve => {
         resolveBatch = () => resolve([{ agent: "root", prompt: "go", status: "completed", output: "ok", sessionId: "root", resumable: false, resumed: false }]);
@@ -548,6 +571,7 @@ test("cross-batch message updates are throttled for descendant partial re-emits"
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: fakeManager,
+    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
   });
 
@@ -591,6 +615,8 @@ test("partial tool results carry the full descendant subtree; final tool result 
     },
     onAgentUpdate(_listener: any) { return () => {}; },
     suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
+  };
+  const fakeOrchestrator = {
     startBatch(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
       // Drive one partial update first, then resolve with the final flat result.
       Promise.resolve().then(() => {
@@ -606,6 +632,7 @@ test("partial tool results carry the full descendant subtree; final tool result 
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: fakeManager,
+    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
   });
 
