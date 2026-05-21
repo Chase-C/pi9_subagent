@@ -1,29 +1,16 @@
-import { randomUUID } from "node:crypto";
-
-import { ExtensionContext, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
-
 import { Agent } from "../domain/agent.js";
-import type { Attempt } from "../domain/agent-attempt.js";
-import {
-  errorRun,
-  interruptedRun,
-  skippedRun,
-  type AgentRunResult,
-} from "../domain/agent-result.js";
-import type { AgentRunStatus, AgentUpdateKind, AgentView } from "../domain/agent-view.js";
+import type { AgentRunResult } from "../domain/agent-result.js";
+import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
-import { preflightResumeFailure, preflightSpawnFailure } from "../domain/preflight-failure.js";
-import type { TaskRequest, SessionStatus } from "../schema.js";
-import { defineSubagentTool } from "../tool/define-subagent-tool.js";
-import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "../ui/settings.js";
+import type { SessionStatus } from "../schema.js";
 import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
-import { BatchRun, type BatchUpdateListener } from "./batch-run.js";
-import { DefaultRunAgentDependencies, RunAttempt } from "./run-agent.js";
-import { TaskQueue, type QueueLease } from "./task-queue.js";
-import { timingMark, timingStart } from "./timing.js";
+import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
+import { BatchSet } from "./batch-set.js";
+import { ParentFinalizePolicy } from "./parent-finalize-policy.js";
+import { timingMark } from "./timing.js";
 
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
-export type AgentRunner = (ctx: ExtensionContext, agent: Agent, attempt: Attempt, signal?: AbortSignal) => Promise<AgentRunResult>;
+export type { AgentRunner } from "./attempt-runner.js";
 
 export type BackgroundResult =
   | { sessionId: string; ready: true; result: AgentRunResult }
@@ -33,35 +20,20 @@ export type BackgroundResult =
 export class AgentManager {
 
   private _agents = new Array<Agent>();
-  private _queue: TaskQueue;
-  private _activeBatches = new Map<string, BatchRun>();
-  private _agentBatch = new Map<string, string>();
+  private readonly _batches = new BatchSet();
   private _updateListeners = new Set<AgentUpdateListener>();
-  private _leases = new Map<string, QueueLease>();
-  private _pendingFanouts = new Map<string, Promise<void>>();
-  private _getCurrentSettings: () => SubagentSettings = () => DEFAULT_SUBAGENT_SETTINGS;
-  private readonly _runner: AgentRunner;
+  private readonly _runner: AttemptRunner;
 
   constructor(
     readonly registry: AgentRegistry,
     maxRunning: number = 4,
     runner?: AgentRunner,
   ) {
-    this._queue = new TaskQueue(maxRunning);
-    this._runner = runner ?? ((ctx, agent, attempt, signal) =>
-      RunAttempt(ctx, agent, attempt, signal, {
-        ...DefaultRunAgentDependencies,
-        childFactoryFor: (a: Agent) => this.childFactoryFor(a),
-      }));
-  }
-
-  /**
-   * Sets the accessor used by the default runner when building child-session subagent factories.
-   * `subagentExtension` wires this to its `currentSettings` closure so each child's `subagent` tool
-   * inherits the parent's most recent settings without reloading them.
-   */
-  setCurrentSettings(getter: () => SubagentSettings) {
-    this._getCurrentSettings = getter;
+    this._runner = new AttemptRunner({
+      maxRunning,
+      ...(runner ? { runner } : {}),
+      isTracked: id => this._agents.some(a => a.id === id),
+    });
   }
 
   listSessions(filter?: { status?: SessionStatus[] }): AgentView[] {
@@ -98,26 +70,36 @@ export class AgentManager {
   }
 
   configure(options: { maxRunning?: number }) {
-    if (options.maxRunning !== undefined) this._queue.maxRunning = options.maxRunning;
+    this._runner.configure(options);
+  }
+
+  get runner(): AttemptRunner { return this._runner; }
+  get batches(): BatchSet { return this._batches; }
+
+  /** Adds a freshly-spawned agent to the catalog and subscribes the catalog's broadcast pipeline. */
+  adopt(agent: Agent): void {
+    this._agents.push(agent);
+    agent.on(this._agentUpdate.bind(this));
+  }
+
+  /** Looks up an existing agent eligible for resume by sessionId. */
+  findResumable(id: string): Agent | undefined {
+    return this._agents.find(a => a.id === id && a.resumable);
   }
 
   /**
-   * Returns an ExtensionFactory that registers a `subagent` tool inside a child Pi session,
-   * delegating into this shared manager so the entire tree lives in one process. The child tool
-   * skips settings and registry reloads — they are already populated by the parent invocation
-   * that triggered the child — and threads `parent.id` as the new agents' `parentSessionId`.
+   * Post-batch pruning. Drops agents in `touched` that are done, non-background, and non-resumable.
+   * Detaches each dropped agent from its batch mapping. Survivors stay in the catalog.
    */
-  childFactoryFor(parent: Agent, getCurrentSettings?: () => SubagentSettings): ExtensionFactory {
-    const getter = getCurrentSettings ?? this._getCurrentSettings;
-    return (pi) => {
-      pi.registerTool(defineSubagentTool({
-        agentManager: this,
-        agentRegistry: this.registry,
-        getCurrentSettings: getter,
-        prepareInvocation: async () => getter(),
-        parentSessionId: parent.id,
-      }));
-    };
+  pruneTouched(touched: ReadonlySet<string>): void {
+    this._agents = this._agents.filter(agent => {
+      if (!touched.has(agent.id)) return true;
+      if (agent.background) return true;
+      if (agent.status.kind !== "done") return true;
+      if (agent.resumable) return true;
+      this._batches.detach(agent.id);
+      return false;
+    });
   }
 
   /**
@@ -167,17 +149,7 @@ export class AgentManager {
    * maxRunning deadlocks. No-op when the session has no active lease.
    */
   async suspendAgentSlotDuring<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
-    const lease = this._leases.get(sessionId);
-    if (!lease) {
-      timingMark("manager.suspendAgentSlot.skip", { sessionId, reason: "no-active-lease" });
-      return fn();
-    }
-    const end = timingStart("manager.suspendAgentSlot", { sessionId });
-    try {
-      return await lease.suspendDuring(fn);
-    } finally {
-      end({});
-    }
+    return this._runner.suspendAgentSlotDuring(sessionId, fn);
   }
 
   async backgroundResults(
@@ -240,7 +212,7 @@ export class AgentManager {
       if (status === "running" || status === "queued") {
         await agent.abort();
         if (status === "running") aborted += 1;
-        const pending = this._pendingFanouts.get(agent.id);
+        const pending = ParentFinalizePolicy.pendingFor(agent.id);
         if (pending) fanouts.push(pending);
       }
     }
@@ -249,13 +221,7 @@ export class AgentManager {
     const removedIds = new Set(targets.map(a => a.id));
     if (removedIds.size > 0) {
       this._agents = this._agents.filter(a => !removedIds.has(a.id));
-      const touchedGroups = new Set<string>();
-      for (const id of removedIds) {
-        const groupId = this._agentBatch.get(id);
-        if (groupId) touchedGroups.add(groupId);
-        this._agentBatch.delete(id);
-      }
-      for (const groupId of touchedGroups) this._activeBatches.get(groupId)?.emit();
+      this._batches.forgetAgents(removedIds);
     }
 
     return {
@@ -273,125 +239,9 @@ export class AgentManager {
     throw new Error(`Unknown remove scope: ${String(scope)}`);
   }
 
-  async run(
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-    tasks: TaskRequest[],
-    onUpdate?: BatchUpdateListener,
-    options: { parentSessionId?: string } = {},
-  ): Promise<AgentRunResult[]> {
-    const batch = this.startBatch(ctx, signal, tasks, onUpdate, { background: false, ...options });
-    return batch.resultsPromise;
-  }
-
-  startBatch(
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-    tasks: TaskRequest[],
-    onUpdate: BatchUpdateListener | undefined,
-    options: { background: boolean; parentSessionId?: string },
-  ): { groupId: string; sessions: AgentView[]; resultsPromise: Promise<AgentRunResult[]> } {
-    const groupId = randomUUID();
-    const groupCreatedAt = Date.now();
-    timingMark("manager.run.start", { groupId, taskCount: tasks.length, background: options.background, parentSessionId: options.parentSessionId });
-
-    const controller = options.background ? new AbortController() : undefined;
-    const batch = new BatchRun(groupId, onUpdate);
-    this._activeBatches.set(groupId, batch);
-
-    const childSignal = controller ? controller.signal : signal;
-    const touched = new Set<Agent>();
-
-    const resultPromises = tasks.map((task, inputIndex) => {
-      if (task.kind === "spawn") {
-        const config = this.registry.agents.get(task.agent);
-        if (!config) {
-          const available = Array
-            .from(this.registry.agents.values())
-            .map((agent) => `${agent.name} (${agent.source})`)
-            .join("\n");
-          const error = `Unknown agent: ${task.agent}. Available agents:\n${available}`;
-          const { view, result } = preflightSpawnFailure({
-            groupId, inputIndex, createdAt: groupCreatedAt, task, error,
-          });
-          batch.addStaticView(view, inputIndex, false);
-          timingMark("manager.task.preflightFailure", { groupId, inputIndex, agent: task.agent, parentSessionId: options.parentSessionId });
-          return Promise.resolve(result);
-        }
-
-        const agent = new Agent(randomUUID(), config, task, {
-          background: options.background,
-          ...(options.parentSessionId !== undefined ? { parentSessionId: options.parentSessionId } : {}),
-        });
-        agent.on(this._agentUpdate.bind(this));
-        batch.addAgent(agent, inputIndex, false);
-        timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id, parentSessionId: options.parentSessionId, background: options.background });
-        this._agents.push(agent);
-        this._agentBatch.set(agent.id, groupId);
-        touched.add(agent);
-        return this._runAttempt(ctx, childSignal, agent, agent.requireCurrentAttempt());
-      }
-
-      const target = this._agents.find(a => a.id === task.sessionId && a.resumable);
-      const error = !target
-        ? `Unknown resumable subagent session: ${task.sessionId}`
-        : target.hasCurrentAttempt
-          ? `Cannot resume subagent session ${task.sessionId}: it is already resuming.`
-          : !target.canResume
-            ? `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.result.status : target.status.kind}.`
-            : undefined;
-
-      if (!target || error) {
-        const { view, result } = preflightResumeFailure({
-          groupId, inputIndex, createdAt: groupCreatedAt, task, target, error: error!,
-        });
-        batch.addStaticView(view, inputIndex, true);
-        timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId, parentSessionId: options.parentSessionId });
-        return Promise.resolve(result);
-      }
-
-      const attempt = target.startResume(task);
-      if (options.background) target.promoteToBackground();
-      batch.addAgent(target, inputIndex, true);
-      timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id, parentSessionId: options.parentSessionId, targetParentSessionId: target.parentSessionId, background: options.background });
-      this._agentBatch.set(target.id, groupId);
-      touched.add(target);
-      return this._runAttempt(ctx, childSignal, target, attempt);
-    });
-
-    timingMark("manager.initialEmit.before", { groupId, entries: batch.entryCount });
-    batch.emit();
-    timingMark("manager.initialEmit.after", { groupId });
-
-    const resultsPromise = Promise.all(resultPromises)
-      .then(results => {
-        this._agents = this._agents.filter(agent => {
-          if (!touched.has(agent)) return true;
-          if (agent.background) return true;
-          if (agent.status.kind !== "done") return true;
-          if (agent.resumable) return true;
-          this._agentBatch.delete(agent.id);
-          return false;
-        });
-        timingMark("manager.run.results", { groupId, resultCount: results.length });
-        return results;
-      })
-      .finally(() => {
-        batch.flush();
-        batch.dispose();
-        this._activeBatches.delete(groupId);
-      });
-
-    return {
-      groupId,
-      get sessions(): AgentView[] { return batch.sessions(); },
-      resultsPromise,
-    };
-  }
-
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
     const status = agent.status;
-    const groupId = this._agentBatch.get(agent.id);
+    const groupId = this._batches.groupOf(agent.id);
     timingMark("manager.agentUpdate", {
       sessionId: agent.id,
       agent: agent.agentName,
@@ -403,73 +253,6 @@ export class AgentManager {
       ...(groupId !== undefined ? { groupId } : {}),
     });
     for (const listener of this._updateListeners) listener(agent, kind);
-    if (groupId) {
-      const batch = this._activeBatches.get(groupId);
-      if (batch) batch.handleAgentUpdate(kind);
-    }
-    // Parent-finalize policy: when an agent reaches a terminal `aborted` or `error` outcome,
-    // cancel its still-running non-background descendants. `completed` (and any other outcome)
-    // leaves descendants alone — a completed parent has already consumed children's results,
-    // and any survivors must be background ones that the parent dispatched to outlive itself.
-    if (kind === "status" && !this._pendingFanouts.has(agent.id)) {
-      const outcome = this._terminalOutcome(agent);
-      if (outcome === "aborted" || outcome === "error") {
-        const reason = `Parent ${agent.id} finalized as ${outcome}`;
-        const fanoutEnd = timingStart("manager.parentFinalize.fanout", { sessionId: agent.id, agent: agent.agentName, outcome });
-        const promise = this.cancelNonBackgroundDescendantsOf(agent.id, reason)
-          .finally(() => {
-            this._pendingFanouts.delete(agent.id);
-            fanoutEnd({});
-          });
-        this._pendingFanouts.set(agent.id, promise);
-      }
-    }
-  }
-
-  private _terminalOutcome(agent: Agent): AgentRunStatus | undefined {
-    const status = agent.status;
-    return status.kind === "done" ? status.result.status : undefined;
-  }
-
-  private _runAttempt(
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-    agent: Agent,
-    attempt: Attempt,
-  ): Promise<AgentRunResult> {
-    const kind = attempt.kind;
-    const resumed = kind === "resume";
-    return this._queue.enqueue(async lease => {
-      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentSessionId });
-      if (signal?.aborted || !this._agents.includes(agent)) {
-        const result = skippedRun(agent, resumed);
-        end({ status: result.status });
-        return result;
-      }
-      if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
-        end({ status: agent.status.result.status });
-        return agent.status.result;
-      }
-      this._leases.set(agent.id, lease);
-      try {
-        const result = await this._runner(ctx, agent, attempt, signal);
-        const finalResult = resumed && !result.resumed ? { ...result, resumed: true } : result;
-        end({ status: finalResult.status });
-        return finalResult;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
-          end({ status: agent.status.result.status });
-          return agent.status.result;
-        }
-        const result = signal?.aborted
-          ? (attempt.state.kind === "queued" ? skippedRun(agent, resumed) : interruptedRun(agent, message, resumed))
-          : errorRun(agent, message, resumed);
-        end({ status: result.status, error: message });
-        return result;
-      } finally {
-        this._leases.delete(agent.id);
-      }
-    }, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentSessionId, kind });
+    this._batches.dispatch(agent.id, kind);
   }
 }

@@ -4,6 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
+import type { BatchOrchestrator } from "../runtime/batch-orchestrator.js";
 import { timingMark, timingStart, timingSync } from "../runtime/timing.js";
 import { isSessionStatus, parseTask, SESSION_STATUSES, SubagentParams, type SessionStatus, type TaskRequest } from "../schema.js";
 import type { SubagentSettings } from "../ui/settings.js";
@@ -24,6 +25,7 @@ import { listAgentDefinitions, serializeGroup } from "../view/serialize.js";
 
 export interface SubagentToolDeps {
   agentManager: AgentManager;
+  orchestrator: BatchOrchestrator;
   agentRegistry: AgentRegistry;
   getCurrentSettings: () => SubagentSettings;
   /**
@@ -32,7 +34,7 @@ export interface SubagentToolDeps {
    * a no-op here because the parent's invocation already performed all of those steps.
    */
   prepareInvocation: (ctx: ExtensionContext) => Promise<SubagentSettings>;
-  /** Set on child factories; threaded into manager.startBatch/run so spawned agents are linked. */
+  /** Set on child factories; threaded into orchestrator.startBatch so spawned agents are linked. */
   parentSessionId?: string;
 }
 
@@ -115,7 +117,7 @@ function partialToolResult(update: SubagentBatchUpdate, subtree?: AgentView[]) {
 }
 
 export function defineSubagentTool(deps: SubagentToolDeps) {
-  const { agentManager, agentRegistry, getCurrentSettings, prepareInvocation, parentSessionId } = deps;
+  const { agentManager, orchestrator, agentRegistry, getCurrentSettings, prepareInvocation, parentSessionId } = deps;
   return defineTool({
     name: "subagent",
     label: "Subagent",
@@ -202,7 +204,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
             : { background: params.background === true };
 
           if (params.background === true) {
-            const batch = agentManager.startBatch(ctx, signal, parsed, update => {
+            const batch = orchestrator.startBatch(ctx, signal, parsed, update => {
               updateSubagentWidget(ctx, update.sessions, getCurrentSettings());
             }, batchOptions);
             batch.resultsPromise.catch(() => {});
@@ -222,7 +224,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
             timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
             timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, getCurrentSettings()));
           };
-          const batch = agentManager.startBatch(ctx, signal, parsed, update => {
+          const batch = orchestrator.startBatch(ctx, signal, parsed, update => {
             timingMark("tool.update.received", { sessionCount: update.sessions.length, active: update.active });
             lastUpdate = update;
             emitPartial();

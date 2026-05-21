@@ -3,6 +3,9 @@ import { Text } from "@earendil-works/pi-tui";
 
 import { AgentRegistry } from "./domain/agent-registry.js";
 import { AgentManager } from "./runtime/agent-manager.js";
+import { BatchOrchestrator } from "./runtime/batch-orchestrator.js";
+import { makeChildSubagentFactory } from "./runtime/child-factory.js";
+import { ParentFinalizePolicy } from "./runtime/parent-finalize-policy.js";
 import { timingAsync } from "./runtime/timing.js";
 import { SubagentUiSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./ui/settings.js";
 import { BackgroundNotifier } from "./runtime/background-notifier.js";
@@ -22,16 +25,20 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
   const settingsStore = dependencies.settingsStore ?? new SubagentUiSettingsStore();
+  const orchestrator = new BatchOrchestrator({ manager: agentManager, registry: agentRegistry });
 
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
-  agentManager.setCurrentSettings?.(() => currentSettings);
+  const getCurrentSettings = () => currentSettings;
+  agentManager.runner.setChildFactory(parent =>
+    makeChildSubagentFactory({ manager: agentManager, orchestrator, registry: agentRegistry, parent, getCurrentSettings }));
+  new ParentFinalizePolicy({ manager: agentManager });
   new BackgroundNotifier({
     pi: pi as any,
     manager: agentManager,
     getMode: () => currentSettings.runtime.backgroundNotify,
   });
 
-  registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry, settings => {
+  registerSubagentsCommand(pi, agentManager, orchestrator, settingsStore, agentRegistry, settings => {
     currentSettings = settings;
   });
   try {
@@ -45,8 +52,9 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 
   pi.registerTool(defineSubagentTool({
     agentManager,
+    orchestrator,
     agentRegistry,
-    getCurrentSettings: () => currentSettings,
+    getCurrentSettings,
     prepareInvocation: async (ctx: ExtensionContext) => {
       const settings = await timingAsync("tool.loadSettings", { hasUI: ctx.hasUI }, () => loadSubagentUiSettings(ctx, settingsStore));
       currentSettings = settings;
