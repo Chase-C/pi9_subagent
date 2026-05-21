@@ -20,13 +20,8 @@ import { Agent } from "../domain/agent.js";
 import type { Attempt } from "../domain/agent-attempt.js";
 import { ExtensionFactoryCache } from "./extension-factory-cache.js";
 import { timingAsync, timingMark, timingSync } from "./timing.js";
-import {
-  completedRun,
-  errorRun,
-  interruptedRun,
-  skippedRun,
-  type AgentRunResult,
-} from "../domain/agent-result.js";
+import { completedRun, errorRun, interruptedRun, skippedRun } from "../domain/agent-finalize.js";
+import type { AgentRunResult } from "../domain/agent-result.js";
 
 export interface RunAgentDependencies {
   ResourceLoader: typeof DefaultResourceLoader;

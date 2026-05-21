@@ -1,5 +1,7 @@
 import type { Agent } from "../domain/agent.js";
 import type { AgentUpdateKind, AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
+import { projectAgentView } from "../view/project-agent-view.js";
+import { getSubagentDisplaySettings } from "../view/view-helpers.js";
 import { timingStart, timingSync } from "./timing.js";
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
@@ -32,11 +34,12 @@ export class BatchRun {
   }
 
   sessions(): AgentView[] {
+    const display = getSubagentDisplaySettings();
     return this._entries
       .slice()
       .sort((a, b) => a.inputIndex - b.inputIndex)
       .map(entry => entry.kind === "agent"
-        ? { ...entry.agent.toView(entry.inputIndex), resumed: entry.resumed }
+        ? { ...projectAgentView(entry.agent, display, { inputIndex: entry.inputIndex }), resumed: entry.resumed }
         : { ...entry.view, resumed: entry.resumed });
   }
 

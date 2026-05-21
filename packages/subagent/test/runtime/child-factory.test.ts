@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { Agent } from "../../src/domain/agent.js";
-import { completedRun } from "../../src/domain/agent-result.js";
+import { completedRun } from "../../src/domain/agent-finalize.js";
 import type { AgentManager } from "../../src/runtime/agent-manager.js";
 import type { BatchOrchestrator } from "../../src/runtime/batch-orchestrator.js";
 import { makeChildSubagentFactory } from "../../src/runtime/child-factory.js";

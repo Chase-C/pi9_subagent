@@ -2,7 +2,12 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { Agent, type AgentStatus } from "../../src/domain/agent.js";
-import { completedRun } from "../../src/domain/agent-result.js";
+import { completedRun } from "../../src/domain/agent-finalize.js";
+import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/ui/settings.js";
+import { projectAgentView } from "../../src/view/project-agent-view.js";
+
+const display = DEFAULT_SUBAGENT_SETTINGS.display;
+const view = (agent: Agent) => projectAgentView(agent, display);
 
 function doneStatus(agent: Agent): Extract<AgentStatus, { kind: "done" }> {
   if (agent.status.kind !== "done") throw new Error(`expected done, got ${agent.status.kind}`);
@@ -17,14 +22,14 @@ const baseConfig = {
   resumable: false,
 };
 
-test("Agent label surfaces through both the getter and toView, including the absent case", () => {
+test("Agent label surfaces through both the getter and projectAgentView, including the absent case", () => {
   const labeled = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" });
   assert.equal(labeled.label, "researcher");
-  assert.equal(labeled.toView().label, "researcher");
+  assert.equal(view(labeled).label, "researcher");
 
   const unlabeled = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
   assert.equal(unlabeled.label, undefined);
-  assert.equal(Object.prototype.hasOwnProperty.call(unlabeled.toView(), "label"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(view(unlabeled), "label"), false);
 });
 
 test("Agent stores optional parentSessionId from constructor options", () => {
@@ -35,31 +40,31 @@ test("Agent stores optional parentSessionId from constructor options", () => {
   assert.equal(orphan.parentSessionId, undefined);
 });
 
-test("Agent.toView surfaces parentSessionId when set and omits it when absent", () => {
+test("projectAgentView surfaces parentSessionId when set and omits it when absent", () => {
   const child = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, { parentSessionId: "root-1" });
-  assert.equal(child.toView().parentSessionId, "root-1");
+  assert.equal(view(child).parentSessionId, "root-1");
 
   const orphan = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
-  assert.equal(Object.prototype.hasOwnProperty.call(orphan.toView(), "parentSessionId"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(view(orphan), "parentSessionId"), false);
 });
 
-test("Agent constructor optional background flag controls toView kind", () => {
+test("Agent constructor optional background flag controls projected dispatch", () => {
   const defaultAgent = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   assert.equal(defaultAgent.background, false);
-  assert.equal(defaultAgent.toView().kind, "retained");
+  assert.equal(view(defaultAgent).dispatch, "foreground");
 
   const backgroundAgent = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, { background: true });
   assert.equal(backgroundAgent.background, true);
-  assert.equal(backgroundAgent.toView().kind, "background");
+  assert.equal(view(backgroundAgent).dispatch, "background");
 });
 
-test("Agent.toView surfaces the default skills from the agent config", () => {
+test("projectAgentView surfaces the default skills from the agent config", () => {
   const config = { ...baseConfig, skills: ["foo", "bar"] };
   const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work" });
-  assert.deepEqual(agent.toView().config.skills, ["foo", "bar"]);
+  assert.deepEqual(view(agent).config.skills, ["foo", "bar"]);
 
   const noSkills = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
-  assert.equal(noSkills.toView().config.skills, undefined);
+  assert.equal(view(noSkills).config.skills, undefined);
 });
 
 test("Agent per-task resumable beats the config default in both directions", () => {
@@ -67,7 +72,7 @@ test("Agent per-task resumable beats the config default in both directions", () 
     const config = { ...baseConfig, resumable: configDefault };
     const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: override });
     assert.equal(agent.resumable, override);
-    assert.equal(agent.toView().config.resumable, override);
+    assert.equal(view(agent).config.resumable, override);
   }
 });
 
@@ -105,7 +110,7 @@ test("agent re-subscribes on resume so events during a resumed cycle update its 
   const firstEmit = emit;
   assert.ok(firstEmit);
   firstEmit({ type: "turn_end" });
-  assert.equal(agent.toView().activity.turns, 1);
+  assert.equal(view(agent).activity.turns, 1);
   completedRun(agent, "done");
   assert.equal(emit, undefined, "subscription should be torn down on complete");
 
@@ -115,7 +120,7 @@ test("agent re-subscribes on resume so events during a resumed cycle update its 
   assert.ok(resumedEmit, "resume should re-subscribe");
   resumedEmit({ type: "turn_end" });
   resumedEmit({ type: "tool_execution_start", toolName: "read" });
-  const resumedActivity = agent.toView().activity;
+  const resumedActivity = view(agent).activity;
   assert.equal(resumedActivity.turns, 2);
   assert.equal(resumedActivity.toolHistory.length, 1);
   completedRun(agent, "done2");
@@ -133,7 +138,7 @@ test("agent stores tool-use history and keeps active tool correct for overlappin
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "a", prompt: "p" });
 
   const activeNames = () =>
-    agent.toView().activity.toolHistory.filter(t => t.completedAt === undefined).map(t => t.name);
+    view(agent).activity.toolHistory.filter(t => t.completedAt === undefined).map(t => t.name);
 
   agent.attach(session as any);
   assert.ok(sessionEmit);
@@ -142,7 +147,7 @@ test("agent stores tool-use history and keeps active tool correct for overlappin
   assert.deepEqual(activeNames(), ["read", "bash"]);
 
   sessionEmit({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read", isError: false });
-  const finalHistory = agent.toView().activity.toolHistory;
+  const finalHistory = view(agent).activity.toolHistory;
   assert.deepEqual(activeNames(), ["bash"]);
   assert.equal(finalHistory.length, 2);
   assert.deepEqual(

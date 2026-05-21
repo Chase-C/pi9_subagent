@@ -1,4 +1,3 @@
-import { Agent } from "./agent.js";
 import type { AgentRunStatus } from "./agent-view.js";
 
 export interface AgentRunResult {
@@ -19,45 +18,29 @@ export type FinalizeRunArgs =
   | { status: "completed"; output?: string; error?: never; resumed?: boolean }
   | { status: Exclude<AgentRunStatus, "completed">; output?: never; error?: string; resumed?: boolean };
 
-/** Build an AgentRunResult from the agent's current attempt. Pure: does not mutate the agent. */
-export function buildAgentResult(agent: Agent, args: FinalizeRunArgs): AgentRunResult {
-  const resumable = agent.hasResumableSession();
-  const label = agent.label;
-  const prompt = agent.requireCurrentAttempt().prompt;
+export interface AgentResultContext {
+  sessionId: string;
+  agentName: string;
+  label?: string;
+  prompt: string;
+  model?: string;
+  parentSessionId?: string;
+  resumable: boolean;
+}
+
+/** Build an AgentRunResult from a plain context snapshot. Pure: no domain dependency. */
+export function buildAgentResult(ctx: AgentResultContext, args: FinalizeRunArgs): AgentRunResult {
   return {
-    agent: agent.agentName,
-    ...(label !== undefined ? { label } : {}),
-    prompt,
-    model: agent.spawn.model ?? agent.config.model,
-    resumable,
+    agent: ctx.agentName,
+    ...(ctx.label !== undefined ? { label: ctx.label } : {}),
+    prompt: ctx.prompt,
+    ...(ctx.model !== undefined ? { model: ctx.model } : {}),
+    resumable: ctx.resumable,
     resumed: Boolean(args.resumed),
     status: args.status,
-    ...(resumable ? { sessionId: agent.id } : {}),
-    ...(agent.parentSessionId !== undefined ? { parentSessionId: agent.parentSessionId } : {}),
+    ...(ctx.resumable ? { sessionId: ctx.sessionId } : {}),
+    ...(ctx.parentSessionId !== undefined ? { parentSessionId: ctx.parentSessionId } : {}),
     ...(args.output !== undefined ? { output: args.output } : {}),
     ...(args.error !== undefined ? { error: args.error } : {}),
   };
-}
-
-export function finalizeRun(agent: Agent, args: FinalizeRunArgs): AgentRunResult {
-  if (agent.status.kind === "done" && !agent.hasCurrentAttempt) return agent.status.result;
-  const result = buildAgentResult(agent, args);
-  agent.settle(result);
-  return result;
-}
-
-export function completedRun(agent: Agent, output: string, resumed = false): AgentRunResult {
-  return finalizeRun(agent, { status: "completed", output, resumed });
-}
-
-export function errorRun(agent: Agent, error: string, resumed = false): AgentRunResult {
-  return finalizeRun(agent, { status: "error", error, resumed });
-}
-
-export function interruptedRun(agent: Agent, error: string, resumed = false): AgentRunResult {
-  return finalizeRun(agent, { status: "interrupted", error, resumed });
-}
-
-export function skippedRun(agent: Agent, resumed = false): AgentRunResult {
-  return finalizeRun(agent, { status: "skipped", error: "Agent skipped.", resumed });
 }

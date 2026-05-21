@@ -60,24 +60,24 @@ test("queued session elapsed uses queuedAt instead of session createdAt", () => 
   assert.doesNotMatch(lines.join("\n"), /10s/);
 });
 
-test("the kind:background segment surfaces in both inspect summary and inventory line formatters", () => {
+test("the dispatch:background segment surfaces in both inspect summary and inventory line formatters", () => {
   const retained = fakeAgent({ config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
-  const background = fakeAgent({ id: "s2", kind: "background", config: { name: "helper", resumable: true }, status: { kind: "running", startedAt: 1 } });
+  const background = fakeAgent({ id: "s2", dispatch: "background", config: { name: "helper", resumable: true }, status: { kind: "running", startedAt: 1 } });
 
   // formatSubagentSessionSummary (inspect view)
-  assert.doesNotMatch(formatSubagentSessionSummary(retained), /kind:/);
-  assert.match(formatSubagentSessionSummary(background), /kind:background/);
+  assert.doesNotMatch(formatSubagentSessionSummary(retained), /dispatch:/);
+  assert.match(formatSubagentSessionSummary(background), /dispatch:background/);
 
   // formatSubagentToolLines (inventory view)
-  assert.doesNotMatch(formatSubagentToolLines(inventoryDetails([retained]), false, 0).join("\n"), /kind:/);
-  assert.match(formatSubagentToolLines(inventoryDetails([background]), false, 0).join("\n"), /kind:background/);
+  assert.doesNotMatch(formatSubagentToolLines(inventoryDetails([retained]), false, 0).join("\n"), /dispatch:/);
+  assert.match(formatSubagentToolLines(inventoryDetails([background]), false, 0).join("\n"), /dispatch:background/);
 });
 
 test("background-started view collapsed line shows total count", () => {
   const sessions = [
-    fakeAgent({ id: "s1", kind: "background", config: { name: "scout" }, status: { kind: "queued" } }),
-    fakeAgent({ id: "s2", kind: "background", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
-    fakeAgent({ id: "s3", kind: "background", config: { name: "reviewer" }, status: { kind: "queued" } }),
+    fakeAgent({ id: "s1", dispatch: "background", config: { name: "scout" }, status: { kind: "queued" } }),
+    fakeAgent({ id: "s2", dispatch: "background", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ id: "s3", dispatch: "background", config: { name: "reviewer" }, status: { kind: "queued" } }),
   ];
 
   const collapsed = formatSubagentToolLines(backgroundStartedDetails(sessions), false, 0);
@@ -86,8 +86,8 @@ test("background-started view collapsed line shows total count", () => {
 
 test("background-started view expanded shows one line per session with session id and label when present", () => {
   const sessions = [
-    fakeAgent({ id: "scout-1", kind: "background", config: { name: "scout" }, label: "frontend auth", status: { kind: "queued" } }),
-    fakeAgent({ id: "rev-1", kind: "background", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ id: "scout-1", dispatch: "background", config: { name: "scout" }, label: "frontend auth", status: { kind: "queued" } }),
+    fakeAgent({ id: "rev-1", dispatch: "background", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
   ];
 
   const expanded = formatSubagentToolLines(backgroundStartedDetails(sessions), true, 0).join("\n");
@@ -140,8 +140,8 @@ test("run-results view expanded shows agent, status, snippet, and session handle
 
 test("background-started details project handles with sessionId, inputIndex, and optional label", () => {
   const sessions = [
-    fakeAgent({ id: "a", kind: "background", config: { name: "scout" }, inputIndex: 0, label: "alpha", status: { kind: "queued" } }),
-    fakeAgent({ id: "b", kind: "background", config: { name: "reviewer" }, inputIndex: 1, status: { kind: "queued" } }),
+    fakeAgent({ id: "a", dispatch: "background", config: { name: "scout" }, inputIndex: 0, label: "alpha", status: { kind: "queued" } }),
+    fakeAgent({ id: "b", dispatch: "background", config: { name: "reviewer" }, inputIndex: 1, status: { kind: "queued" } }),
   ];
 
   const details = backgroundStartedDetails(sessions);

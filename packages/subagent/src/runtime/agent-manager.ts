@@ -3,7 +3,8 @@ import type { AgentRunResult } from "../domain/agent-result.js";
 import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import type { SessionStatus } from "../schema.js";
-import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
+import { projectAgentView } from "../view/project-agent-view.js";
+import { activeOrRetainedAgents, effectiveStatus, getSubagentDisplaySettings } from "../view/view-helpers.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
 import { BatchSet } from "./batch-set.js";
 import { ParentFinalizePolicy } from "./parent-finalize-policy.js";
@@ -37,7 +38,8 @@ export class AgentManager {
   }
 
   listSessions(filter?: { status?: SessionStatus[] }): AgentView[] {
-    const views = activeOrRetainedAgents(this._agents).map(agent => agent.toView());
+    const display = getSubagentDisplaySettings();
+    const views = activeOrRetainedAgents(this._agents).map(agent => projectAgentView(agent, display));
     if (!filter || filter.status === undefined) return views;
     const allowed = new Set(filter.status);
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
@@ -50,6 +52,7 @@ export class AgentManager {
    * tool's partial updates; callers must not assume completeness across recursive `_agents` sweeps.
    */
   subtreeOf(rootIds: string[]): AgentView[] {
+    const display = getSubagentDisplaySettings();
     const byId = new Map<string, Agent>();
     for (const agent of this._agents) byId.set(agent.id, agent);
 
@@ -60,7 +63,7 @@ export class AgentManager {
       const agent = byId.get(id);
       if (!agent) return;
       seen.add(id);
-      out.push(agent.toView());
+      out.push(projectAgentView(agent, display));
       const children = this._agents.filter(a => a.parentSessionId === id);
       children.sort((a, b) => a.createdAt - b.createdAt);
       for (const child of children) visit(child.id);

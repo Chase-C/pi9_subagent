@@ -85,7 +85,12 @@ subagent({ action: "agents" })
 
 ### `action: "list"`
 
-List active and retained subagent sessions. Each row carries a `kind` tag (`"background" | "retained"`) describing how it was dispatched. Without a filter, all active and retained sessions are returned:
+List active and retained subagent sessions. Each row carries two independent tags:
+
+- `dispatch: "foreground" | "background"` — how the run was started.
+- `retention: "transient" | "persistent"` — whether the session survives in the catalog after its current attempt settles. Background sessions are always persistent; foreground sessions are persistent only when resumable.
+
+Without a filter, all active and retained sessions are returned:
 
 ```ts
 subagent({ action: "list" })
@@ -305,13 +310,13 @@ Lifecycle:
 
 1. The tool call returns immediately with `view: "background-started"` and the initial session views.
 2. Children run under a manager-owned `AbortController` and are not bound to the parent tool-call signal — completing the parent tool call does not cancel them.
-3. Background sessions appear in `subagent list` with `kind: "background"` and the appropriate `status`.
+3. Background sessions appear in `subagent list` with `dispatch: "background"` and the appropriate `status`.
 4. When a background session finishes, it is retained until removed or collected with `subagent results` (`{ remove: true }`) or `subagent remove`.
 
-`kind` and `resumable` are independent:
+`dispatch`, `retention`, and `resumable` are independent:
 
-- `kind: "retained"` rows in `list` always have `resumable: true` (resumable foreground sessions retained for the current Pi process).
-- `kind: "background"` rows may be either resumable or not. The point of the background-retention rule is that a non-resumable background job's result is still visible after completion until it is removed or collected.
+- `dispatch: "foreground"` sessions are `retention: "persistent"` only when `resumable: true` (the resumable session is kept for the current Pi process). Otherwise they are `retention: "transient"` and pruned at completion.
+- `dispatch: "background"` sessions are always `retention: "persistent"`, regardless of resumability — a non-resumable background job's result stays visible until it is removed or collected.
 
 Removal:
 

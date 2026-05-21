@@ -1,7 +1,8 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
 import type {
-  AgentKind,
+  AgentDispatch,
+  AgentRetention,
   AgentToolUse,
   AgentView,
   AgentViewCapabilities,
@@ -51,7 +52,8 @@ export interface FakeAgentOptions {
   label?: string;
   prompt?: string;
   createdAt?: number;
-  kind?: AgentKind;
+  dispatch?: AgentDispatch;
+  retention?: AgentRetention;
   config?: Partial<AgentView["config"]>;
   options?: { agent?: string; prompt?: string; model?: string; thinking?: AgentView["config"]["thinking"] };
   status?: FakeStatusInput;
@@ -161,7 +163,8 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentView {
     ...(rest.label !== undefined ? { label: rest.label } : {}),
     ...(rest.prompt !== undefined ? { prompt: rest.prompt } : {}),
     createdAt: rest.createdAt ?? 1,
-    kind: rest.kind ?? "retained",
+    dispatch: rest.dispatch ?? "foreground",
+    retention: rest.retention ?? (rest.dispatch === "background" || resumable ? "persistent" : "transient"),
     config: {
       name: cfg.name,
       description: cfg.description,

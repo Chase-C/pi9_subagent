@@ -1,13 +1,12 @@
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 
-import { AgentActivity } from "./agent-activity.js";
+import { AgentActivity, type AgentActivitySnapshot } from "./agent-activity.js";
 import { AgentConfig } from "./agent-config.js";
 import { Attempt } from "./agent-attempt.js";
-import { buildAgentResult, type AgentRunResult } from "./agent-result.js";
-import type { AgentUpdateKind, AgentView, AgentViewStatus } from "./agent-view.js";
+import { buildAgentResult, type AgentResultContext, type AgentRunResult } from "./agent-result.js";
+import type { AgentUpdateKind } from "./agent-view.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
 import { timingMark } from "../runtime/timing.js";
-import { compact, compactMultiline, getSubagentDisplaySettings } from "../view/view-helpers.js";
 
 export type AgentStatus =
   | { kind: "queued"; queuedAt: number }
@@ -145,43 +144,27 @@ export class Agent {
     return this._retainedSession !== undefined;
   }
 
-  toView(inputIndex?: number): AgentView {
-    const activity = this._activity.snapshot();
-    const last = this._activeAttempt();
-    const label = this._label;
-    const prompt = last?.prompt;
-    const active = this.status.kind === "queued" || this.status.kind === "running";
+  activitySnapshot(): AgentActivitySnapshot {
+    return this._activity.snapshot();
+  }
+
+  /** Prompt of the current in-flight attempt, or the most recent terminal attempt. */
+  get activePrompt(): string | undefined {
+    return this._activeAttempt()?.prompt;
+  }
+
+  /** Snapshot of the data needed to build an AgentRunResult for the current attempt. */
+  resultContext(): AgentResultContext {
+    const resumable = this.hasResumableSession();
+    const model = this.spawn.model ?? this.config.model;
     return {
-      id: this.id,
-      ...(inputIndex !== undefined ? { inputIndex } : {}),
+      sessionId: this.id,
+      agentName: this.agentName,
+      ...(this._label !== undefined ? { label: this._label } : {}),
+      prompt: this.requireCurrentAttempt().prompt,
+      ...(model !== undefined ? { model } : {}),
       ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
-      ...(label !== undefined ? { label } : {}),
-      ...(prompt !== undefined ? { prompt } : {}),
-      createdAt: this.createdAt,
-      kind: this.background ? "background" : "retained",
-      config: {
-        name: this.agentName,
-        description: this.config.description,
-        source: this.config.source,
-        sourcePath: this.config.sourcePath,
-        model: this.spawn.model ?? this.config.model,
-        thinking: this.spawn.thinking ?? this.config.thinking,
-        tools: this.config.tools,
-        ...(this.config.skills !== undefined ? { skills: this.config.skills } : {}),
-        resumable: this.resumable,
-      },
-      status: this._viewStatus(),
-      activity: {
-        messageSnippet: activity.message ? compact(activity.message, getSubagentDisplaySettings().messageSnippetLength) : undefined,
-        turns: activity.turns,
-        compactions: activity.compactions,
-        toolHistory: activity.toolHistory,
-      },
-      usage: activity.usage,
-      capabilities: {
-        canResume: this.canResume,
-        canClear: this.resumable && !active,
-      },
+      resumable,
     };
   }
 
@@ -197,11 +180,11 @@ export class Agent {
       const session = current.state.session;
       await Promise.resolve(session.abort()).catch(() => undefined);
       if (!this._current) return;
-      this.settle(buildAgentResult(this, { status: "aborted", error: reason ?? "Agent aborted.", resumed }));
+      this.settle(buildAgentResult(this.resultContext(), { status: "aborted", error: reason ?? "Agent aborted.", resumed }));
       return;
     }
     if (current.state.kind === "queued") {
-      this.settle(buildAgentResult(this, { status: "skipped", error: reason ?? "Agent skipped.", resumed }));
+      this.settle(buildAgentResult(this.resultContext(), { status: "skipped", error: reason ?? "Agent skipped.", resumed }));
     }
   }
 
@@ -230,21 +213,6 @@ export class Agent {
     this._lastAttempt = current;
     this._current = undefined;
     this._emit("status");
-  }
-
-  private _viewStatus(): AgentViewStatus {
-    const status = this.status;
-    if (status.kind === "queued") return { kind: "queued", queuedAt: status.queuedAt };
-    if (status.kind === "running") return { kind: "running", startedAt: status.startedAt };
-    const result = status.result;
-    const rawSnippet = result.status === "completed" ? result.output : result.error ?? result.status;
-    return {
-      kind: "done",
-      outcome: result.status,
-      completedAt: status.completedAt,
-      ...(status.startedAt !== undefined ? { startedAt: status.startedAt } : {}),
-      ...(rawSnippet ? { snippet: compactMultiline(rawSnippet, getSubagentDisplaySettings().outputSnippetLength, getSubagentDisplaySettings().outputSnippetMaxLines) } : {}),
-    };
   }
 
   private _describe(): string {

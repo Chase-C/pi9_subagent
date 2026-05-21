@@ -2,12 +2,8 @@ import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-codi
 
 import type { Agent } from "../domain/agent.js";
 import type { Attempt } from "../domain/agent-attempt.js";
-import {
-  errorRun,
-  interruptedRun,
-  skippedRun,
-  type AgentRunResult,
-} from "../domain/agent-result.js";
+import { errorRun, interruptedRun, skippedRun } from "../domain/agent-finalize.js";
+import type { AgentRunResult } from "../domain/agent-result.js";
 import { DefaultRunAgentDependencies, RunAttempt } from "./run-agent.js";
 import { TaskQueue, type QueueLease } from "./task-queue.js";
 import { timingMark, timingStart } from "./timing.js";

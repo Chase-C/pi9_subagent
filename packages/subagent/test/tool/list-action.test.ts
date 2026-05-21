@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import subagentExtension from "../../src/index.js";
 import { AgentManager } from "../../src/runtime/agent-manager.js";
-import { completedRun, errorRun, interruptedRun } from "../../src/domain/agent-result.js";
+import { completedRun, errorRun, interruptedRun } from "../../src/domain/agent-finalize.js";
 
 const baseCtx = () => ({ cwd: process.cwd(), hasUI: false, modelRegistry: { getAll: () => [] } } as any);
 
@@ -133,5 +133,6 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   assert.equal(retained.config.model, "test/model");
   assert.deepEqual(retained.config.tools, ["read"]);
   assert.equal(retained.status.snippet, "The final answer from the child.");
-  assert.equal(retained.kind, "retained");
+  assert.equal(retained.dispatch, "foreground");
+  assert.equal(retained.retention, "persistent");
 });

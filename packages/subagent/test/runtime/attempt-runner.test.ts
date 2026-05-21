@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { completedRun } from "../../src/domain/agent-result.js";
+import { completedRun } from "../../src/domain/agent-finalize.js";
 import { baseCtx, makeManagerAndOrchestrator, makeSession, mergeRunners } from "../helpers/runtime.js";
 
 test("AttemptRunner marks runner rejections before start as terminal error in grouped progress", async () => {

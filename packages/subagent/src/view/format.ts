@@ -127,7 +127,7 @@ export function formatAgentConfigInspect(config: AgentConfig): string[] {
 export function formatSubagentSessionSummary(agent: AgentView): string {
   const badges = [
     agent.config.resumable ? "resumable" : undefined,
-    agent.kind === "background" ? "kind:background" : undefined,
+    agent.dispatch === "background" ? "dispatch:background" : undefined,
     `session:${agent.id}`,
   ].filter(Boolean);
   return [agent.label ?? agent.config.name, effectiveStatus(agent.status), ...badges].join(" · ");
@@ -494,7 +494,7 @@ function formatSessionLine(row: AgentView, now: number, bold?: Bold): string {
   const activeTool = getActiveTools(row).at(-1);
   if (activeTool) parts.push(`tool:${activeTool}`);
   if (row.activity.messageSnippet) parts.push(`"${row.activity.messageSnippet}"`);
-  if (row.kind === "background") parts.push("kind:background");
+  if (row.dispatch === "background") parts.push("dispatch:background");
 
   if (!isActiveStatusKind(status)) {
     const tail = status === "completed" ? "" : `:${getSnippet(row.status) ?? status}`;

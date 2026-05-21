@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { completedRun, interruptedRun } from "../../src/domain/agent-result.js";
+import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
 import { baseCtx, makeManagerAndOrchestrator } from "../helpers/runtime.js";
 
 test("parent finalizing with error cancels its non-background child via the observer", async () => {

@@ -5,7 +5,7 @@ import { AgentManager } from "../../src/runtime/agent-manager.js";
 import type { BatchOrchestrator } from "../../src/runtime/batch-orchestrator.js";
 import { BackgroundNotifier, type NotifierPi } from "../../src/runtime/background-notifier.js";
 import { makeManagerAndOrchestrator } from "../helpers/runtime.js";
-import { completedRun } from "../../src/domain/agent-result.js";
+import { completedRun } from "../../src/domain/agent-finalize.js";
 import type { BackgroundNotifyMode } from "../../src/ui/settings.js";
 
 const baseCtx = () => ({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } } as any);

@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { completedRun } from "../../src/domain/agent-result.js";
+import { completedRun } from "../../src/domain/agent-finalize.js";
 import { baseCtx, makeManagerAndOrchestrator, makeSession, mergeRunners } from "../helpers/runtime.js";
 
 test("orchestrator returns ordered per-run output and reports unknown agents and child failures", async () => {
@@ -107,7 +107,7 @@ test("orchestrator.startBatch returns sessions synchronously and a resultsPromis
   assert.ok(batch.groupId);
   assert.equal(batch.sessions.length, 2);
   assert.deepEqual(batch.sessions.map(s => s.config.name), ["helper", "helper"]);
-  assert.deepEqual(batch.sessions.map(s => s.kind), ["retained", "retained"]);
+  assert.deepEqual(batch.sessions.map(s => s.dispatch), ["foreground", "foreground"]);
 
   const results = await batch.resultsPromise;
   assert.deepEqual(results.map(r => r.status), ["completed", "completed"]);
@@ -136,11 +136,11 @@ test("orchestrator.startBatch with background:true returns sessions tagged kind:
   );
 
   assert.equal(batch.sessions.length, 1);
-  assert.equal(batch.sessions[0].kind, "background");
+  assert.equal(batch.sessions[0].dispatch, "background");
 
   const listed = manager.listSessions();
   assert.equal(listed.length, 1);
-  assert.equal(listed[0].kind, "background");
+  assert.equal(listed[0].dispatch, "background");
 
   releaseRun!();
   await batch.resultsPromise;
@@ -210,7 +210,7 @@ test("orchestrator.startBatch background:true promotes resumed sessions to backg
 
   assert.equal(batch.sessions.length, 1);
   assert.equal(batch.sessions[0].id, seed.sessionId);
-  assert.equal(batch.sessions[0].kind, "background");
+  assert.equal(batch.sessions[0].dispatch, "background");
 
   const [resumed] = await batch.resultsPromise;
   assert.equal(resumed.status, "completed");
@@ -219,7 +219,7 @@ test("orchestrator.startBatch background:true promotes resumed sessions to backg
   const listed = manager.listSessions();
   assert.equal(listed.length, 1);
   assert.equal(listed[0].id, seed.sessionId);
-  assert.equal(listed[0].kind, "background");
+  assert.equal(listed[0].dispatch, "background");
 
   const result = await manager.remove({ scope: "background" });
   assert.equal(result.removed, 1);

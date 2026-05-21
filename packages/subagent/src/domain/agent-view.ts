@@ -44,7 +44,9 @@ export interface AgentActivityView {
   readonly toolHistory: readonly AgentToolUse[];
 }
 
-export type AgentKind = "background" | "retained";
+export type AgentDispatch = "foreground" | "background";
+
+export type AgentRetention = "transient" | "persistent";
 
 export interface AgentViewCapabilities {
   readonly canResume: boolean;
@@ -63,7 +65,8 @@ export interface AgentView {
   readonly status: AgentViewStatus;
   readonly activity: AgentActivityView;
   readonly usage: Usage | undefined;
-  readonly kind: AgentKind;
+  readonly dispatch: AgentDispatch;
+  readonly retention: AgentRetention;
   readonly capabilities: AgentViewCapabilities;
 }
 

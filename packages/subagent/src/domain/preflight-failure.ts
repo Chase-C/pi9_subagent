@@ -2,6 +2,8 @@ import type { Agent } from "./agent.js";
 import type { AgentRunResult } from "./agent-result.js";
 import type { AgentView } from "./agent-view.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
+import { projectAgentView } from "../view/project-agent-view.js";
+import { getSubagentDisplaySettings } from "../view/view-helpers.js";
 
 export interface PreflightFailure {
   view: AgentView;
@@ -26,7 +28,8 @@ export function preflightSpawnFailure(args: PreflightSpawnFailureArgs): Prefligh
       ...labelField,
       prompt: task.prompt,
       createdAt,
-      kind: "retained",
+      dispatch: "foreground",
+      retention: "transient",
       config: {
         name: task.agent,
         source: undefined,
@@ -66,7 +69,8 @@ export function preflightResumeFailure(args: PreflightResumeFailureArgs): Prefli
   const { groupId, inputIndex, createdAt, task, target, error } = args;
   const label = task.label ?? target?.label;
   const labelField = label !== undefined ? { label } : {};
-  const targetConfig = target?.toView().config;
+  const targetView = target ? projectAgentView(target, getSubagentDisplaySettings()) : undefined;
+  const targetConfig = targetView?.config;
   return {
     view: {
       id: target?.id ?? `${groupId}:resume-${inputIndex}`,
@@ -74,7 +78,8 @@ export function preflightResumeFailure(args: PreflightResumeFailureArgs): Prefli
       ...labelField,
       prompt: task.prompt,
       createdAt,
-      kind: target ? target.toView().kind : "retained",
+      dispatch: targetView ? targetView.dispatch : "foreground",
+      retention: targetView ? targetView.retention : "transient",
       config: targetConfig ?? {
         name: "(unknown)",
         source: undefined,

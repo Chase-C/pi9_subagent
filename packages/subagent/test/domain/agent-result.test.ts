@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { Agent, type AgentStatus } from "../../src/domain/agent.js";
-import { buildAgentResult, completedRun, errorRun, interruptedRun } from "../../src/domain/agent-result.js";
+import { buildAgentResultFor, completedRun, errorRun, interruptedRun } from "../../src/domain/agent-finalize.js";
 
 function doneStatus(agent: Agent): Extract<AgentStatus, { kind: "done" }> {
   if (agent.status.kind !== "done") throw new Error(`expected done, got ${agent.status.kind}`);
@@ -84,10 +84,35 @@ test("agent transitions through start, finalize, and is idempotent on second fin
   assert.equal(queuedDone.result.error, "failed before start");
 });
 
-test("buildAgentResult throws a clear invariant error when no attempt is current", () => {
+test("buildAgentResultFor throws a clear invariant error when no attempt is current", () => {
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
   agent.attach({ subscribe: () => () => {}, abort: () => {} } as any);
   completedRun(agent, "done");
 
-  assert.throws(() => buildAgentResult(agent, { status: "error", error: "late" }), /current attempt/i);
+  assert.throws(() => buildAgentResultFor(agent, { status: "error", error: "late" }), /current attempt/i);
+});
+
+test("buildAgentResult takes a plain context with no Agent dependency", async () => {
+  const { buildAgentResult: buildFromContext } = await import("../../src/domain/agent-result.js");
+  const result = buildFromContext(
+    {
+      sessionId: "sess-1",
+      agentName: "helper",
+      label: "researcher",
+      prompt: "go",
+      model: "anthropic/claude-sonnet-4",
+      parentSessionId: "parent-1",
+      resumable: true,
+    },
+    { status: "completed", output: "yay" },
+  );
+  assert.equal(result.agent, "helper");
+  assert.equal(result.label, "researcher");
+  assert.equal(result.prompt, "go");
+  assert.equal(result.model, "anthropic/claude-sonnet-4");
+  assert.equal(result.parentSessionId, "parent-1");
+  assert.equal(result.resumable, true);
+  assert.equal(result.sessionId, "sess-1");
+  assert.equal(result.output, "yay");
+  assert.equal(result.status, "completed");
 });

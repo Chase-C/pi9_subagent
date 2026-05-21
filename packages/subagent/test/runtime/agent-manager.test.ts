@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { completedRun, interruptedRun } from "../../src/domain/agent-result.js";
+import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
 import { baseCtx, makeManagerAndOrchestrator, makeSession, mergeRunners } from "../helpers/runtime.js";
 
 test("AgentManager.listSessions returns all retained sessions when called with no filter", async () => {
@@ -18,7 +18,7 @@ test("AgentManager.listSessions returns all retained sessions when called with n
 
   const all = manager.listSessions();
   assert.equal(all.length, 1);
-  assert.equal(all[0].kind, "retained");
+  assert.equal(all[0].dispatch, "foreground");
 });
 
 test("AgentManager does not expose skipped resumable tasks as sessions", async () => {
@@ -504,7 +504,7 @@ test("AgentManager.remove scope=retained leaves resumable background sessions wh
   );
   const [background] = await bgBatch.resultsPromise;
 
-  assert.deepEqual(manager.listSessions().map(s => s.kind).sort(), ["background", "retained"]);
+  assert.deepEqual(manager.listSessions().map(s => s.dispatch).sort(), ["background", "foreground"]);
 
   const result = await manager.remove({ scope: "retained" });
 
@@ -513,7 +513,7 @@ test("AgentManager.remove scope=retained leaves resumable background sessions wh
   const remaining = manager.listSessions();
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0].id, background.sessionId);
-  assert.equal(remaining[0].kind, "background");
+  assert.equal(remaining[0].dispatch, "background");
 });
 
 test("AgentManager.remove with a running sessionId aborts the underlying session and removes it", async () => {
@@ -594,7 +594,7 @@ test("AgentManager background non-resumable agents stay listed with terminal sta
 
   const listed = manager.listSessions();
   assert.equal(listed.length, 1);
-  assert.equal(listed[0].kind, "background");
+  assert.equal(listed[0].dispatch, "background");
   assert.equal(listed[0].status.kind, "done");
   assert.equal(listed[0].status.kind === "done" && listed[0].status.outcome, "completed");
 });
@@ -925,7 +925,7 @@ test("AgentManager.backgroundResults reads retained foreground sessions identica
   const [seed] = await orchestrator.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial" },
   ]);
-  assert.equal(manager.listSessions()[0].kind, "retained");
+  assert.equal(manager.listSessions()[0].dispatch, "foreground");
 
   const [entry] = await manager.backgroundResults([seed.sessionId!]) as any[];
   assert.equal(entry.ready, true);

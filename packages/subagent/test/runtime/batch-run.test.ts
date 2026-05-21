@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { completedRun } from "../../src/domain/agent-result.js";
+import { completedRun } from "../../src/domain/agent-finalize.js";
 import { baseCtx, makeManagerAndOrchestrator, makeSession } from "../helpers/runtime.js";
 
 test("BatchRun emits grouped progress rows in input order including unknown agents", async () => {

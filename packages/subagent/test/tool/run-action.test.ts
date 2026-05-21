@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import subagentExtension from "../../src/index.js";
 import { AgentManager } from "../../src/runtime/agent-manager.js";
-import { completedRun } from "../../src/domain/agent-result.js";
+import { completedRun } from "../../src/domain/agent-finalize.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 
 const baseCtx = () => ({ cwd: process.cwd(), hasUI: false, modelRegistry: { getAll: () => [] } } as any);
