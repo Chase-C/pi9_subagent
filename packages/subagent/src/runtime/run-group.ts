@@ -22,7 +22,7 @@ type Entry =
 
 export interface RunGroupOptions {
   groupId: string;
-  listener?: RunUpdateListener;
+  onUpdate?: RunUpdateListener;
   /**
    * Returns the live tree (roots + descendants in pre-order) for the given root ids.
    * Provided by the manager so the group can compute progress views without owning
@@ -45,7 +45,7 @@ export class RunGroup {
   private readonly _rootIds = new Set<string>();
   private _treeIds = new Set<string>();
 
-  constructor(private readonly opts: RunGroupOptions) {}
+  constructor(private readonly opts: RunGroupOptions) { }
 
   get groupId(): string { return this.opts.groupId }
   get entryCount(): number { return this._entries.length }
@@ -130,14 +130,14 @@ export class RunGroup {
   }
 
   emit(): void {
-    if (!this.opts.listener) return;
+    if (!this.opts.onUpdate) return;
 
     const end = timingStart("manager.emitRunUpdate", { groupId: this.opts.groupId, entries: this._entries.length });
     const sessions = this.rootSessions();
     const tree = this.tree();
     const active = tree.some(s => s.status.kind === "queued" || s.status.kind === "running");
     timingSync("manager.listener", { groupId: this.opts.groupId, sessionCount: sessions.length, treeCount: tree.length, active }, () => {
-      this.opts.listener?.({ sessions, tree, active });
+      this.opts.onUpdate?.({ sessions, tree, active });
     });
     this.scheduleAnimationUpdate(active);
     end({ active, sessionCount: sessions.length, treeCount: tree.length });

@@ -15,8 +15,8 @@ test("parent finalizing with error cancels its non-background child via the obse
     }
     agent.attach({
       messages: [],
-      subscribe: () => () => {},
-      prompt: async () => {},
+      subscribe: () => () => { },
+      prompt: async () => { },
       abort: () => { aborts.push(agent.spawn.prompt); childFlag.aborted = true; },
     });
     while (!childFlag.aborted) await new Promise(r => setTimeout(r, 5));
@@ -39,7 +39,7 @@ test("parent finalizing with error cancels its non-background child via the obse
   const childBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
-    undefined, { background: false, parentSessionId: parentId },
+    undefined, { background: false, parentId: parentId },
   );
   await new Promise(r => setTimeout(r, 10));
   assert.equal(
@@ -68,8 +68,8 @@ test("parent finalizing with completed leaves a running non-background child alo
     if (agent.spawn.prompt === "parent") {
       agent.attach({
         messages: [],
-        subscribe: () => () => {},
-        prompt: async () => {},
+        subscribe: () => () => { },
+        prompt: async () => { },
         abort: () => { aborts.push("parent"); },
       });
       await parentHold;
@@ -77,8 +77,8 @@ test("parent finalizing with completed leaves a running non-background child alo
     }
     agent.attach({
       messages: [],
-      subscribe: () => () => {},
-      prompt: async () => {},
+      subscribe: () => () => { },
+      prompt: async () => { },
       abort: () => { aborts.push("child"); },
     });
     await childHold;
@@ -102,7 +102,7 @@ test("parent finalizing with completed leaves a running non-background child alo
   const childBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
-    undefined, { background: false, parentSessionId: parentId },
+    undefined, { background: false, parentId: parentId },
   );
   await new Promise(r => setTimeout(r, 10));
   assert.equal(
@@ -134,8 +134,8 @@ test("parent aborted with running background descendant: background survives and
     if (agent.spawn.prompt === "parent") {
       agent.attach({
         messages: [],
-        subscribe: () => () => {},
-        prompt: async () => {},
+        subscribe: () => () => { },
+        prompt: async () => { },
         abort: () => { aborts.push("parent"); parentFlag.aborted = true; },
       });
       while (!parentFlag.aborted) await new Promise(r => setTimeout(r, 5));
@@ -143,8 +143,8 @@ test("parent aborted with running background descendant: background survives and
     }
     agent.attach({
       messages: [],
-      subscribe: () => () => {},
-      prompt: async () => {},
+      subscribe: () => () => { },
+      prompt: async () => { },
       abort: () => { aborts.push("bg"); },
     });
     await bgHold;
@@ -166,7 +166,7 @@ test("parent aborted with running background descendant: background survives and
   const bgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
-    undefined, { background: true, parentSessionId: parentId },
+    undefined, { background: true, parentId: parentId },
   );
   await new Promise(r => setTimeout(r, 10));
 
@@ -199,8 +199,8 @@ test("background descendants form a cancellation boundary for their own children
     if (agent.spawn.prompt === "root") {
       agent.attach({
         messages: [],
-        subscribe: () => () => {},
-        prompt: async () => {},
+        subscribe: () => () => { },
+        prompt: async () => { },
         abort: () => { aborts.push("root"); },
       });
       await rootHold;
@@ -209,8 +209,8 @@ test("background descendants form a cancellation boundary for their own children
     if (agent.spawn.prompt === "bg") {
       agent.attach({
         messages: [],
-        subscribe: () => () => {},
-        prompt: async () => {},
+        subscribe: () => () => { },
+        prompt: async () => { },
         abort: () => { aborts.push("bg"); },
       });
       await bgHold;
@@ -218,8 +218,8 @@ test("background descendants form a cancellation boundary for their own children
     }
     agent.attach({
       messages: [],
-      subscribe: () => () => {},
-      prompt: async () => {},
+      subscribe: () => () => { },
+      prompt: async () => { },
       abort: () => { aborts.push("fg"); },
     });
     await fgHold;
@@ -241,7 +241,7 @@ test("background descendants form a cancellation boundary for their own children
   const bgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
-    undefined, { background: true, parentSessionId: rootId },
+    undefined, { background: true, parentId: rootId },
   );
   await new Promise(r => setTimeout(r, 10));
   const bgId = manager.listSessions().find(s => s.prompt === "bg")!.id;
@@ -249,7 +249,7 @@ test("background descendants form a cancellation boundary for their own children
   const fgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "fg" }],
-    undefined, { background: false, parentSessionId: bgId },
+    undefined, { background: false, parentId: bgId },
   );
   await new Promise(r => setTimeout(r, 10));
   assert.equal(manager.listSessions().find(s => s.prompt === "fg")?.status.kind, "running");
@@ -277,8 +277,8 @@ test("parent errors with mix of background and non-background children: only non
     if (agent.spawn.prompt === "parent") {
       agent.attach({
         messages: [],
-        subscribe: () => () => {},
-        prompt: async () => {},
+        subscribe: () => () => { },
+        prompt: async () => { },
         abort: () => { aborts.push("parent"); },
       });
       await new Promise(r => setTimeout(r, 20));
@@ -287,8 +287,8 @@ test("parent errors with mix of background and non-background children: only non
     if (agent.spawn.prompt === "fg") {
       agent.attach({
         messages: [],
-        subscribe: () => () => {},
-        prompt: async () => {},
+        subscribe: () => () => { },
+        prompt: async () => { },
         abort: () => { aborts.push("fg"); nonBgFlag.aborted = true; },
       });
       while (!nonBgFlag.aborted) await new Promise(r => setTimeout(r, 5));
@@ -297,8 +297,8 @@ test("parent errors with mix of background and non-background children: only non
     // bg
     agent.attach({
       messages: [],
-      subscribe: () => () => {},
-      prompt: async () => {},
+      subscribe: () => () => { },
+      prompt: async () => { },
       abort: () => { aborts.push("bg"); },
     });
     await bgHold;
@@ -320,12 +320,12 @@ test("parent errors with mix of background and non-background children: only non
   const fgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "fg" }],
-    undefined, { background: false, parentSessionId: parentId },
+    undefined, { background: false, parentId: parentId },
   );
   const bgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
-    undefined, { background: true, parentSessionId: parentId },
+    undefined, { background: true, parentId: parentId },
   );
   await new Promise(r => setTimeout(r, 10));
 
@@ -344,19 +344,17 @@ test("parent errors with mix of background and non-background children: only non
   assert.equal(bgResult.status, "completed");
 });
 
-test("ParentFinalizePolicy treats agents promoted via promoteToBackground as background", async () => {
+test("ParentFinalizePolicy honors the background flag set at startRun time when fanning out cancellation", async () => {
   const aborts: string[] = [];
   let releaseChild!: () => void;
   const childHold = new Promise<void>(r => { releaseChild = r; });
   const runner = async (_ctx: any, agent: any) => {
     agent.attach({
       messages: [],
-      subscribe: () => () => {},
-      prompt: async () => {},
+      subscribe: () => () => { },
+      prompt: async () => { },
       abort: () => { aborts.push(agent.spawn.prompt); },
     });
-    // Promote this foreground-spawned agent to background mid-run.
-    agent.promoteToBackground();
     await childHold;
     return completedRun(agent, "ok");
   };
@@ -365,16 +363,18 @@ test("ParentFinalizePolicy treats agents promoted via promoteToBackground as bac
   };
   const manager = makeManager(registry as any, 4, runner);
 
+  // Start the child in background mode directly — promoteToBackground was removed in favor of
+  // having callers commit to a dispatch decision when they call startRun.
   const batch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
-    undefined, { background: false, parentSessionId: "parent-1" },
+    undefined, { background: true, parentId: "parent-1" },
   );
   await new Promise(r => setTimeout(r, 20));
 
   await manager.cancelDescendantsOf("parent-1", { skipBackground: true, reason: "Parent parent-1 finalized as error" });
   await new Promise(r => setTimeout(r, 10));
-  assert.deepEqual(aborts, [], "promoted-to-background descendant must not be aborted");
+  assert.deepEqual(aborts, [], "background descendant must not be aborted");
 
   releaseChild();
   const [result] = await batch.resultsPromise;

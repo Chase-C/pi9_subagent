@@ -15,10 +15,11 @@ test("subagent action=results delegates to manager.backgroundResults and returns
   const calls: any[] = [];
   const fakeManager = {
     listSessions(): any[] { return []; },
-    async backgroundResults(sessionIds: string[], options: any) {
-      calls.push({ sessionIds, options });
+    backgroundResults(sessionIds: string[]) {
+      calls.push({ sessionIds });
       return [{ sessionId: "s1", ready: true, result: { agent: "helper", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false } }];
     },
+    async remove() { throw new Error("remove should not be called without params.remove"); },
   };
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
@@ -28,19 +29,27 @@ test("subagent action=results delegates to manager.backgroundResults and returns
   const result = await tool.execute("tool-call", { action: "results", sessionIds: ["s1"] }, undefined, undefined, baseCtx());
 
   assert.equal(result.isError, false);
-  assert.deepEqual(calls, [{ sessionIds: ["s1"], options: { remove: false } }]);
+  assert.deepEqual(calls, [{ sessionIds: ["s1"] }]);
   assert.equal(result.details.view, "background-results");
   assert.equal(result.details.results.length, 1);
   assert.equal(result.details.results[0].ready, true);
 });
 
-test("subagent action=results forwards the remove flag to manager.backgroundResults", async () => {
-  const calls: any[] = [];
+test("subagent action=results with remove:true follows backgroundResults with a manager.remove of the terminal ids", async () => {
+  const fetchCalls: any[] = [];
+  const removeCalls: any[] = [];
   const fakeManager = {
     listSessions(): any[] { return []; },
-    async backgroundResults(sessionIds: string[], options: any) {
-      calls.push({ sessionIds, options });
-      return [];
+    backgroundResults(sessionIds: string[]) {
+      fetchCalls.push({ sessionIds });
+      return [
+        { sessionId: "s1", ready: true, result: { agent: "helper", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false } },
+        { sessionId: "s2", ready: false, status: "running", elapsedMs: 1, agent: "helper" },
+      ];
+    },
+    async remove(args: any) {
+      removeCalls.push(args);
+      return { removed: 1, aborted: 0, sessionIds: args.sessionIds, errors: [] };
     },
   };
   const tool = registerExtension({
@@ -50,13 +59,14 @@ test("subagent action=results forwards the remove flag to manager.backgroundResu
 
   await tool.execute("tool-call", { action: "results", sessionIds: ["s1", "s2"], remove: true }, undefined, undefined, baseCtx());
 
-  assert.deepEqual(calls, [{ sessionIds: ["s1", "s2"], options: { remove: true } }]);
+  assert.deepEqual(fetchCalls, [{ sessionIds: ["s1", "s2"] }]);
+  assert.deepEqual(removeCalls, [{ sessionIds: ["s1"] }], "only the terminal/ready entry is swept");
 });
 
 test("subagent action=results keeps isError false when entries include per-id errors", async () => {
   const fakeManager = {
     listSessions(): any[] { return []; },
-    async backgroundResults() {
+    backgroundResults() {
       return [{ sessionId: "nope", error: "Unknown subagent session: nope" }];
     },
   };
@@ -78,7 +88,7 @@ test("subagent action=results rejects an empty sessionIds array without calling 
     agentManager: {
       sessions: [],
       listSessions() { return this.sessions; },
-      async backgroundResults() { calls += 1; return []; },
+      backgroundResults() { calls += 1; return []; },
     },
   });
 
@@ -97,7 +107,7 @@ test("subagent action=results rejects malformed sessionIds (non-array or non-str
       agentManager: {
         sessions: [],
         listSessions() { return this.sessions; },
-        async backgroundResults() { calls += 1; return []; },
+        backgroundResults() { calls += 1; return []; },
       },
     });
 
@@ -116,7 +126,7 @@ test("subagent action=results rejects empty-string sessionIds without calling ma
     agentManager: {
       sessions: [],
       listSessions() { return this.sessions; },
-      async backgroundResults() { calls += 1; return []; },
+      backgroundResults() { calls += 1; return []; },
     },
   });
 

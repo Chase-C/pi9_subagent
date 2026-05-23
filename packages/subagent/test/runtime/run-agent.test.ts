@@ -7,7 +7,9 @@ import { join } from "node:path";
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 
 import { RunAttempt } from "../../src/runtime/run-agent.js";
-import { Agent } from "../../src/domain/agent.js";
+import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
+
+const noop: AgentUpdateListener = () => {};
 
 const SAVED_BYPASS = process.env.PI_SUBAGENT_BYPASS_EXTENSION_CACHE;
 const SAVED_TIMING = process.env.PI_SUBAGENT_DEBUG_TIMING;
@@ -55,7 +57,7 @@ test("run-agent skips before prompting when signal aborts during setup", async (
     ResourceLoader: class { async reload() { controller.abort(); } },
     createAgentSession: async () => { createCalled = true; return { session }; },
   });
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), controller.signal, dependencies);
 
@@ -81,7 +83,7 @@ test("run-agent resolves relative task cwd against context cwd", async () => {
     ResourceLoader: class { constructor(options: any) { loaderOptions = options; } async reload() {} },
     createAgentSession: async (options: any) => { createOptions = options; return { session }; },
   });
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", cwd: "nested/project" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", cwd: "nested/project" }, noop);
 
   await RunAttempt(baseCtx(root), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -103,7 +105,7 @@ test("run-agent uses frontmatter thinking when task does not override it", async
   const dependencies = makeBaseDeps({
     createAgentSession: async (options: any) => { createOptions = options; return { session }; },
   });
-  const agent = new Agent("id", { ...baseConfig, name: "thinker", thinking: "high" }, { kind: "spawn", agent: "thinker", prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, name: "thinker", thinking: "high" }, { kind: "spawn", agent: "thinker", prompt: "work" }, noop);
 
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -124,7 +126,7 @@ test("run-agent forwards configured tools allowlist to createAgentSession", asyn
   const agent = new Agent(
     "id",
     { ...baseConfig, name: "limited", tools: ["read", "grep"], model: "model-a" },
-    { kind: "spawn", agent: "limited", prompt: "work" },
+    { kind: "spawn", agent: "limited", prompt: "work" }, noop,
   );
 
   const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
@@ -148,7 +150,7 @@ test("run-agent marks running parent cancellation as interrupted", async () => {
     },
   };
   const dependencies = makeBaseDeps({ createAgentSession: async () => ({ session }) });
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   const pending = RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), controller.signal, dependencies);
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -174,7 +176,7 @@ test("run-agent treats final assistant error stop reason as failed child run", a
     abort: () => {},
   };
   const dependencies = makeBaseDeps({ createAgentSession: async () => ({ session }) });
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -202,7 +204,7 @@ test("run-agent injects requested skills into the system prompt and disables loa
     createAgentSession: async () => ({ session }),
     loadSkills: () => ({ skills, diagnostics: [] }),
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT" }, { kind: "spawn", agent: "helper", prompt: "work", skills: ["tdd", "review"] });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT" }, { kind: "spawn", agent: "helper", prompt: "work", skills: ["tdd", "review"] }, noop);
 
   const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -225,8 +227,8 @@ test("run-agent reports an unknown skill from per-task or frontmatter sources as
       loadSkills: () => ({ skills: [], diagnostics: [] }),
     });
     const agent = source === "per-task"
-      ? new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", skills: ["missing"] })
-      : new Agent("id", { ...baseConfig, skills: ["missing"] }, { kind: "spawn", agent: "helper", prompt: "work" });
+      ? new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", skills: ["missing"] }, noop)
+      : new Agent("id", { ...baseConfig, skills: ["missing"] }, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
     const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -259,7 +261,7 @@ test("run-agent uses agent-frontmatter default skills when the task does not pro
     createAgentSession: async () => ({ session }),
     loadSkills: () => ({ skills: [skill], diagnostics: [] }),
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT", skills: ["foo"] }, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT", skills: ["foo"] }, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -287,7 +289,7 @@ test("run-agent per-task skills fully replace agent-frontmatter default skills",
     createAgentSession: async () => ({ session }),
     loadSkills: () => ({ skills, diagnostics: [] }),
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE", skills: ["foo", "baz"] }, { kind: "spawn", agent: "helper", prompt: "work", skills: ["bar"] });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE", skills: ["foo", "baz"] }, { kind: "spawn", agent: "helper", prompt: "work", skills: ["bar"] }, noop);
 
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -311,7 +313,7 @@ test("run-agent explicit empty per-task skills opts out of agent-frontmatter def
     createAgentSession: async () => ({ session }),
     loadSkills: () => { loadSkillsCalls += 1; return { skills: [], diagnostics: [] }; },
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT", skills: ["foo"] }, { kind: "spawn", agent: "helper", prompt: "work", skills: [] });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT", skills: ["foo"] }, { kind: "spawn", agent: "helper", prompt: "work", skills: [] }, noop);
 
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -332,7 +334,7 @@ test("emits cache-load and resource-loader timing events with factory and fallba
       load: async () => ({ factories: [factory], fallbackPaths: [fallbackPath] }),
     },
   });
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -371,7 +373,7 @@ test("cache fallback paths reach DefaultResourceLoader.getExtensions() in the sp
       load: async () => ({ factories: [], fallbackPaths: [entry] }),
     },
   });
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   const result = await RunAttempt(baseCtx(root), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -421,7 +423,7 @@ test("run-agent calls extensionFactoryCache.load with the resolved cwd and agent
   });
 
   for (let i = 0; i < 2; i++) {
-    const agent = new Agent(`id-${i}`, baseConfig, { kind: "spawn", agent: "helper", prompt: "work", cwd: "child" });
+    const agent = new Agent(`id-${i}`, baseConfig, { kind: "spawn", agent: "helper", prompt: "work", cwd: "child" }, noop);
     await RunAttempt(baseCtx(root), agent, agent.requireCurrentAttempt(), undefined, dependencies);
   }
 
@@ -449,7 +451,7 @@ test("run-agent constructs the child resource loader with cache factories and fa
       load: async () => ({ factories: [factory], fallbackPaths: [fallbackPath] }),
     },
   });
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -477,7 +479,7 @@ test("run-agent prepends the manager-supplied child factory before cached factor
     }),
     childFactoryFor: (agent: any) => { childFactoryArg = agent; return childFactory; },
   } as any;
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -499,7 +501,7 @@ test("run-agent leaves the extensionFactories list unchanged when no childFactor
     createAgentSession: async () => ({ session }),
     extensionFactoryCache: { load: async () => ({ factories: [cachedFactory], fallbackPaths: [] }) },
   });
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
@@ -518,7 +520,7 @@ test("run-agent leaves the system prompt unchanged when no skills are requested"
     ResourceLoader: class { constructor(options: any) { loaderOptions = options; } async reload() {} },
     createAgentSession: async () => ({ session }),
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT" }, { kind: "spawn", agent: "helper", prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT" }, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 

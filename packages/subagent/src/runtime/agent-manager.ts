@@ -10,7 +10,6 @@ import type { SessionStatus, TaskRequest } from "../schema.js";
 import { projectAgentView } from "../view/project-agent-view.js";
 import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
-import { resolveResume, resolveSpawn } from "./preflight.js";
 import { RunGroup, type RunUpdateListener } from "./run-group.js";
 import { timingMark, timingStart } from "./timing.js";
 
@@ -25,7 +24,7 @@ export type BackgroundResult =
 
 export interface StartRunOptions {
   background: boolean;
-  parentSessionId?: string;
+  parentId?: string;
 }
 
 export interface RunHandle {
@@ -91,55 +90,41 @@ export class AgentManager {
     options: { skipBackground?: boolean; reason?: string } = {},
   ): Promise<void> {
     const { skipBackground = false, reason } = options;
-    const directChildren = this._agents.filter(a => a.parentSessionId === parentSessionId);
-    timingMark("manager.cancelDescendants.walk", { parentSessionId, directChildCount: directChildren.length, skipBackground, reason });
-    for (const child of directChildren) {
-      if (skipBackground && child.background) {
-        timingMark("manager.cancelDescendants.skipBackground", { parentSessionId, childId: child.id, agent: child.agentName });
-        continue;
-      }
+    const toCancel = this._agents
+      .filter(a => a.parentId === parentSessionId)
+      .filter(a => !(skipBackground && a.background));
+
+    timingMark("manager.cancelDescendants.walk", { parentSessionId, childrenToCancel: toCancel.length, skipBackground, reason });
+    for (const child of toCancel) {
       timingMark("manager.cancelDescendants.child", { parentSessionId, childId: child.id, agent: child.agentName, statusKind: child.status.kind, background: child.background });
       await this.cancelDescendantsOf(child.id, options);
-      await (reason !== undefined ? child.abort(reason) : child.abort());
+      await child.abort(reason);
     }
   }
 
-  async backgroundResults(
+  backgroundResults(
     sessionIds: string[],
-    options: { remove?: boolean } = {},
-  ): Promise<BackgroundResult[]> {
-    const remove = options.remove === true;
-    const results: BackgroundResult[] = [];
-    const terminalIds = new Set<string>();
-    for (const id of sessionIds) {
+  ): BackgroundResult[] {
+    return sessionIds.map(id => {
       const lookup = this._resolveSession(id);
-      if ("error" in lookup) {
-        results.push(lookup);
-        continue;
-      }
+      if ("error" in lookup) return lookup;
+
       const agent = lookup.agent;
       const status = agent.status;
       if (status.kind === "done") {
-        results.push({ sessionId: id, ready: true, result: status.result });
-        if (remove) terminalIds.add(id);
-        continue;
+        return { sessionId: id, ready: true, result: status.result };
       }
-      const now = Date.now();
-      const elapsedMs = status.kind === "running"
-        ? now - status.startedAt
-        : now - status.queuedAt;
-      const entry: Extract<BackgroundResult, { ready: false }> = {
+
+      const beginAt = (status.kind === "running") ? status.startedAt : status.queuedAt;
+      return {
         sessionId: id,
         ready: false,
-        status: status.kind === "running" ? "running" : "queued",
-        elapsedMs,
+        status: status.kind,
+        elapsedMs: Date.now() - beginAt,
         agent: agent.agentName,
+        ...(agent.label ? { label: agent.label } : {}),
       };
-      if (agent.label !== undefined) entry.label = agent.label;
-      results.push(entry);
-    }
-    if (terminalIds.size > 0) await this.remove({ sessionIds: Array.from(terminalIds) });
-    return results;
+    });
   }
 
   async remove(
@@ -190,59 +175,42 @@ export class AgentManager {
     options: StartRunOptions,
   ): RunHandle {
     const groupId = randomUUID();
-    const groupCreatedAt = Date.now();
-    timingMark("manager.run.start", { groupId, taskCount: tasks.length, background: options.background, parentSessionId: options.parentSessionId });
+    const createdAt = Date.now();
+    timingMark("manager.run.start", { groupId, taskCount: tasks.length, background: options.background, parentSessionId: options.parentId });
 
-    const controller = options.background ? new AbortController() : undefined;
-    const group = new RunGroup({
-      groupId,
-      ...(onUpdate ? { listener: onUpdate } : {}),
-      walkTree: rootIds => this._walkTree(rootIds),
-    });
+    const group = new RunGroup({ groupId, onUpdate, walkTree: ids => this._walkTree(ids) });
     this._groups.set(groupId, group);
 
+    const controller = options.background ? new AbortController() : undefined;
     const childSignal = controller ? controller.signal : signal;
     const touched = new Set<string>();
 
-    const resultPromises = tasks.map((task, inputIndex) => {
-      if (task.kind === "spawn") {
-        const preflight = resolveSpawn({ task, groupId, inputIndex, createdAt: groupCreatedAt, registry: this.registry, background: options.background });
-        if (preflight.kind === "failure") {
-          group.addStaticView(preflight.failure.view, inputIndex, false);
-          timingMark("manager.task.preflightFailure", { groupId, inputIndex, agent: task.agent, parentSessionId: options.parentSessionId });
-          return Promise.resolve(preflight.failure.result);
-        }
-
-        const agent = new Agent(randomUUID(), preflight.config, task, {
-          background: options.background,
-          ...(options.parentSessionId !== undefined ? { parentSessionId: options.parentSessionId } : {}),
-        });
-        this._agents.push(agent);
-        agent.on(this._agentUpdate.bind(this));
-        group.addAgent(agent, inputIndex, false);
-        timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id, parentSessionId: options.parentSessionId, background: options.background });
-        touched.add(agent.id);
-        return this._runner.run(ctx, childSignal, agent, agent.requireCurrentAttempt());
-      }
-
-      const preflight = resolveResume({
-        task, groupId, inputIndex, createdAt: groupCreatedAt,
-        findResumable: id => this._agents.find(a => a.id === id && a.resumable),
-        background: options.background,
+    const { background, parentId } = options;
+    const results = tasks.map((task, inputIndex) => {
+      const resumed = task.kind === "resume";
+      const result = Agent.resolve({
+        task, background, groupId, inputIndex, createdAt, parentId, registry: this.registry,
+        findAgent: id => this._agents.find(a => a.id === id),
+        listener: (agent, update) => this._agentUpdate(agent, update),
       });
-      if (preflight.kind === "failure") {
-        group.addStaticView(preflight.failure.view, inputIndex, true);
-        timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId, parentSessionId: options.parentSessionId });
-        return Promise.resolve(preflight.failure.result);
+
+      if (result.kind === "failure") {
+        group.addStaticView(result.failure.view, inputIndex, resumed);
+        timingMark("manager.task.preflightFailure", {
+          groupId, inputIndex, parentId,
+          ...(("agent" in task) ? { agent: task.agent } : { sessionId: task.sessionId }),
+        });
+        return Promise.resolve(result.failure.result);
       }
 
-      const target = preflight.target;
-      const attempt = target.startResume(task);
-      if (options.background) target.promoteToBackground();
-      group.addAgent(target, inputIndex, true);
-      timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id, parentSessionId: options.parentSessionId, targetParentSessionId: target.parentSessionId, background: options.background });
-      touched.add(target.id);
-      return this._runner.run(ctx, childSignal, target, attempt);
+      if (result.kind === "spawn") {
+        this._agents.push(result.agent);
+      }
+
+      group.addAgent(result.agent, inputIndex, resumed);
+      timingMark("manager.task.agentReady", { groupId, inputIndex, task, sessionId: result.agent.id, parentId, background });
+      touched.add(result.agent.id);
+      return this._runner.run(ctx, childSignal, result.agent, result.agent.requireCurrentAttempt());
     });
 
     timingMark("manager.initialEmit.before", { groupId, entries: group.entryCount });
@@ -251,14 +219,19 @@ export class AgentManager {
 
     // Capture the initial root sessions so the handle.sessions field is stable.
     const initialSessions = group.rootSessions();
-
-    const resultsPromise = Promise.all(resultPromises)
+    const resultsPromise = Promise.all(results)
       .then(results => {
-        this._pruneTouched(touched);
         timingMark("manager.run.results", { groupId, resultCount: results.length });
         return results;
       })
       .finally(() => {
+        this._agents = this._agents.filter(
+          agent => !touched.has(agent.id)
+            || agent.background
+            || agent.status.kind !== "done"
+            || agent.resumable
+        );
+
         group.flush();
         group.dispose();
         this._groups.delete(groupId);
@@ -277,20 +250,6 @@ export class AgentManager {
     const agent = this._agents.find(a => a.id === id);
     if (agent) return { agent };
     return { sessionId: id, error: `Unknown subagent session: ${id}` };
-  }
-
-  /**
-   * Post-run pruning. Drops agents in `touched` that are done, non-background, and non-resumable.
-   * Survivors stay in the catalog.
-   */
-  private _pruneTouched(touched: ReadonlySet<string>): void {
-    this._agents = this._agents.filter(agent => {
-      if (!touched.has(agent.id)) return true;
-      if (agent.background) return true;
-      if (agent.status.kind !== "done") return true;
-      if (agent.resumable) return true;
-      return false;
-    });
   }
 
   private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
@@ -315,7 +274,7 @@ export class AgentManager {
       if (!agent) return;
       seen.add(id);
       out.push(projectAgentView(agent));
-      const children = this._agents.filter(a => a.parentSessionId === id);
+      const children = this._agents.filter(a => a.parentId === id);
       children.sort((a, b) => a.createdAt - b.createdAt);
       for (const child of children) visit(child.id);
     };
@@ -328,7 +287,7 @@ export class AgentManager {
     timingMark("manager.agentUpdate", {
       sessionId: agent.id,
       agent: agent.agentName,
-      parentSessionId: agent.parentSessionId,
+      parentSessionId: agent.parentId,
       kind,
       statusKind: status.kind,
       ...(status.kind === "done" ? { outcome: status.result.status } : {}),

@@ -82,7 +82,11 @@ export async function resultsAction(deps: ActionDeps, params: SubagentParams): P
   if (!isStringArray(sessionIds)) return errorResult("results sessionIds must be an array of strings.");
   if (!isNonEmptyStringArray(sessionIds)) return errorResult("results sessionIds must be an array of non-empty strings.");
   if (sessionIds.length === 0) return errorResult("results requires at least one sessionId.");
-  const results = await deps.agentManager.backgroundResults(sessionIds, { remove: params.remove === true });
+  const results = deps.agentManager.backgroundResults(sessionIds);
+  if (params.remove) {
+    const terminalIds = results.flatMap(r => "ready" in r && r.ready ? [r.sessionId] : []);
+    await deps.agentManager.remove({ sessionIds: terminalIds });
+  }
   return toolResult(backgroundResultsDetails(results));
 }
 
@@ -128,7 +132,7 @@ export async function runAction(
   if (errors.length > 0) return errorResult(errors.join("\n"), { errors });
 
   const startOptions = deps.parentSessionId !== undefined
-    ? { background: params.background === true, parentSessionId: deps.parentSessionId }
+    ? { background: params.background === true, parentId: deps.parentSessionId }
     : { background: params.background === true };
 
   if (params.background === true) {

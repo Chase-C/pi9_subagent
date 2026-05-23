@@ -63,13 +63,13 @@ export async function RunAttempt(
     if (!session) {
       throw new Error(`Cannot resume an agent without a retained session.`);
     }
-    timingSync("resumeAgent.attach", { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentSessionId }, () => agent.attach(session));
+    timingSync("resumeAgent.attach", { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId }, () => agent.attach(session));
     return PromptAgent(session, agent, attempt, signal, true);
   }
 
   if (signal?.aborted) return skippedRun(agent);
 
-  const runData = { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentSessionId };
+  const runData = { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId };
   timingMark("runAgent.start", { ...runData, cwd: ctx.cwd, taskCwd: agent.spawn.cwd, background: agent.background });
   const cwd = timingSync("runAgent.resolveCwd", runData, () => ResolveTaskCwd(ctx.cwd, agent.spawn.cwd));
   const agentDir = timingSync("runAgent.getAgentDir", runData, () => dependencies.getAgentDir());

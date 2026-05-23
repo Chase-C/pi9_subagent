@@ -1,6 +1,6 @@
 import type { Agent } from "./agent.js";
 import type { AgentRunResult } from "./agent-result.js";
-import type { AgentDispatch, AgentRetention, AgentView, AgentViewConfig } from "./agent-view.js";
+import type { AgentView, AgentViewConfig } from "./agent-view.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
 
 export interface PreflightFailure {
@@ -8,74 +8,30 @@ export interface PreflightFailure {
   result: AgentRunResult;
 }
 
-interface PreflightSpawnFailureArgs {
+interface PreflightFailureMeta {
   groupId: string;
   inputIndex: number;
   createdAt: number;
-  task: SpawnRequest;
+  task: SpawnRequest | ResumeRequest;
+  background: boolean;
+}
+
+interface PreflightFailureArgs {
   error: string;
-  dispatch?: AgentDispatch;
-  retention?: AgentRetention;
+  target?: Agent;
 }
 
-export function preflightSpawnFailure(args: PreflightSpawnFailureArgs): PreflightFailure {
-  const { groupId, inputIndex, createdAt, task, error } = args;
-  const dispatch = args.dispatch ?? "foreground";
-  const retention = args.retention ?? "transient";
-  const labelField = task.label !== undefined ? { label: task.label } : {};
-  return {
-    view: {
-      id: `${groupId}:task-${inputIndex}`,
-      inputIndex,
-      ...labelField,
-      prompt: task.prompt,
-      createdAt,
-      dispatch,
-      retention,
-      config: {
-        name: task.agent,
-        source: undefined,
-        model: task.model,
-        thinking: task.thinking,
-        tools: undefined,
-        resumable: false,
-      },
-      status: { kind: "done", outcome: "error", completedAt: createdAt, snippet: error },
-      activity: { turns: 0, compactions: 0, toolHistory: [] },
-      usage: undefined,
-      capabilities: { canResume: false, canClear: false },
-    },
-    result: {
-      agent: task.agent,
-      ...labelField,
-      prompt: task.prompt,
-      status: "error",
-      error,
-      model: task.model,
-      resumable: false,
-      resumed: false,
-    },
-  };
-}
+export function preflightFailure(
+  meta: PreflightFailureMeta,
+  args: PreflightFailureArgs,
+): PreflightFailure {
+  const { groupId, inputIndex, createdAt, task, background } = meta;
+  const { error, target } = args;
 
-interface PreflightResumeFailureArgs {
-  groupId: string;
-  inputIndex: number;
-  createdAt: number;
-  task: ResumeRequest;
-  target: Agent | undefined;
-  error: string;
-  dispatch?: AgentDispatch;
-  retention?: AgentRetention;
-}
-
-export function preflightResumeFailure(args: PreflightResumeFailureArgs): PreflightFailure {
-  const { groupId, inputIndex, createdAt, task, target, error } = args;
-  const label = task.label ?? target?.label;
-  const labelField = label !== undefined ? { label } : {};
-  const dispatch = args.dispatch ?? (target?.background ? "background" : "foreground");
-  const retention = args.retention ?? "transient";
-  const targetConfig = target ? preflightTargetConfig(target) : undefined;
+  const labelField = task.label ? { label: task.label } : {};
+  const dispatch = background ? "background" : "foreground";
+  const retention = task.resumable ? "persistent" : "transient";
+  const anyTask = task as any;
   return {
     view: {
       id: target?.id ?? `${groupId}:resume-${inputIndex}`,
@@ -85,11 +41,11 @@ export function preflightResumeFailure(args: PreflightResumeFailureArgs): Prefli
       createdAt,
       dispatch,
       retention,
-      config: targetConfig ?? {
-        name: "(unknown)",
+      config: preflightTargetConfig(target) ?? {
+        name: anyTask.agent,
         source: undefined,
-        model: undefined,
-        thinking: undefined,
+        model: anyTask.model,
+        thinking: anyTask.thinking,
         tools: undefined,
         resumable: false,
       },
@@ -99,20 +55,21 @@ export function preflightResumeFailure(args: PreflightResumeFailureArgs): Prefli
       capabilities: { canResume: false, canClear: false },
     },
     result: {
-      agent: target?.agentName ?? "(unknown)",
+      agent: task.kind === "spawn" ? task.agent : target?.agentName ?? "(unknown)",
       ...labelField,
       prompt: task.prompt,
       status: "error",
       error,
-      model: target ? (target.spawn.model ?? target.config.model) : undefined,
+      model: target ? (target.spawn.model ?? target.config.model) : task.kind === "spawn" ? task.model : undefined,
       resumable: target?.resumable ?? false,
-      resumed: true,
+      resumed: task.kind === "resume",
       ...(target ? { sessionId: target.id } : {}),
     },
   };
 }
 
-function preflightTargetConfig(target: Agent): AgentViewConfig {
+function preflightTargetConfig(target?: Agent): AgentViewConfig | undefined {
+  if (!target) return undefined;
   return {
     name: target.agentName,
     description: target.config.description,

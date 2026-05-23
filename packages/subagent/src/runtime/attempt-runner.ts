@@ -83,7 +83,7 @@ export class AttemptRunner {
     const kind = attempt.kind;
     const resumed = kind === "resume";
     return this._queue.enqueue(async lease => {
-      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentSessionId });
+      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId });
       if (signal?.aborted || !this._isTracked(agent.id)) {
         const result = skippedRun(agent, resumed);
         end({ status: result.status });
@@ -113,6 +113,6 @@ export class AttemptRunner {
       } finally {
         this._leases.delete(agent.id);
       }
-    }, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentSessionId, kind });
+    }, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId, kind });
   }
 }

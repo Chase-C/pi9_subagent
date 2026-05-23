@@ -251,10 +251,10 @@ test("orchestrator.startBatch background:true promotes resumed sessions to backg
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("orchestrator.run forwards parentSessionId to every spawned agent's view and result", async () => {
+test("orchestrator.run forwards parentId to every spawned agent and surfaces parentSessionId in views and results", async () => {
   const seenParents: Array<string | undefined> = [];
   const runner = async (_ctx: any, agent: any) => {
-    seenParents.push(agent.parentSessionId);
+    seenParents.push(agent.parentId);
     agent.attach(makeSession());
     return completedRun(agent, "ok");
   };
@@ -271,7 +271,7 @@ test("orchestrator.run forwards parentSessionId to every spawned agent's view an
       { kind: "spawn", agent: "helper", prompt: "two" },
     ],
     undefined,
-    { parentSessionId: "parent-1" },
+    { parentId: "parent-1" },
   );
 
   assert.deepEqual(seenParents, ["parent-1", "parent-1"]);

@@ -20,7 +20,7 @@ export function projectAgentView(
   return {
     id: agent.id,
     ...(options.inputIndex !== undefined ? { inputIndex: options.inputIndex } : {}),
-    ...(agent.parentSessionId !== undefined ? { parentSessionId: agent.parentSessionId } : {}),
+    ...(agent.parentId !== undefined ? { parentSessionId: agent.parentId } : {}),
     ...(label !== undefined ? { label } : {}),
     ...(prompt !== undefined ? { prompt } : {}),
     createdAt: agent.createdAt,

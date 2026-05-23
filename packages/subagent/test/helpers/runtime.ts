@@ -23,7 +23,7 @@ export function run(
   signal: AbortSignal | undefined,
   tasks: TaskRequest[],
   onUpdate?: RunUpdateListener,
-  options: { parentSessionId?: string } = {},
+  options: { parentId?: string } = {},
 ): Promise<AgentRunResult[]> {
   return manager.startRun(ctx, signal, tasks, onUpdate, { background: false, ...options }).resultsPromise;
 }

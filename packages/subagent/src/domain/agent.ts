@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { AgentActivity, type AgentActivitySnapshot } from "./agent-activity.js";
@@ -7,11 +9,25 @@ import { buildAgentResult, type AgentResultContext, type AgentRunResult } from "
 import type { AgentUpdateKind } from "./agent-view.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
 import { timingMark } from "../runtime/timing.js";
+import { preflightFailure, PreflightFailure } from "./preflight-failure.js";
+import { AgentRegistry } from "./agent-registry.js";
 
 export type AgentStatus =
   | { kind: "queued"; queuedAt: number }
   | { kind: "running"; session: AgentSession; startedAt: number }
   | { kind: "done"; result: AgentRunResult; startedAt?: number; completedAt: number };
+
+interface ResolveArgs {
+  task: SpawnRequest | ResumeRequest;
+  background: boolean;
+  groupId: string;
+  inputIndex: number;
+  createdAt: number;
+  registry: AgentRegistry;
+  findAgent: (id: string) => Agent | undefined;
+  listener: AgentUpdateListener;
+  parentId?: string,
+}
 
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
 
@@ -19,7 +35,7 @@ export class Agent {
 
   readonly agentName: string;
   readonly createdAt = Date.now();
-  readonly parentSessionId?: string;
+  readonly parentId?: string;
 
   private _current?: Attempt;
   private _lastAttempt?: Attempt;
@@ -28,40 +44,74 @@ export class Agent {
   private _appliedResumableOverride: boolean | undefined;
   private _unsubscribe?: () => void;
   private _background: boolean;
-  private _listeners = new Set<AgentUpdateListener>();
   private readonly _activity = new AgentActivity(kind => this._emit(kind));
 
   constructor(
     readonly id: string,
     readonly config: AgentConfig,
     readonly spawn: SpawnRequest,
-    options: { background?: boolean; parentSessionId?: string } = {},
+    readonly listener: AgentUpdateListener,
+    options: { background?: boolean; parentId?: string } = {},
   ) {
     this.agentName = spawn.agent;
     this._background = options.background ?? false;
-    if (options.parentSessionId !== undefined) this.parentSessionId = options.parentSessionId;
+    this.parentId = options.parentId;
     this._appliedResumableOverride = spawn.resumable;
     this._label = spawn.label;
     this._current = new Attempt("spawn", spawn.prompt, spawn.resumable);
   }
 
-  on(listener: AgentUpdateListener): () => void {
-    this._listeners.add(listener);
-    return () => this._listeners.delete(listener);
+  static resolve(
+    args: ResolveArgs,
+  ):
+    | { kind: "spawn"; agent: Agent }
+    | { kind: "resume"; agent: Agent }
+    | { kind: "failure"; failure: PreflightFailure } {
+    const { task, background, registry, findAgent, listener, parentId } = args;
+    if (task.kind === "spawn") {
+      const config = registry.agents.get(task.agent);
+      if (config) {
+        return {
+          kind: "spawn",
+          agent: new Agent(randomUUID(), config, task, listener, { background, parentId }),
+        };
+      }
+
+      const available = Array.from(registry.agents.values()).map(a => `- ${a.name} (${a.source})`).join("\n");
+      const error = `Unknown agent: ${task.agent}. Available agents:\n${available}`;
+      return {
+        kind: "failure",
+        failure: preflightFailure(args, { error }),
+      };
+    } else {
+      const target = findAgent(task.sessionId);
+      let error: string | undefined;
+      if (!target) {
+        error = `Unknown resumable subagent session: ${task.sessionId}`;
+      } else if (target.hasCurrentAttempt) {
+        error = `Cannot resume subagent session ${task.sessionId}: it is already resuming.`;
+      } else if (!target.canResume) {
+        error = `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.result.status : target.status.kind}.`;
+      } else {
+        if (task.label !== undefined) target._label = task.label;
+        target._background = background;
+        target._current = new Attempt("resume", task.prompt, task.resumable);
+        target._emit("status");
+        return { kind: "resume", agent: target };
+      }
+
+      return {
+        kind: "failure",
+        failure: preflightFailure(args, { error: error!, target }),
+      }
+    }
   }
 
   private _emit(kind: AgentUpdateKind) {
-    for (const listener of this._listeners) listener(this, kind);
+    this.listener(this, kind);
   }
 
   get background() { return this._background }
-
-  promoteToBackground() {
-    if (this._background) return;
-    timingMark("agent.promoteToBackground", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId });
-    this._background = true;
-    this._emit("status");
-  }
 
   /** The in-flight attempt if any, else the most recent terminal attempt. */
   private _activeAttempt(): Attempt | undefined {
@@ -115,21 +165,6 @@ export class Agent {
     return last.state.result.status === "completed";
   }
 
-  /** Begin a resume attempt. Must not be called while another attempt is in-flight. */
-  startResume(request: ResumeRequest): Attempt {
-    if (this._current) {
-      throw new Error(`Cannot start a new attempt while one is in-flight (${this._current.state.kind}).`);
-    }
-    if (!this._retainedSession) {
-      throw new Error(`Cannot resume an agent without a retained session.`);
-    }
-    if (request.label !== undefined) this._label = request.label;
-    const attempt = new Attempt("resume", request.prompt, request.resumable);
-    this._current = attempt;
-    this._emit("status");
-    return attempt;
-  }
-
   get resumable(): boolean {
     const base = this._appliedResumableOverride ?? this.config.resumable;
     if (!base) return false;
@@ -163,7 +198,7 @@ export class Agent {
       ...(this._label !== undefined ? { label: this._label } : {}),
       prompt: this.requireCurrentAttempt().prompt,
       ...(model !== undefined ? { model } : {}),
-      ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
+      ...(this.parentId !== undefined ? { parentSessionId: this.parentId } : {}),
       resumable,
     };
   }
@@ -171,11 +206,11 @@ export class Agent {
   async abort(reason?: string): Promise<void> {
     const current = this._current;
     if (!current) {
-      timingMark("agent.abort.noop", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId, reason });
+      timingMark("agent.abort.noop", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, reason });
       return;
     }
     const resumed = current.kind === "resume";
-    timingMark("agent.abort.invoke", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId, currentStateKind: current.state.kind, attemptKind: current.kind, reason });
+    timingMark("agent.abort.invoke", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, currentStateKind: current.state.kind, attemptKind: current.kind, reason });
     if (current.state.kind === "running") {
       const session = current.state.session;
       await Promise.resolve(session.abort()).catch(() => undefined);
@@ -193,7 +228,7 @@ export class Agent {
     if (!current || current.state.kind !== "queued") {
       throw new Error(`Cannot attach a session to an agent that is ${this._describe()}.`);
     }
-    timingMark("agent.attach", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId, attemptKind: current.kind });
+    timingMark("agent.attach", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, attemptKind: current.kind });
     this._unsubscribe = this._activity.subscribe(session);
     current.attach(session);
     if (current.resumableOverride !== undefined) {
@@ -207,7 +242,7 @@ export class Agent {
   settle(result: AgentRunResult): void {
     const current = this._current;
     if (!current) return;
-    timingMark("agent.settle", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentSessionId, outcome: result.status, attemptKind: current.kind });
+    timingMark("agent.settle", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, outcome: result.status, attemptKind: current.kind });
     this._finishSubscription();
     current.settle(result);
     this._lastAttempt = current;

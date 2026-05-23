@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { Agent } from "../../src/domain/agent.js";
+import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import type { AgentManager } from "../../src/runtime/agent-manager.js";
 import { makeChildSubagentFactory } from "../../src/tool/child-factory.js";
@@ -10,6 +10,7 @@ import { baseCtx, makeManager, makeSession, run } from "../helpers/runtime.js";
 
 type FakeRegistry = { agents: Map<string, any>; reload?: () => Promise<void>; summarizeAgent?: () => string };
 
+const noop: AgentUpdateListener = () => {};
 const baseAgentConfig = { name: "helper", description: "d", systemPrompt: "s", source: "project" as const, resumable: false };
 
 function captureChildTool(
@@ -28,7 +29,7 @@ function captureChildTool(
 test("makeChildSubagentFactory returns a factory that registers a 'subagent' tool", () => {
   const registry: FakeRegistry = { agents: new Map() };
   const manager = makeManager(registry as any);
-  const parent = new Agent("parent-1", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+  const parent = new Agent("parent-1", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
 
   const factory = makeChildSubagentFactory({
     manager, registry: registry as any, parent,
@@ -42,10 +43,10 @@ test("makeChildSubagentFactory returns a factory that registers a 'subagent' too
   assert.equal(typeof registered[0].execute, "function");
 });
 
-test("child subagent tool delegates action=run to the shared manager with parentSessionId set", async () => {
+test("child subagent tool delegates action=run to the shared manager with parentId set", async () => {
   const seenParents: Array<string | undefined> = [];
   const runner = async (_ctx: any, agent: any) => {
-    seenParents.push(agent.parentSessionId);
+    seenParents.push(agent.parentId);
     agent.attach(makeSession());
     return completedRun(agent, "ok");
   };
@@ -53,7 +54,7 @@ test("child subagent tool delegates action=run to the shared manager with parent
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project" }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
-  const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+  const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
   const tool = captureChildTool(manager, registry, parent);
 
   const result = await tool.execute(
@@ -82,7 +83,7 @@ test("child subagent tool forwards list, results, and remove actions straight to
   assert.equal(seeded.length, 1);
   const seededId = seeded[0].id;
 
-  const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+  const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
   const tool = captureChildTool(manager, registry, parent);
 
   const list = await tool.execute("c-list", { action: "list" }, undefined, undefined, baseCtx());
@@ -176,7 +177,7 @@ test("recursive subagent spawn: root → child → grandchild all live under one
   };
   const recordedParents: Record<string, string | undefined> = {};
   const runner = async (ctx: any, agent: any) => {
-    recordedParents[agent.id] = agent.parentSessionId;
+    recordedParents[agent.id] = agent.parentId;
     agent.attach(makeSession());
     if (agent.spawn.prompt === "spawn-child") {
       const factory = makeChildSubagentFactory({ manager, registry: registry as any, parent: agent, getCurrentSettings: () => DEFAULT_SUBAGENT_SETTINGS });
@@ -251,7 +252,7 @@ test("child subagent tool does not reload settings or rebuild the registry on ea
     summarizeAgent: () => "worker",
   };
   const manager = makeManager(registry as any, 2, async (_c: any, a: any) => { a.attach(makeSession()); return completedRun(a, "ok"); });
-  const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+  const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
 
   const factory = makeChildSubagentFactory({
     manager, registry: registry as any, parent,

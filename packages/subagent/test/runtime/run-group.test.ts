@@ -2,15 +2,16 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { Agent } from "../../src/domain/agent.js";
+import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { RunGroup } from "../../src/runtime/run-group.js";
 import { projectAgentView } from "../../src/view/project-agent-view.js";
 import { baseCtx, makeManager, makeSession, run } from "../helpers/runtime.js";
 
+const noop: AgentUpdateListener = () => {};
 const testAgentConfig = { name: "helper", description: "d", systemPrompt: "s", source: "project" as const, resumable: false };
 
-function makeAgent(id: string, parentSessionId?: string): Agent {
-  return new Agent(id, testAgentConfig, { kind: "spawn", agent: "helper", prompt: id }, { parentSessionId });
+function makeAgent(id: string, parentId?: string): Agent {
+  return new Agent(id, testAgentConfig, { kind: "spawn", agent: "helper", prompt: id }, noop, { parentId });
 }
 
 test("RunGroup.tree emits a descendant root only once", () => {
