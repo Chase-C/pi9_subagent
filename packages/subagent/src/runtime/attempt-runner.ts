@@ -84,35 +84,35 @@ export class AttemptRunner {
     const resumed = kind === "resume";
     return this._queue.enqueue(async lease => {
       const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId });
+      let result: AgentRunResult;
+      let error: string | undefined;
+
       if (signal?.aborted || !this._isTracked(agent.id)) {
-        const result = skippedRun(agent, resumed);
-        end({ status: result.status });
-        return result;
-      }
-      if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
-        end({ status: agent.status.result.status });
-        return agent.status.result;
-      }
-      this._leases.set(agent.id, lease);
-      try {
-        const result = await this._runner(ctx, agent, attempt, signal);
-        const finalResult = resumed && !result.resumed ? { ...result, resumed: true } : result;
-        end({ status: finalResult.status });
-        return finalResult;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
-          end({ status: agent.status.result.status });
-          return agent.status.result;
+        result = skippedRun(agent, resumed);
+      } else if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
+        result = agent.status.result;
+      } else {
+        this._leases.set(agent.id, lease);
+        try {
+          const ran = await this._runner(ctx, agent, attempt, signal);
+          result = resumed && !ran.resumed ? { ...ran, resumed: true } : ran;
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
+            result = agent.status.result;
+          } else {
+            error = message;
+            result = signal?.aborted
+              ? (attempt.state.kind === "queued" ? skippedRun(agent, resumed) : interruptedRun(agent, message, resumed))
+              : errorRun(agent, message, resumed);
+          }
+        } finally {
+          this._leases.delete(agent.id);
         }
-        const result = signal?.aborted
-          ? (attempt.state.kind === "queued" ? skippedRun(agent, resumed) : interruptedRun(agent, message, resumed))
-          : errorRun(agent, message, resumed);
-        end({ status: result.status, error: message });
-        return result;
-      } finally {
-        this._leases.delete(agent.id);
       }
+
+      end({ status: result.status, error });
+      return result;
     }, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId, kind });
   }
 }

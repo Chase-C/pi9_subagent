@@ -2,11 +2,7 @@ import { DEFAULT_SUBAGENT_SETTINGS, type BackgroundNotifyMode, type SubagentDisp
 
 import type { Agent } from "../domain/agent.js";
 import type { AgentUpdateKind, AgentRunStatus } from "../domain/agent-view.js";
-import type { AgentUpdateListener } from "./agent-manager.js";
-
-export interface NotifierManager {
-  onAgentUpdate?(listener: AgentUpdateListener): () => void;
-}
+import type { AgentManager } from "./agent-manager.js";
 
 const MAX_LISTED_COMPLETIONS = 20;
 
@@ -30,17 +26,10 @@ export interface NotifierPi {
 
 export interface BackgroundNotifierDeps {
   pi: NotifierPi;
-  manager: NotifierManager;
+  manager: AgentManager;
   getMode: () => BackgroundNotifyMode;
-  /** Returns the latest display settings used when formatting notification text. */
   getDisplay?: () => SubagentDisplaySettings;
-  /**
-   * Schedule a delayed retry of the idle flush. Returns a cancel function.
-   * Defaults to a setTimeout-based implementation.
-   */
   scheduleRetry?: (fn: () => void, delayMs: number) => () => void;
-  /** Delay between idle-flush retry attempts. Defaults to 500ms. */
-  retryDelayMs?: number;
 }
 
 const DEFAULT_RETRY_DELAY_MS = 500;
@@ -58,29 +47,40 @@ interface CompletionEntry {
   elapsedMs: number;
 }
 
+type FlushTrigger =
+  | "auto-event"   // turn_end / agent_end
+  | "steer-event"  // tool_execution_start
+  | "generic"      // session_start or a fresh completion: act per current mode
+  | "auto-retry";  // the idle-wait timer fired
+
+type FlushAction =
+  | { kind: "noop" }
+  | { kind: "reset" }          // notifications off: drop the queue and stop waiting
+  | { kind: "cancelRetry" }    // nothing to deliver: stop waiting
+  | { kind: "scheduleRetry" }  // not idle yet: poll again later
+  | { kind: "dispatch"; via: "auto" | "steer" };
+
 export class BackgroundNotifier {
   private _queue: CompletionEntry[] = [];
   private _notifiedTerminalSessionIds = new Set<string>();
-  private _unsubAgent: () => void = () => {};
+  private _unsubAgent: () => void = () => { };
   private _disposed = false;
   private _ctx: NotifierContext | undefined;
-  private _ctxGen = 0;
   private _retryCancel: (() => void) | undefined;
   private readonly _scheduleRetry: (fn: () => void, delayMs: number) => () => void;
-  private readonly _retryDelayMs: number;
 
   constructor(private readonly deps: BackgroundNotifierDeps) {
     this._scheduleRetry = deps.scheduleRetry ?? defaultScheduleRetry;
-    this._retryDelayMs = deps.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+    // Guard: some callers (e.g. command tests) supply a partial manager without listener support.
     if (typeof deps.manager.onAgentUpdate === "function") {
       this._unsubAgent = deps.manager.onAgentUpdate(this._handleAgentUpdate);
     }
     if (typeof deps.pi.on === "function") {
       deps.pi.on("session_start", ((_event: unknown, ctx?: NotifierContext) => this._onSessionStart(ctx)) as PiEventHandler);
       deps.pi.on("session_shutdown", (() => this._onSessionShutdown()) as PiEventHandler);
-      deps.pi.on("agent_end", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("auto", ctx)) as PiEventHandler);
-      deps.pi.on("turn_end", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("auto", ctx)) as PiEventHandler);
-      deps.pi.on("tool_execution_start", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("steer", ctx)) as PiEventHandler);
+      deps.pi.on("agent_end", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("auto-event", ctx)) as PiEventHandler);
+      deps.pi.on("turn_end", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("auto-event", ctx)) as PiEventHandler);
+      deps.pi.on("tool_execution_start", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("steer-event", ctx)) as PiEventHandler);
     }
   }
 
@@ -97,15 +97,13 @@ export class BackgroundNotifier {
   private _onSessionStart(ctx: NotifierContext | undefined): void {
     if (this._disposed) return;
     this._ctx = ctx;
-    this._ctxGen++;
     this._cancelRetry();
-    this._tryFlushForCurrentMode();
+    this._flush("generic");
   }
 
   private _onSessionShutdown(): void {
     if (this._disposed) return;
     this._ctx = undefined;
-    this._ctxGen++;
     this._cancelRetry();
   }
 
@@ -114,7 +112,7 @@ export class BackgroundNotifier {
     if (kind !== "status") return;
     if (!agent.background) return;
     const status = agent.status;
-    if (status.kind === "running" || status.kind === "queued") {
+    if (status.kind !== "done") {
       this._notifiedTerminalSessionIds.delete(agent.id);
       return;
     }
@@ -130,107 +128,88 @@ export class BackgroundNotifier {
     };
     if (agent.label !== undefined) entry.label = agent.label;
     this._queue.push(entry);
-    this._tryFlushForCurrentMode();
+    this._flush("generic");
   };
 
-  private _onDispatchEvent(dispatchMode: BackgroundNotifyMode, ctx: NotifierContext | undefined): void {
+  private _onDispatchEvent(trigger: "auto-event" | "steer-event", ctx: NotifierContext | undefined): void {
     if (this._disposed) return;
-    this._captureCtx(ctx);
-    const mode = this.deps.getMode();
-    if (mode === "none") {
-      this._queue = [];
+    if (ctx && this._ctx !== ctx) {
+      this._ctx = ctx;
       this._cancelRetry();
-      return;
     }
-    if (mode !== dispatchMode) return;
-    if (mode === "auto") this._tryFlushAuto();
-    else this._tryFlushSteer({ allowWithoutCtx: true, forceSteer: true });
+    this._flush(trigger);
   }
 
-  private _captureCtx(ctx: NotifierContext | undefined): void {
-    if (!ctx || this._ctx === ctx) return;
-    this._ctx = ctx;
-    this._ctxGen++;
+  private _flush(trigger: FlushTrigger): void {
+    this._apply(this._decide(trigger));
   }
 
-  private _tryFlushForCurrentMode(): void {
-    if (this._disposed) return;
+  /** Pure decision: resolve the live mode, queue and context into a single action. */
+  private _decide(trigger: FlushTrigger): FlushAction {
+    if (this._disposed) return { kind: "noop" };
     const mode = this.deps.getMode();
-    if (mode === "none") {
-      this._queue = [];
-      this._cancelRetry();
-      return;
-    }
-    if (mode === "auto") this._tryFlushAuto();
-    else this._tryFlushSteer();
-  }
+    if (mode === "none") return { kind: "reset" };
 
-  private _tryFlushAuto(): void {
-    if (this._disposed) return;
-    const mode = this.deps.getMode();
-    if (mode === "none") {
-      this._queue = [];
-      this._cancelRetry();
-      return;
-    }
-    if (mode !== "auto") {
-      this._cancelRetry();
-      return;
-    }
+    // An opportunity only acts in the mode it serves; the retry is auto-only.
+    if (trigger === "auto-event" && mode !== "auto") return { kind: "noop" };
+    if (trigger === "steer-event" && mode !== "steer") return { kind: "noop" };
+    if (trigger === "auto-retry" && mode !== "auto") return { kind: "cancelRetry" };
+
     if (this._queue.length === 0) {
-      this._cancelRetry();
-      return;
+      return mode === "auto" ? { kind: "cancelRetry" } : { kind: "noop" };
     }
-    if (!this._ctx) return;
-    if (!this._ctx.isIdle()) {
-      this._scheduleAutoRetry();
-      return;
-    }
-    this._cancelRetry();
-    this._dispatch("auto");
-  }
 
-  private _tryFlushSteer(options: { allowWithoutCtx?: boolean; forceSteer?: boolean } = {}): void {
-    if (this._disposed) return;
-    const mode = this.deps.getMode();
-    if (mode === "none") {
-      this._queue = [];
-      this._cancelRetry();
-      return;
+    if (mode === "auto") {
+      if (!this._ctx) return { kind: "noop" };
+      if (!this._ctx.isIdle()) return { kind: "scheduleRetry" };
+      return { kind: "dispatch", via: "auto" };
     }
-    if (mode !== "steer") {
-      this._cancelRetry();
-      return;
-    }
-    if (this._queue.length === 0) return;
-    this._cancelRetry();
+
+    // steer: tool_execution_start may inject without a known idle context; other
+    // openings deliver only when a context exists, as a turn when it happens to be idle.
     if (!this._ctx) {
-      if (options.allowWithoutCtx) this._dispatch("steer");
-      return;
+      return trigger === "steer-event" ? { kind: "dispatch", via: "steer" } : { kind: "noop" };
     }
-    this._dispatch(options.forceSteer || !this._ctx.isIdle() ? "steer" : "auto");
+    const via = trigger === "steer-event" || !this._ctx.isIdle() ? "steer" : "auto";
+    return { kind: "dispatch", via };
   }
 
-  private _scheduleAutoRetry(): void {
-    if (this._disposed) return;
+  private _apply(action: FlushAction): void {
+    switch (action.kind) {
+      case "noop": return;
+      case "reset":
+        this._queue = [];
+        this._cancelRetry();
+        return;
+      case "cancelRetry":
+        this._cancelRetry();
+        return;
+      case "scheduleRetry":
+        this._armRetry();
+        return;
+      case "dispatch":
+        this._cancelRetry();
+        this._dispatch(action.via);
+        return;
+    }
+  }
+
+  /** Single-flight: at most one pending idle retry; further arms are no-ops until it fires or is cancelled. */
+  private _armRetry(): void {
     if (this._retryCancel) return;
-    const gen = this._ctxGen;
     this._retryCancel = this._scheduleRetry(() => {
       this._retryCancel = undefined;
-      if (this._disposed) return;
-      if (this._ctxGen !== gen) return;
-      this._tryFlushAuto();
-    }, this._retryDelayMs);
+      this._flush("auto-retry");
+    }, DEFAULT_RETRY_DELAY_MS);
   }
 
   private _cancelRetry(): void {
-    if (this._retryCancel) {
-      this._retryCancel();
-      this._retryCancel = undefined;
-    }
+    if (!this._retryCancel) return;
+    this._retryCancel();
+    this._retryCancel = undefined;
   }
 
-  private _dispatch(dispatchMode: Exclude<BackgroundNotifyMode, "none">): void {
+  private _dispatch(via: "auto" | "steer"): void {
     if (this._queue.length === 0) return;
     const entries = this._queue;
     this._queue = [];
@@ -242,7 +221,7 @@ export class BackgroundNotifier {
         content,
         details: { completions: entries.map(e => ({ ...e })) },
       },
-      dispatchMode === "steer" ? { deliverAs: "steer" } : { triggerTurn: true },
+      via === "steer" ? { deliverAs: "steer" } : { triggerTurn: true },
     );
   }
 }

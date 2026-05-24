@@ -293,20 +293,13 @@ export class AgentManager {
       ...(status.kind === "done" ? { outcome: status.result.status } : {}),
       background: agent.background,
     });
+
     for (const listener of this._updateListeners) listener(agent, kind);
     for (const group of this._groups.values()) group.handleAgentUpdate(agent.id, kind);
-    if (kind === "status") this._maybeFinalizeFanout(agent);
-  }
 
-  /**
-   * Internal parent-finalize policy: when an agent finalizes as `aborted` or `error`, cancel
-   * its still-running non-background descendants. `completed` and other outcomes leave
-   * descendants alone — a completed parent has already consumed children's results, and any
-   * survivors must be background ones the parent dispatched to outlive itself.
-   */
-  private _maybeFinalizeFanout(agent: Agent): void {
+    if (kind !== "status") return;
     if (this._pendingFinalize.has(agent.id)) return;
-    const status = agent.status;
+
     const outcome = status.kind === "done" ? status.result.status : undefined;
     if (outcome !== "aborted" && outcome !== "error") return;
 
