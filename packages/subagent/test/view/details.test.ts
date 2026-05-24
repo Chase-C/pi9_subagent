@@ -22,6 +22,15 @@ test("parseDetails rejects a known view whose required field is missing or stale
   assert.equal(parseDetails({ view: "run", group: { sessions: "not-an-array" } }), undefined);
 });
 
+test("parseDetails rejects partial remove-summary payloads", () => {
+  assert.equal(parseDetails({ view: "remove-summary", summary: {} }), undefined);
+  assert.equal(parseDetails({ view: "remove-summary", summary: { removed: 1, aborted: 0 } }), undefined);
+  assert.equal(
+    parseDetails({ view: "remove-summary", summary: { removed: 1, aborted: 0, sessionIds: [42] } }),
+    undefined,
+  );
+});
+
 test("parseDetails treats an error-result envelope as non-renderable", () => {
   assert.equal(parseDetails({ view: "error", errors: ["task[0]: bad"] }), undefined);
   assert.equal(parseDetails({ view: "error" }), undefined);

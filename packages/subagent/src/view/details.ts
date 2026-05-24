@@ -93,7 +93,15 @@ const DetailsSchema = Type.Union([
   Type.Object({ view: Type.Literal("run"), group: Type.Object({ sessions: Type.Array(Type.Unknown()) }) }),
   Type.Object({ view: Type.Literal("run-results"), outcomes: Type.Array(Type.Unknown()), isError: Type.Boolean() }),
   Type.Object({ view: Type.Literal("inventory"), sessions: Type.Array(Type.Unknown()) }),
-  Type.Object({ view: Type.Literal("remove-summary"), summary: Type.Object({}) }),
+  Type.Object({
+    view: Type.Literal("remove-summary"),
+    summary: Type.Object({
+      removed: Type.Number(),
+      aborted: Type.Number(),
+      sessionIds: Type.Array(Type.String()),
+      errors: Type.Optional(Type.Array(Type.Object({ sessionId: Type.String(), error: Type.String() }))),
+    }),
+  }),
   Type.Object({ view: Type.Literal("background-started"), handles: Type.Array(Type.Unknown()), count: Type.Number() }),
   Type.Object({ view: Type.Literal("background-results"), results: Type.Array(Type.Unknown()) }),
 ]);
