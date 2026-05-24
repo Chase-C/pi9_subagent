@@ -185,16 +185,14 @@ export class BackgroundNotifier {
 
   /** Single-flight: at most one pending idle retry; further arms are no-ops until it fires or is cancelled. */
   private _armRetry(): void {
-    if (this._retryCancel) return;
-    this._retryCancel = this._scheduleRetry(() => {
+    this._retryCancel ??= this._scheduleRetry(() => {
       this._retryCancel = undefined;
       this._flush("auto-retry");
     }, DEFAULT_RETRY_DELAY_MS);
   }
 
   private _cancelRetry(): void {
-    if (!this._retryCancel) return;
-    this._retryCancel();
+    this._retryCancel?.();
     this._retryCancel = undefined;
   }
 

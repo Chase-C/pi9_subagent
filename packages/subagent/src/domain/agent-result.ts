@@ -72,6 +72,6 @@ export function toOutcome(args: FinalizeRunArgs): AgentOutcome {
 }
 
 export type BackgroundResult =
-  | { sessionId: string; ready: true; result: AgentResultJson }
+  | { sessionId?: string; ready: true; result: AgentResultJson }
   | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
   | { sessionId: string; error: string };

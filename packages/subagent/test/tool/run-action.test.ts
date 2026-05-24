@@ -36,6 +36,37 @@ test("tool execution uses configured maxTasksPerRun from subagent settings", asy
   assert.match(result.content[0].text, /Too many tasks \(2\)\. Max is 1/);
 });
 
+test("tool run action does not expose transient foreground ids as collectable result session ids", async () => {
+  const fakeManager = {
+    listSessions(): any[] { return this.sessions; },
+    sessions: [] as any[],
+    startRun() {
+      const resultsPromise = Promise.resolve([fakeAgent({
+        id: "transient-run-id",
+        config: { name: "helper", resumable: false },
+        prompt: "work",
+        status: { kind: "completed", response: "done" },
+      })]);
+      return { groupId: "g1", sessions: [], tree: () => [], resultsPromise };
+    },
+  };
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+  });
+
+  const result = await tool.execute("tool-call", {
+    action: "run",
+    tasks: [{ agent: "helper", prompt: "work" }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+  const rendered = tool.renderResult(result, { expanded: true }, { fg: (_color: string, text: string) => text }).render(120).join("\n");
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.results[0].result.sessionId, undefined);
+  assert.equal(result.details.results[0].sessionId, undefined);
+  assert.doesNotMatch(rendered, /session:transient-run-id/);
+});
+
 test("tool run action returns full output only once in JSON details for a resume task", async () => {
   const fullOutput = `resume output ${"q".repeat(1500)} tail`;
   const fakeManager = {

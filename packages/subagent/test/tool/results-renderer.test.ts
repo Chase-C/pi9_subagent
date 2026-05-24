@@ -70,8 +70,24 @@ test("results expanded shows a section per entry with status, snippet, and error
   assert.match(rendered, /helper/);
   assert.match(rendered, /phase 1/);
   assert.match(rendered, /all done/);
+  assert.match(rendered, /session:ready-id/);
   assert.match(rendered, /queued/);
   assert.match(rendered, /phase 2/);
   assert.match(rendered, /err-id/);
   assert.match(rendered, /Unknown subagent session: err-id/);
+});
+
+test("results expanded omits session label for ready entries without a collectable session id", () => {
+  const details = {
+    view: "results",
+    results: [
+      { ready: true, result: { agent: "helper", prompt: "p", status: "completed", output: "all done", resumable: false, resumed: false } },
+    ],
+  };
+
+  const rendered = render(details, true);
+
+  assert.match(rendered, /helper/);
+  assert.match(rendered, /all done/);
+  assert.doesNotMatch(rendered, /session:/);
 });

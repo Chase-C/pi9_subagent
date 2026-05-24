@@ -84,7 +84,7 @@ export async function resultsAction(deps: ActionDeps, params: SubagentParams): P
   if (sessionIds.length === 0) return errorResult("results requires at least one sessionId.");
   const results = deps.agentManager.backgroundResults(sessionIds);
   if (params.remove) {
-    const terminalIds = results.flatMap(r => "ready" in r && r.ready ? [r.sessionId] : []);
+    const terminalIds = results.flatMap(r => "ready" in r && r.ready && r.sessionId !== undefined ? [r.sessionId] : []);
     await deps.agentManager.remove({ sessionIds: terminalIds });
   }
   return toolResult(resultsDetails(results));
@@ -161,11 +161,14 @@ export async function runAction(
   timingSync("tool.finalWidget", { sessionCount: deps.agentManager.listSessions().length }, () => updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings()));
   // The terminal snapshot is the result: each settled run is a ready entry, the same shape a
   // background poll yields, so both feed the one `results` renderer.
-  const entries: BackgroundResult[] = settled.map((snapshot): BackgroundResult => ({
-    sessionId: snapshot.id,
-    ready: true,
-    result: toResultJson(snapshot),
-  }));
+  const entries: BackgroundResult[] = settled.map((snapshot): BackgroundResult => {
+    const result = toResultJson(snapshot);
+    return {
+      ...(result.sessionId !== undefined ? { sessionId: result.sessionId } : {}),
+      ready: true,
+      result,
+    };
+  });
   const isError = entries.some(entry => "result" in entry && entry.result.status !== "completed");
   return toolResult(resultsDetails(entries), isError);
 }
