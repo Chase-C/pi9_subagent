@@ -2,7 +2,7 @@ import type { AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
-import { toResultJson } from "../domain/agent-result.js";
+import { toResultJson, type BackgroundResult } from "../domain/agent-result.js";
 import type { AgentManager, RunUpdate } from "../runtime/agent-manager.js";
 import { timingMark, timingStart, timingSync } from "../runtime/timing.js";
 import {
@@ -17,12 +17,11 @@ import type { SubagentSettings } from "../config/settings.js";
 import { updateSubagentWidget } from "../ui/widget.js";
 import {
   agentsDetails,
-  backgroundResultsDetails,
   backgroundStartedDetails,
   formatSubagentToolLines,
   inventoryDetails,
+  resultsDetails,
   runDetails,
-  runResultsDetails,
   type SubagentDetails,
 } from "../view/format.js";
 import { listAgentDefinitions, serializeGroup } from "../view/serialize.js";
@@ -88,7 +87,7 @@ export async function resultsAction(deps: ActionDeps, params: SubagentParams): P
     const terminalIds = results.flatMap(r => "ready" in r && r.ready ? [r.sessionId] : []);
     await deps.agentManager.remove({ sessionIds: terminalIds });
   }
-  return toolResult(backgroundResultsDetails(results));
+  return toolResult(resultsDetails(results));
 }
 
 export async function removeAction(deps: ActionDeps, params: SubagentParams): Promise<ActionResult> {
@@ -155,14 +154,20 @@ export async function runAction(
     timingMark("tool.update.received", { sessionCount: update.sessions.length, treeCount: update.tree.length, active: update.active });
     emitPartial(update);
   }, startOptions);
-  const results = deps.parentSessionId !== undefined
+  const settled = deps.parentSessionId !== undefined
     ? await deps.agentManager.runner.suspendAgentSlotDuring(deps.parentSessionId, () => handle.resultsPromise)
     : await handle.resultsPromise;
-  runEnd({ ok: true, resultCount: results.length });
+  runEnd({ ok: true, resultCount: settled.length });
   timingSync("tool.finalWidget", { sessionCount: deps.agentManager.listSessions().length }, () => updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings()));
-  const outcomes = results.map(toResultJson);
-  const isError = outcomes.some(outcome => outcome.status !== "completed");
-  return toolResult(runResultsDetails(outcomes, isError), isError);
+  // The terminal snapshot is the result: each settled run is a ready entry, the same shape a
+  // background poll yields, so both feed the one `results` renderer.
+  const entries: BackgroundResult[] = settled.map((snapshot): BackgroundResult => ({
+    sessionId: snapshot.id,
+    ready: true,
+    result: toResultJson(snapshot),
+  }));
+  const isError = entries.some(entry => "result" in entry && entry.result.status !== "completed");
+  return toolResult(resultsDetails(entries), isError);
 }
 
 function widgetAgents(update: RunUpdate): AgentSnapshot[] {

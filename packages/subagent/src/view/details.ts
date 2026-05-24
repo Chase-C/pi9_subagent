@@ -3,7 +3,7 @@ import { Value } from "typebox/value";
 
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
-import type { AgentResultJson, BackgroundResult } from "../domain/agent-result.js";
+import type { BackgroundResult } from "../domain/agent-result.js";
 
 export type AgentListingEntry = Omit<AgentConfig, "systemPrompt">;
 
@@ -25,11 +25,10 @@ export type BackgroundSpawnHandle = {
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
   | { view: "run"; group: AgentGroupView; active?: boolean; subtree?: AgentSnapshot[] }
-  | { view: "run-results"; outcomes: AgentResultJson[]; isError: boolean }
+  | { view: "results"; results: BackgroundResult[] }
   | { view: "inventory"; sessions: AgentSnapshot[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
   | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number; background: true }
-  | { view: "background-results"; results: BackgroundResult[] }
   | { view: "error"; errors?: string[] };
 
 /**
@@ -40,11 +39,10 @@ export type RenderableDetails = Exclude<SubagentDetails, { view: "error" }>;
 
 export type AgentsDetails = Extract<SubagentDetails, { view: "agents" }>;
 export type RunDetails = Extract<SubagentDetails, { view: "run" }>;
-export type RunResultsDetails = Extract<SubagentDetails, { view: "run-results" }>;
+export type ResultsDetails = Extract<SubagentDetails, { view: "results" }>;
 export type InventoryDetails = Extract<SubagentDetails, { view: "inventory" }>;
 export type RemoveSummaryDetails = Extract<SubagentDetails, { view: "remove-summary" }>;
 export type BackgroundStartedDetails = Extract<SubagentDetails, { view: "background-started" }>;
-export type BackgroundResultsDetails = Extract<SubagentDetails, { view: "background-results" }>;
 
 export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
   return { view: "agents", agents };
@@ -57,8 +55,8 @@ export function runDetails(
   return { view: "run", group, ...extras };
 }
 
-export function runResultsDetails(outcomes: AgentResultJson[], isError: boolean): RunResultsDetails {
-  return { view: "run-results", outcomes, isError };
+export function resultsDetails(results: BackgroundResult[]): ResultsDetails {
+  return { view: "results", results };
 }
 
 export function inventoryDetails(sessions: AgentSnapshot[], filter?: InventoryFilter): InventoryDetails {
@@ -77,10 +75,6 @@ export function backgroundStartedDetails(sessions: AgentSnapshot[]): BackgroundS
   return { view: "background-started", handles, count: sessions.length, background: true };
 }
 
-export function backgroundResultsDetails(results: BackgroundResult[]): BackgroundResultsDetails {
-  return { view: "background-results", results };
-}
-
 /**
  * Shallow structural schema for the `details` envelope. Each arm pins the `view` tag and the
  * top-level fields the renderer reads; nested rows stay `Unknown` so this stays a tag/shape
@@ -91,7 +85,7 @@ export function backgroundResultsDetails(results: BackgroundResult[]): Backgroun
 const DetailsSchema = Type.Union([
   Type.Object({ view: Type.Literal("agents"), agents: Type.Array(Type.Unknown()) }),
   Type.Object({ view: Type.Literal("run"), group: Type.Object({ sessions: Type.Array(Type.Unknown()) }) }),
-  Type.Object({ view: Type.Literal("run-results"), outcomes: Type.Array(Type.Unknown()), isError: Type.Boolean() }),
+  Type.Object({ view: Type.Literal("results"), results: Type.Array(Type.Unknown()) }),
   Type.Object({ view: Type.Literal("inventory"), sessions: Type.Array(Type.Unknown()) }),
   Type.Object({
     view: Type.Literal("remove-summary"),
@@ -103,7 +97,6 @@ const DetailsSchema = Type.Union([
     }),
   }),
   Type.Object({ view: Type.Literal("background-started"), handles: Type.Array(Type.Unknown()), count: Type.Number() }),
-  Type.Object({ view: Type.Literal("background-results"), results: Type.Array(Type.Unknown()) }),
 ]);
 
 /**

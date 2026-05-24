@@ -21,9 +21,9 @@ function render(details: any, expanded: boolean): string {
   return component.render(120).join("\n");
 }
 
-test("background-results collapsed shows counts of ready, not-ready, and errors", () => {
+test("results collapsed counts ready entries by outcome and pending entries by state", () => {
   const details = {
-    view: "background-results",
+    view: "results",
     results: [
       { sessionId: "s1", ready: true, result: { agent: "a", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false } },
       { sessionId: "s2", ready: false, status: "running", elapsedMs: 1000, agent: "a" },
@@ -34,14 +34,14 @@ test("background-results collapsed shows counts of ready, not-ready, and errors"
   const rendered = render(details, false);
 
   assert.match(rendered, /3 results/);
-  assert.match(rendered, /1 ready/);
-  assert.match(rendered, /1 not ready/);
+  assert.match(rendered, /1 completed/);
+  assert.match(rendered, /1 running/);
   assert.match(rendered, /1 error/);
 });
 
-test("background-results collapsed omits zero-count segments", () => {
+test("results collapsed omits zero-count segments", () => {
   const details = {
-    view: "background-results",
+    view: "results",
     results: [
       { sessionId: "s1", ready: true, result: { agent: "a", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false } },
     ],
@@ -50,14 +50,14 @@ test("background-results collapsed omits zero-count segments", () => {
   const rendered = render(details, false);
 
   assert.match(rendered, /1 result/);
-  assert.match(rendered, /1 ready/);
-  assert.doesNotMatch(rendered, /not ready/);
+  assert.match(rendered, /1 completed/);
+  assert.doesNotMatch(rendered, /running|queued/);
   assert.doesNotMatch(rendered, /error/);
 });
 
-test("background-results expanded shows a section per result with status, snippet, and error", () => {
+test("results expanded shows a section per entry with status, snippet, and error", () => {
   const details = {
-    view: "background-results",
+    view: "results",
     results: [
       { sessionId: "ready-id", ready: true, result: { agent: "helper", label: "phase 1", prompt: "p", status: "completed", output: "all done", resumable: false, resumed: false } },
       { sessionId: "queued-id", ready: false, status: "queued", elapsedMs: 5000, agent: "helper", label: "phase 2" },

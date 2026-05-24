@@ -196,7 +196,7 @@ type BackgroundResult =
   | { sessionId: string; error: string };
 ```
 
-- Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return the same projected result as `action: "run"` (the `outcomes[]` shape below, including `turns`, `tokens`, and `elapsedMs`) under `{ ready: true, result }` — both are projected from the terminal snapshot by the one `toResultJson` projection.
+- Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return the same projected `result` as `action: "run"` (the `AgentResultJson` shape below, including `turns`, `tokens`, and `elapsedMs`) under `{ ready: true, result }`. `action: "run"` and `action: "results"` share one `details.results` envelope — a synchronous run is just a list of `ready` entries — and both `result`s are projected from the terminal snapshot by the one `toResultJson` projection.
 - Queued/running entries return `{ ready: false, status, elapsedMs, agent, label? }`. `elapsedMs` is measured from when the child started (running) or from when the current attempt was queued (queued).
 - Unknown ids return `{ sessionId, error: "Unknown subagent session: <id>" }`. The overall response stays `isError: false` — partial-success is success.
 - `remove: true` sweeps terminal entries after their result is collected. Running entries are never removed regardless of the flag. A subsequent `results` call for a swept id returns the unknown-id error.
@@ -379,59 +379,55 @@ The core `subagent` tool works in non-interactive modes and still returns struct
 
 ## Results
 
-Tool results preserve input order and are returned in both text content (JSON) and `details.outcomes`:
-
-Each result is projected from the task's terminal snapshot — the done-state snapshot is the
-single source of truth, and `details.outcomes` is its model-facing view.
+Tool results preserve input order and are returned in both text content (JSON) and
+`details.results`. `action: "run"` and `action: "results"` share one envelope: a list of
+`BackgroundResult` entries (see [`action: "results"`](#action-results)). A synchronous run blocks
+until every task settles, so every entry is `{ sessionId, ready: true, result }`. Each `result`
+is projected from the task's terminal snapshot by the single `toResultJson` projection — the
+done-state snapshot is the source of truth, and `result` is its model-facing view.
 
 ```ts
 {
-  view: "run-results",
-  outcomes: [
+  view: "results",
+  results: [
     {
-      agent: "scout",
-      label: "frontend auth",
-      prompt: "Map frontend auth code and list key files.",
-      status: "completed",
-      output: "...",
-      model: "anthropic/claude-sonnet-4",
-      resumable: true,
-      resumed: false,
       sessionId: "...",
-      turns: 6,
-      tokens: 18432,
-      elapsedMs: 21044
+      ready: true,
+      result: {
+        agent: "scout",
+        label: "frontend auth",
+        prompt: "Map frontend auth code and list key files.",
+        status: "completed",
+        output: "...",
+        model: "anthropic/claude-sonnet-4",
+        resumable: true,
+        resumed: false,
+        sessionId: "...",
+        turns: 6,
+        tokens: 18432,
+        elapsedMs: 21044
+      }
     },
     {
-      agent: "scout",
-      prompt: "Use your previous findings to propose the smallest implementation plan.",
-      status: "completed",
-      output: "...",
-      model: "anthropic/claude-sonnet-4",
-      resumable: true,
-      resumed: true,
       sessionId: "...",
-      turns: 3,
-      tokens: 8120,
-      elapsedMs: 9550
-    },
-    {
-      agent: "missing",
-      prompt: "...",
-      status: "error",
-      error: "Unknown agent: missing. Available agents: ...",
-      resumable: false,
-      resumed: false,
-      turns: 0,
-      tokens: 0,
-      elapsedMs: 0
+      ready: true,
+      result: {
+        agent: "missing",
+        prompt: "...",
+        status: "error",
+        error: "Unknown agent: missing. Available agents: ...",
+        resumable: false,
+        resumed: false,
+        turns: 0,
+        tokens: 0,
+        elapsedMs: 0
+      }
     }
-  ],
-  isError: false
+  ]
 }
 ```
 
-Each result carries:
+Each `result` carries:
 
 - `output` / `error`: the child's **full, untruncated** text (`output` for `completed`, `error`
   otherwise). Only the TUI compacts them; the structured result keeps everything.
@@ -443,7 +439,7 @@ Each result carries:
 - `tokens`: total tokens the child consumed.
 - `elapsedMs`: wall-clock run duration (`0` for tasks that failed before starting).
 
-`isError` is set when any run has a non-`completed` status. Unknown agents, unknown sessionIds, and child-session failures are reported as failed per-task results without discarding other scheduled results.
+The overall tool result is flagged as an error (`isError`) when any task has a non-`completed` status. Unknown agents, unknown sessionIds, and child-session failures are reported as failed per-task results without discarding other scheduled results.
 
 ## Limits and current constraints
 

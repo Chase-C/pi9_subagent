@@ -63,7 +63,7 @@ test("tool run action returns full output only once in JSON details for a resume
   }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.outcomes[0].output, fullOutput);
+  assert.equal(result.details.results[0].result.output, fullOutput);
   assert.equal((result.content[0].text.match(new RegExp(fullOutput, "g")) ?? []).length, 1);
 });
 
@@ -77,10 +77,10 @@ test("tool execution returns structured failed run for unknown agents", async ()
   }, undefined, undefined, { cwd: root });
 
   assert.equal(result.isError, true);
-  assert.equal(result.details.view, "run-results");
-  assert.deepEqual(result.details.outcomes.map((r: any) => r.agent), ["missing"]);
-  assert.equal(result.details.outcomes[0].status, "error");
-  assert.match(result.content[0].text, /"outcomes"/);
+  assert.equal(result.details.view, "results");
+  assert.deepEqual(result.details.results.map((r: any) => r.result.agent), ["missing"]);
+  assert.equal(result.details.results[0].result.status, "error");
+  assert.match(result.content[0].text, /"results"/);
 });
 
 test("subagent tool returns one ordered final group for mixed success, unknown, and failed children", async () => {
@@ -110,10 +110,9 @@ test("subagent tool returns one ordered final group for mixed success, unknown, 
   }, undefined, undefined, baseCtx());
 
   assert.equal(result.isError, true);
-  assert.deepEqual(result.details.outcomes.map((run: any) => run.agent), ["helper", "missing", "flaky"]);
-  assert.equal(result.details.outcomes[0].output, "done:first");
-  assert.deepEqual(result.details.outcomes.map((run: any) => run.status), ["completed", "error", "error"]);
-  assert.equal(result.details.isError, true);
+  assert.deepEqual(result.details.results.map((run: any) => run.result.agent), ["helper", "missing", "flaky"]);
+  assert.equal(result.details.results[0].result.output, "done:first");
+  assert.deepEqual(result.details.results.map((run: any) => run.result.status), ["completed", "error", "error"]);
 });
 
 test("subagent tool notifies invalid settings fallback without breaking execution", async () => {
@@ -150,7 +149,7 @@ test("subagent tool notifies invalid settings fallback without breaking executio
   });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.outcomes[0].output, "done");
+  assert.equal(result.details.results[0].result.output, "done");
   assert.match(notifications[0][0], /Invalid subagent UI settings/);
   assert.equal(notifications[0][1], "warning");
   assert.deepEqual(widgets[0][2], { placement: "belowEditor" });
@@ -190,7 +189,7 @@ test("subagent tool falls back to default UI settings when settings load rejects
   });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.outcomes[0].output, "done");
+  assert.equal(result.details.results[0].result.output, "done");
   assert.match(notifications[0][0], /Failed to load subagent UI settings/);
   assert.equal(notifications[0][1], "warning");
   assert.deepEqual(widgets[0][2], { placement: "belowEditor" });
@@ -230,8 +229,8 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
   });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.outcomes[0].output, "done");
-  assert.equal(result.details.outcomes[0].agent, "helper");
+  assert.equal(result.details.results[0].result.output, "done");
+  assert.equal(result.details.results[0].result.agent, "helper");
   assert.ok(widgets.length > 0);
   assert.equal(widgets.every((call: any[]) => call[0] === "subagent" && call[1] === undefined), true);
 });
@@ -287,7 +286,7 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
   });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.outcomes[0].output, "done");
+  assert.equal(result.details.results[0].result.output, "done");
   assert.equal(partials[0].details.group.sessions[0].activity.toolHistory.at(-1)?.name, "read");
   assert.doesNotMatch(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], "subagent");
@@ -334,8 +333,8 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   assert.equal(result.isError, false);
   assert.deepEqual(receivedTasks.map((t: any) => t.kind), ["spawn", "resume"]);
   assert.equal(receivedTasks[1].sessionId, "s-1");
-  assert.equal(result.details.outcomes[0].resumed, false);
-  assert.equal(result.details.outcomes[1].resumed, true);
+  assert.equal(result.details.results[0].result.resumed, false);
+  assert.equal(result.details.results[1].result.resumed, true);
 });
 
 test("subagent action=run background:true returns view:background-started immediately with initial session views", async () => {
@@ -547,9 +546,9 @@ test("partial tool results carry the full descendant subtree; final tool result 
     ["root", "child"],
   );
 
-  // Final result is the slim outcomes view; no subtree, no per-session AgentSnapshot dump
-  assert.equal(final.details.view, "run-results");
+  // Final result is the slim results view; no subtree, no per-session AgentSnapshot dump
+  assert.equal(final.details.view, "results");
   assert.equal(final.details.subtree, undefined);
   assert.equal(final.details.group, undefined);
-  assert.deepEqual(final.details.outcomes.map((o: any) => o.agent), ["root"]);
+  assert.deepEqual(final.details.results.map((o: any) => o.result.agent), ["root"]);
 });

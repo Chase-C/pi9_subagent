@@ -18,7 +18,7 @@ test("parseDetails rejects payloads without a recognized view tag", () => {
 
 test("parseDetails rejects a known view whose required field is missing or stale-shaped", () => {
   assert.equal(parseDetails({ view: "inventory" }), undefined);
-  assert.equal(parseDetails({ view: "run-results", outcomes: [] }), undefined);
+  assert.equal(parseDetails({ view: "results" }), undefined);
   assert.equal(parseDetails({ view: "run", group: { sessions: "not-an-array" } }), undefined);
 });
 

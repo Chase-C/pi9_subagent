@@ -11,7 +11,7 @@ function registerExtension(dependencies: any = {}) {
   return registeredTool;
 }
 
-test("subagent action=results delegates to manager.backgroundResults and returns a background-results view", async () => {
+test("subagent action=results delegates to manager.backgroundResults and returns a results view", async () => {
   const calls: any[] = [];
   const fakeManager = {
     listSessions(): any[] { return []; },
@@ -30,7 +30,7 @@ test("subagent action=results delegates to manager.backgroundResults and returns
 
   assert.equal(result.isError, false);
   assert.deepEqual(calls, [{ sessionIds: ["s1"] }]);
-  assert.equal(result.details.view, "background-results");
+  assert.equal(result.details.view, "results");
   assert.equal(result.details.results.length, 1);
   assert.equal(result.details.results[0].ready, true);
 });

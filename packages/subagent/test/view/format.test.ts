@@ -8,11 +8,14 @@ import {
   formatSubagentToolLines,
   formatWidgetLines,
   inventoryDetails,
+  resultsDetails,
   runDetails,
-  runResultsDetails,
 } from "../../src/view/format.js";
+import type { AgentResultJson } from "../../src/domain/agent-result.js";
 import { serializeGroup } from "../../src/view/serialize.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
+
+const readyResult = (sessionId: string, result: AgentResultJson) => ({ sessionId, ready: true as const, result });
 
 test("subagent run display animates only the running status glyph", () => {
   const sessions = [
@@ -98,35 +101,28 @@ test("background-started view expanded shows one line per session with session i
   assert.doesNotMatch(expanded, /running/);
 });
 
-test("run-results view collapsed shows count summary by outcome status", () => {
-  const details = runResultsDetails(
-    [
-      { agent: "helper", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 },
-      { agent: "flaky", prompt: "p", status: "error", error: "boom", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 },
-      { agent: "stop", prompt: "p", status: "aborted", error: "Agent aborted.", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 },
-    ],
-    true,
-  );
-  const collapsed = formatSubagentToolLines(details, false, 0);
-  const joined = collapsed.join("\n");
-  assert.match(joined, /3 subagents/);
+test("results view collapsed shows count summary by outcome status", () => {
+  const details = resultsDetails([
+    readyResult("s1", { agent: "helper", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 }),
+    readyResult("s2", { agent: "flaky", prompt: "p", status: "error", error: "boom", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 }),
+    readyResult("s3", { agent: "stop", prompt: "p", status: "aborted", error: "Agent aborted.", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 }),
+  ]);
+  const joined = formatSubagentToolLines(details, false, 0).join("\n");
+  assert.match(joined, /3 results/);
   assert.match(joined, /1 completed/);
   assert.match(joined, /1 error/);
   assert.match(joined, /1 aborted/);
 });
 
-test("run-results view expanded shows agent, status, snippet, and session handle when resumable", () => {
-  const details = runResultsDetails(
-    [
-      {
-        agent: "helper", label: "phase 1", prompt: "p", status: "completed",
-        output: "all done", sessionId: "sess-1", resumable: true, resumed: true,
-        turns: 0, tokens: 0, elapsedMs: 0,
-      },
-      { agent: "flaky", prompt: "p", status: "error", error: "boom", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 },
-    ],
-    true,
-  );
+test("results view expanded shows agent, status, snippet, and session handle when resumable", () => {
+  const details = resultsDetails([
+    readyResult("sess-1", {
+      agent: "helper", label: "phase 1", prompt: "p", status: "completed",
+      output: "all done", sessionId: "sess-1", resumable: true, resumed: true,
+      turns: 0, tokens: 0, elapsedMs: 0,
+    }),
+    readyResult("flaky-1", { agent: "flaky", prompt: "p", status: "error", error: "boom", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 }),
+  ]);
   const expanded = formatSubagentToolLines(details, true, 0).join("\n");
   assert.match(expanded, /helper/);
   assert.match(expanded, /phase 1/);

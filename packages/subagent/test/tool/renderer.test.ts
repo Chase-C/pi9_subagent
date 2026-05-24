@@ -55,8 +55,8 @@ test("subagent tool result renderer falls back to content text for unknown view 
 test("subagent tool result renderer falls back to content text for a partial persisted payload", () => {
   const tool = registerExtension();
   const passthroughTheme = { fg: (_color: string, text: string) => text };
-  // A stale/older-shape "run-results" envelope: right view tag, but missing the `isError` field.
-  const details = { view: "run-results", outcomes: [{ agent: "helper", status: "completed" }] };
+  // A stale/older-shape "results" envelope: right view tag, but the `results` array is absent.
+  const details = { view: "results", outcomes: [{ agent: "helper", status: "completed" }] };
 
   const component = tool.renderResult(
     { content: [{ type: "text", text: "STALE_PAYLOAD_FALLBACK" }], details },

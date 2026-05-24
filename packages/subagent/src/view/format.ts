@@ -1,21 +1,19 @@
 export {
   agentsDetails,
-  backgroundResultsDetails,
   backgroundStartedDetails,
   inventoryDetails,
+  resultsDetails,
   runDetails,
-  runResultsDetails,
   type AgentListingEntry,
   type AgentsDetails,
-  type BackgroundResultsDetails,
   type BackgroundSpawnHandle,
   type BackgroundStartedDetails,
   type InventoryDetails,
   type InventoryFilter,
   type RemoveSummary,
   type RemoveSummaryDetails,
+  type ResultsDetails,
   type RunDetails,
-  type RunResultsDetails,
   type SubagentDetails,
 } from "./details.js";
 
