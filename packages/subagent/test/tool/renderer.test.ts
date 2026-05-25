@@ -2,11 +2,18 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import subagentExtension from "../../src/index.js";
+import { fakeAgent } from "../helpers/fake-agent.js";
 
 function registerExtension() {
   let registeredTool: any;
   subagentExtension({ registerTool: (tool: any) => { registeredTool = tool; } } as any);
   return registeredTool;
+}
+
+const passthroughTheme = { fg: (_color: string, text: string) => text };
+
+function titleText(tool: any, args: unknown, context?: unknown): string {
+  return tool.renderCall(args, passthroughTheme, context).render(200).join("\n");
 }
 
 test("subagent tool result renderer falls back to simple text when themed rendering fails", () => {
@@ -79,4 +86,54 @@ test("subagent tool result renderer keeps the empty-sessions message for an expl
   );
 
   assert.match(component.render(120).join("\n"), /No subagent sessions\./);
+});
+
+test("subagent run title shows live running/queued/finished counts and elapsed once a partial result populates state", () => {
+  const tool = registerExtension();
+  const context: any = { state: {} };
+  const sessions = [
+    fakeAgent({ id: "a", config: { name: "alpha" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ id: "b", config: { name: "beta" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ id: "c", config: { name: "gamma" }, status: { kind: "queued" } }),
+    fakeAgent({ id: "d", config: { name: "delta" }, status: { kind: "completed", startedAt: 1, completedAt: 2 } }),
+  ];
+
+  tool.renderResult(
+    { content: [{ type: "text", text: "" }], details: { view: "run", sessions } },
+    { expanded: false, isPartial: true },
+    passthroughTheme,
+    context,
+  );
+
+  const title = titleText(tool, { action: "run", tasks: [{}, {}, {}, {}] }, context);
+
+  assert.match(title, /^subagent run · 2 running · 1 queued · 1 finished · \d/);
+});
+
+test("subagent run title falls back to the task count before a live result, with or without a render context", () => {
+  const tool = registerExtension();
+
+  // No render context at all (older call sites / non-TUI re-renders): must not throw.
+  assert.match(titleText(tool, { action: "run", tasks: [{}, {}, {}] }), /^subagent run · 3 tasks\s*$/);
+
+  // Empty row-local state, before the first partial result populates a summary.
+  assert.match(titleText(tool, { action: "run", tasks: [{}, {}, {}] }, { state: {} }), /^subagent run · 3 tasks\s*$/);
+});
+
+test("subagent run title counts the subtree through the shared state path when nested children are present", () => {
+  const tool = registerExtension();
+  const context: any = { state: {} };
+  const root = fakeAgent({ id: "r", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const child = fakeAgent({ id: "c", parentSessionId: "r", config: { name: "child" }, createdAt: 2, status: { kind: "queued" } });
+  const grandchild = fakeAgent({ id: "g", parentSessionId: "c", config: { name: "grand" }, createdAt: 3, status: { kind: "completed", startedAt: 2, completedAt: 3 } });
+
+  tool.renderResult(
+    { content: [{ type: "text", text: "" }], details: { view: "run", sessions: [root], subtree: [root, child, grandchild] } },
+    { expanded: false, isPartial: true },
+    passthroughTheme,
+    context,
+  );
+
+  // Flat sessions alone would read "1 running"; the subtree adds the queued + finished descendants.
+  assert.match(titleText(tool, { action: "run", tasks: [{}] }, context), /^subagent run · 1 running · 1 queued · 1 finished · /);
 });

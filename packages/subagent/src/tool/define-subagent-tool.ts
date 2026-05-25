@@ -5,7 +5,7 @@ import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { SubagentParams } from "../schema.js";
 import type { SubagentSettings } from "../config/settings.js";
-import { createSubagentTextComponent, type SubagentDetails } from "../view/format.js";
+import { createSubagentTextComponent, runSummary, type RunSummary, type SubagentDetails } from "../view/format.js";
 import {
   agentsAction,
   errorResult,
@@ -15,6 +15,24 @@ import {
   runAction,
   type ActionDeps,
 } from "./actions.js";
+
+/** Row-local renderer state shared across a single tool call's renderResult and renderCall. */
+interface SubagentRenderState {
+  runSummary?: RunSummary;
+}
+
+/**
+ * The `· …` suffix for a tool-call title. An active `run` with a live summary shows running/
+ * queued/finished counts and elapsed time; otherwise (no summary yet, or a non-`run` action) it
+ * falls back to the task count so the first title render stays useful before any result arrives.
+ */
+function callSuffix(action: string, summary: RunSummary | undefined, args: any): string {
+  if (action === "run" && summary) {
+    return ` · ${summary.running} running · ${summary.queued} queued · ${summary.finished} finished · ${summary.elapsed}`;
+  }
+  const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
+  return tasks.length ? ` · ${tasks.length} task${tasks.length === 1 ? "" : "s"}` : "";
+}
 
 export interface SubagentToolDeps {
   agentManager: AgentManager;
@@ -66,31 +84,26 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     ? { agentManager, agentRegistry, getCurrentSettings, parentSessionId }
     : { agentManager, agentRegistry, getCurrentSettings };
 
-  return defineTool<typeof SubagentParams, SubagentDetails>({
+  return defineTool<typeof SubagentParams, SubagentDetails, SubagentRenderState>({
     name: "subagent",
     label: "Subagent",
     description: TOOL_DESCRIPTION,
     parameters: SubagentParams,
-    renderCall(args, theme: any) {
+    renderCall(args, theme: any, context) {
       const action = typeof args?.action === "string" ? args.action : "pending";
-      const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
-      const labels = tasks
-        .map((task: any) => (typeof task?.label === "string" ? task.label : undefined))
-        .filter((label: string | undefined): label is string => Boolean(label));
-      let suffix = "";
-      if (labels.length > 0) {
-        const limit = getCurrentSettings().display.toolCallLabelMaxLength;
-        const joined = labels.join(", ");
-        const truncated = joined.length > limit ? `${joined.slice(0, Math.max(0, limit - 3))}...` : joined;
-        suffix = ` · ${truncated}`;
-      } else if (tasks.length) {
-        suffix = ` · ${tasks.length} task${tasks.length === 1 ? "" : "s"}`;
-      }
-      const line = `subagent ${action}${suffix}`;
+      const summary = context?.state?.runSummary;
+      const line = `subagent ${action}${callSuffix(action, summary, args)}`;
       return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
     },
-    renderResult(result, options, theme: any) {
+    renderResult(result, options, theme: any, context) {
       try {
+        // Share the live run summary so renderCall can title the row with counts + elapsed. Derived
+        // here because the result renderer is the only one that sees the live `run` details; kept
+        // inside the try so a malformed payload falls back to plain text like component creation.
+        if (context?.state) {
+          const summary = runSummary(result.details);
+          if (summary) context.state.runSummary = summary;
+        }
         const component = createSubagentTextComponent(result.details, Boolean(options.expanded), theme, undefined, getCurrentSettings().display);
         if (component) return component;
       } catch { }

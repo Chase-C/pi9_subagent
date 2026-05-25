@@ -10,6 +10,7 @@ import {
   inventoryDetails,
   resultsDetails,
   runDetails,
+  runSummary,
 } from "../../src/view/format.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 
@@ -254,4 +255,27 @@ test("subagent session inspect output uses remove terminology", () => {
   const inspectLines = formatSubagentSessionInspect(retainedSession).join("\n");
   assert.match(inspectLines, /Actions: inspect, resume, remove/);
   assert.doesNotMatch(inspectLines, /clear/);
+});
+
+test("runSummary elapsed measures wall-clock from the earliest run start, not summed child runtime", () => {
+  // Two children that each ran 30s but overlapped: summed runtime is 60s, wall clock is 40s.
+  const a = fakeAgent({ id: "a", status: { kind: "completed", startedAt: 1_000, completedAt: 31_000 } });
+  const b = fakeAgent({ id: "b", status: { kind: "completed", startedAt: 5_000, completedAt: 35_000 } });
+
+  const summary = runSummary(runDetails([a, b]), 41_000);
+
+  assert.equal(summary?.elapsed, "40s");
+});
+
+test("runSummary counts the subtree (including nested children) when present, not the flat sessions", () => {
+  const root = fakeAgent({ id: "r", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const child = fakeAgent({ id: "c", parentSessionId: "r", config: { name: "child" }, createdAt: 2, status: { kind: "queued" } });
+  const grandchild = fakeAgent({ id: "g", parentSessionId: "c", config: { name: "grand" }, createdAt: 3, status: { kind: "completed", startedAt: 2, completedAt: 3 } });
+
+  const summary = runSummary(runDetails([root], { subtree: [root, child, grandchild] }), 10_000);
+
+  assert.deepEqual(
+    { running: summary?.running, queued: summary?.queued, finished: summary?.finished },
+    { running: 1, queued: 1, finished: 1 },
+  );
 });

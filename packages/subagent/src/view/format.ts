@@ -30,4 +30,6 @@ export {
   formatAgentConfigInspect,
   formatAgentConfigSummary,
   formatSubagentToolLines,
+  runSummary,
+  type RunSummary,
 } from "./tool-result-lines.js";

@@ -3,7 +3,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { ResultEntry } from "../domain/agent-result.js";
-import { effectiveStatus, getSnippet } from "../domain/agent-decisions.js";
+import { effectiveStatus, getQueuedAt, getSnippet, getStartedAt } from "../domain/agent-decisions.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
 import { compact } from "./view-helpers.js";
 import { serializeGroup } from "./serialize.js";
@@ -17,6 +17,7 @@ import {
 } from "./text-component.js";
 import {
   expandedLines,
+  formatElapsed,
   orderAsTree,
   plural,
   rowElapsed,
@@ -68,6 +69,42 @@ export function formatSubagentToolLines(
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
 ): string[] {
   return (formatSubagentToolDisplayLines(details, expanded, now, undefined, display) ?? []).map(line => line.text);
+}
+
+/**
+ * Live summary of a `run` view, shared from the result renderer to the call-title renderer.
+ * `elapsed` is wall-clock time since the run started (the earliest session start), not summed
+ * child runtime.
+ */
+export interface RunSummary {
+  running: number;
+  queued: number;
+  finished: number;
+  elapsed: string;
+}
+
+/**
+ * Derives a {@link RunSummary} from opaque `run` details, or `undefined` for any other view.
+ * Counts the `subtree` when present (so nested children are included), otherwise the flat
+ * `sessions`. Every non-`running`/`queued` status is terminal, so it counts as finished.
+ */
+export function runSummary(details: unknown, now = Date.now()): RunSummary | undefined {
+  const narrowed = parseDetails(details);
+  if (!narrowed || narrowed.view !== "run") return undefined;
+  const sessions = narrowed.subtree && narrowed.subtree.length > 0 ? narrowed.subtree : narrowed.sessions;
+  let running = 0;
+  let queued = 0;
+  let finished = 0;
+  let earliest = now;
+  for (const session of sessions) {
+    const status = effectiveStatus(session.status);
+    if (status === "running") running++;
+    else if (status === "queued") queued++;
+    else finished++;
+    const start = getStartedAt(session.status) ?? getQueuedAt(session.status) ?? session.createdAt;
+    if (start < earliest) earliest = start;
+  }
+  return { running, queued, finished, elapsed: formatElapsed(earliest, now) };
 }
 
 export function createSubagentTextComponent(
