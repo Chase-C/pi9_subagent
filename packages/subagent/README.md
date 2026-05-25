@@ -190,13 +190,13 @@ subagent({ action: "results", sessionIds: ["..."], remove: true })    // collect
 `results` never blocks. It returns one entry per id in input order (duplicates allowed):
 
 ```ts
-type BackgroundResultJson =
-  | { sessionId?: string; ready: true; result: AgentResultJson }
+type BackgroundResult =
+  | { sessionId?: string; ready: true; result: AgentResult }
   | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
   | { sessionId: string; error: string };
 ```
 
-- Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return the same projected `result` as `action: "run"` (the `AgentResultJson` shape below, including `turns`, `tokens`, and `elapsedMs`) under `{ ready: true, result }`. `action: "results"` terminal entries include the requested `sessionId`; synchronous `action: "run"` entries include `sessionId` only when the result is resumable/collectable. Both actions share one results envelope: the in-process `details.results` carries the terminal/live **snapshots** (what the renderer and HTML export consume), and the text-content JSON above is projected from those terminal snapshots by the one `toResultJson` projection.
+- Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return the same projected `result` as `action: "run"` (the `AgentResult` shape below, including `turns`, `tokens`, and `elapsedMs`) under `{ ready: true, result }`. `action: "results"` terminal entries include the requested `sessionId`; synchronous `action: "run"` entries include `sessionId` only when the result is resumable/collectable. Both actions share one results envelope: the in-process `details.results` carries the terminal/live **snapshots** (what the renderer and HTML export consume), and the text-content JSON above is projected from those terminal snapshots by the one `toResult` projection.
 - Queued/running entries return `{ ready: false, status, elapsedMs, agent, label? }`. `elapsedMs` is measured from when the child started (running) or from when the current attempt was queued (queued).
 - Unknown ids return `{ sessionId, error: "Unknown subagent session: <id>" }`. The overall response stays `isError: false` — partial-success is success.
 - `remove: true` sweeps terminal entries after their result is collected. Running entries are never removed regardless of the flag. A subsequent `results` call for a swept id returns the unknown-id error.
@@ -380,13 +380,13 @@ The core `subagent` tool works in non-interactive modes and still returns struct
 ## Results
 
 Tool results preserve input order. The model-facing text content is a list of
-`BackgroundResultJson` entries (see [`action: "results"`](#action-results)); the in-process
+`BackgroundResult` entries (see [`action: "results"`](#action-results)); the in-process
 `details.results` carries the terminal/live snapshots those entries are projected from, which is
 what the renderer and HTML export consume. `action: "run"` and `action: "results"` share this
 envelope. A synchronous run blocks until every task settles, so every entry is
 `{ ready: true, result, sessionId? }`; `sessionId` is present only when the result is
 resumable/collectable. Each `result` is projected from the task's terminal snapshot by the single
-`toResultJson` projection — the done-state snapshot is the source of truth, and `result` is its
+`toResult` projection — the done-state snapshot is the source of truth, and `result` is its
 model-facing view.
 
 ```ts

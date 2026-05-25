@@ -2,7 +2,7 @@ import type { AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
-import { toResultsJson, type ResultEntry } from "../domain/agent-result.js";
+import { toResults, type ResultEntry } from "../domain/agent-result.js";
 import type { AgentManager, RunUpdate } from "../runtime/agent-manager.js";
 import { timingStart } from "../runtime/timing.js";
 import {
@@ -168,7 +168,7 @@ export async function runAction(
 
 /** The model-facing `results` envelope: the `view` tag plus the projected per-entry JSON. */
 function resultsJson(entries: ResultEntry[], opts?: { exposeId?: boolean }) {
-  return { view: "results" as const, results: toResultsJson(entries, opts) };
+  return { view: "results" as const, results: toResults(entries, opts) };
 }
 
 function widgetAgents(update: RunUpdate): AgentSnapshot[] {

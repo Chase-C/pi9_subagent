@@ -27,7 +27,9 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
   const getCurrentSettings = () => currentSettings;
   agentManager.runner?.setChildFactory?.(parent =>
-    makeChildSubagentFactory({ manager: agentManager, registry: agentRegistry, parent, getCurrentSettings }));
+    makeChildSubagentFactory({ manager: agentManager, registry: agentRegistry, parent, getCurrentSettings })
+  );
+
   new BackgroundNotifier({
     pi: pi as any,
     manager: agentManager,

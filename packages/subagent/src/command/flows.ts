@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../runtime/agent-manager.js";
-import { toResultJson } from "../domain/agent-result.js";
+import { toResult } from "../domain/agent-result.js";
 import { createSubagentResumeMessage } from "../view/resume-message.js";
 import type { SubagentSettings, SubagentSettingsStore } from "../config/settings.js";
 import { updateSubagentWidget } from "../ui/widget.js";
@@ -10,7 +10,6 @@ import {
   SubagentSettingsComponent,
   type SubagentResumeCommandResult,
 } from "./components.js";
-import type { SubagentKeybindings, SubagentSessionsTheme } from "./input.js";
 import { errorMessage, notify } from "./notify.js";
 
 export async function resumeSessionFromCommand(
@@ -52,7 +51,7 @@ export async function resumeSessionFromCommand(
       agentManager.startRun(ctx, loader.signal, [{ kind: "resume", sessionId: action.sessionId, prompt }], update => {
         updateSubagentWidget(ctx, update.sessions, uiSettings);
       }, { background: false }).resultsPromise.then(
-        results => finish({ result: results[0] ? toResultJson(results[0]) : undefined }),
+        results => finish({ result: results[0] ? toResult(results[0]) : undefined }),
         error => finish({ error }),
       );
 

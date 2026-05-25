@@ -1,10 +1,15 @@
 import { getQueuedAt, getStartedAt } from "./agent-decisions.js";
 import type { AgentSnapshot } from "./agent-snapshot.js";
 
-export type AgentRunStatus = "completed" | "error" | "aborted" | "skipped" | "interrupted";
+export type AgentRunStatus =
+  | "completed"
+  | "error"
+  | "aborted"
+  | "skipped"
+  | "interrupted"
 
 /** Model-facing per-task result. Projected entirely from a terminal {@link AgentSnapshot}. */
-export interface AgentResultJson {
+export interface AgentResult {
   agent: string;
   label?: string;
   prompt: string;
@@ -24,7 +29,7 @@ export interface AgentResultJson {
  * Projects a terminal snapshot into the model-facing result. `output`/`error` carry the
  * child's full untruncated text; `sessionId` is present only when the session is resumable.
  */
-export function toResultJson(snapshot: AgentSnapshot): AgentResultJson {
+export function toResult(snapshot: AgentSnapshot): AgentResult {
   const status = snapshot.status;
   const done = status.kind === "done" ? status : undefined;
   const outcome = done?.outcome ?? "error";
@@ -49,7 +54,7 @@ export function toResultJson(snapshot: AgentSnapshot): AgentResultJson {
 
 /**
  * The terminal data a settled attempt carries. The snapshot factory projects this onto the
- * `done` arm of {@link AgentSnapshot}; `toResultJson` then projects that into the result.
+ * `done` arm of {@link AgentSnapshot}; `toResult` then projects that into the result.
  */
 export interface AgentOutcome {
   readonly status: AgentRunStatus;
@@ -75,16 +80,16 @@ export function toOutcome(args: FinalizeRunArgs): AgentOutcome {
 /**
  * Render-side entry for the `results` view (shared by `action: "run"` and `action: "results"`).
  * A live or terminal snapshot renders through the shared snapshot row path; an unknown id renders
- * as an error line. The model-facing JSON is projected from this by {@link toResultsJson}, so the
- * renderer never depends on {@link AgentResultJson}.
+ * as an error line. The model-facing JSON is projected from this by {@link toResults}, so the
+ * renderer never depends on {@link AgentResult}.
  */
 export type ResultEntry =
   | { snapshot: AgentSnapshot }
   | { sessionId: string; error: string };
 
 /** Model-facing per-entry JSON for the `results` envelope, projected from {@link ResultEntry}. */
-export type BackgroundResultJson =
-  | { sessionId?: string; ready: true; result: AgentResultJson }
+export type BackgroundResult =
+  | { sessionId?: string; ready: true; result: AgentResult }
   | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
   | { sessionId: string; error: string };
 
@@ -95,16 +100,16 @@ export type BackgroundResultJson =
  * it isn't resumable — the `results` action echoes the requested id, while a synchronous `run`
  * only surfaces collectable (resumable) ids.
  */
-export function toResultsJson(
+export function toResults(
   entries: readonly ResultEntry[],
   opts: { exposeId?: boolean } = {},
-): BackgroundResultJson[] {
+): BackgroundResult[] {
   return entries.map(entry => {
     if ("error" in entry) return { sessionId: entry.sessionId, error: entry.error };
     const { snapshot } = entry;
     const status = snapshot.status;
     if (status.kind === "done") {
-      const result = toResultJson(snapshot);
+      const result = toResult(snapshot);
       const sessionId = opts.exposeId ? snapshot.id : result.sessionId;
       return { ...(sessionId !== undefined ? { sessionId } : {}), ready: true, result };
     }

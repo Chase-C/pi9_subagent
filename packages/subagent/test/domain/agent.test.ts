@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import type { AgentViewStatus } from "../../src/domain/agent-snapshot.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { toResultJson } from "../../src/domain/agent-result.js";
+import { toResult } from "../../src/domain/agent-result.js";
 
 const noop: AgentUpdateListener = () => {};
 const view = (agent: Agent) => agent.snapshot();
@@ -250,7 +250,7 @@ test("Agent.resolve spawn for an unknown agent returns a preflight failure with 
 
   assert.equal(result.kind, "failure");
   if (result.kind !== "failure") return;
-  assert.match(toResultJson(result.failure).error ?? "", /Unknown agent: missing/);
+  assert.match(toResult(result.failure).error ?? "", /Unknown agent: missing/);
   assert.equal(result.failure.config.source, undefined);
   assert.equal(result.failure.status.kind, "done");
 });
@@ -264,14 +264,14 @@ test("Agent.resolve resume rejects sessions that are mid-attempt or non-resumabl
   const midAttempt = resolve({ kind: "resume", sessionId: spawn.agent.id, prompt: "queue jump" });
   assert.equal(midAttempt.kind, "failure");
   if (midAttempt.kind === "failure") {
-    assert.match(toResultJson(midAttempt.failure).error ?? "", /already.*resum|while it is/i);
+    assert.match(toResult(midAttempt.failure).error ?? "", /already.*resum|while it is/i);
     assert.equal(midAttempt.failure.config.source, "user");
   }
 
   // Unknown session id surfaces a dedicated message.
   const unknown = resolve({ kind: "resume", sessionId: "no-such-id", prompt: "ghost" });
   assert.equal(unknown.kind, "failure");
-  if (unknown.kind === "failure") assert.match(toResultJson(unknown.failure).error ?? "", /Unknown resumable subagent session/);
+  if (unknown.kind === "failure") assert.match(toResult(unknown.failure).error ?? "", /Unknown resumable subagent session/);
 
   // Original agent is unchanged: still has its original (queued) attempt.
   assert.equal(tracked.length, 1);

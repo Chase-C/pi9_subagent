@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { toResultJson } from "../../src/domain/agent-result.js";
+import { toResult } from "../../src/domain/agent-result.js";
 import { backgroundStartedDetails } from "../../src/view/format.js";
 import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers/runtime.js";
 
@@ -111,7 +111,7 @@ test("orchestrator.startBatch returns sessions synchronously and a resultsPromis
   assert.deepEqual(batch.sessions.map(s => s.config.name), ["helper", "helper"]);
   assert.deepEqual(batch.sessions.map(s => s.dispatch), ["foreground", "foreground"]);
 
-  const results = (await batch.resultsPromise).map(toResultJson);
+  const results = (await batch.resultsPromise).map(toResult);
   assert.deepEqual(results.map(r => r.status), ["completed", "completed"]);
   assert.deepEqual(results.map(r => r.output), ["done:one", "done:two"]);
 });
@@ -169,7 +169,7 @@ test("orchestrator.startBatch background:true surfaces preflight failures as tra
   assert.deepEqual(batch.sessions.map(s => s.retention), ["transient", "transient"]);
   assert.deepEqual(backgroundStartedDetails(batch.sessions).handles, []);
 
-  const results = (await batch.resultsPromise).map(toResultJson);
+  const results = (await batch.resultsPromise).map(toResult);
   assert.deepEqual(results.map(r => r.status), ["error", "error"]);
 });
 
@@ -201,7 +201,7 @@ test("orchestrator.startBatch background:true ignores parent signal abort and le
   await new Promise(resolve => setTimeout(resolve, 5));
 
   releaseRun!();
-  const results = (await batch.resultsPromise).map(toResultJson);
+  const results = (await batch.resultsPromise).map(toResult);
 
   assert.equal(results.length, 1);
   assert.equal(results[0].status, "completed");
@@ -239,7 +239,7 @@ test("orchestrator.startBatch background:true promotes resumed sessions to backg
   assert.equal(batch.sessions[0].id, seed.sessionId);
   assert.equal(batch.sessions[0].dispatch, "background");
 
-  const [resumed] = (await batch.resultsPromise).map(toResultJson);
+  const [resumed] = (await batch.resultsPromise).map(toResult);
   assert.equal(resumed.status, "completed");
   assert.equal(resumed.sessionId, seed.sessionId);
 

@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { toResultJson } from "../../src/domain/agent-result.js";
+import { toResult } from "../../src/domain/agent-result.js";
 import type { AgentSnapshot } from "../../src/domain/agent-snapshot.js";
 
 function terminalSnapshot(over: Partial<AgentSnapshot> = {}): AgentSnapshot {
@@ -28,8 +28,8 @@ function terminalSnapshot(over: Partial<AgentSnapshot> = {}): AgentSnapshot {
   };
 }
 
-test("toResultJson projects a completed terminal snapshot into the model-facing result", () => {
-  const result = toResultJson(terminalSnapshot());
+test("toResult projects a completed terminal snapshot into the model-facing result", () => {
+  const result = toResult(terminalSnapshot());
 
   assert.equal(result.agent, "helper");
   assert.equal(result.prompt, "do the work");
@@ -45,8 +45,8 @@ test("toResultJson projects a completed terminal snapshot into the model-facing 
   assert.equal(result.elapsedMs, 500);
 });
 
-test("toResultJson carries error text and omits sessionId for a non-resumable failed run", () => {
-  const result = toResultJson(terminalSnapshot({
+test("toResult carries error text and omits sessionId for a non-resumable failed run", () => {
+  const result = toResult(terminalSnapshot({
     config: { name: "helper", description: "d", source: "project", model: undefined, thinking: undefined, tools: undefined, resumable: false },
     status: { kind: "done", outcome: "error", startedAt: 100, completedAt: 200, error: "it blew up", resumed: true },
   }));
@@ -60,8 +60,8 @@ test("toResultJson carries error text and omits sessionId for a non-resumable fa
   assert.equal(result.resumed, true);
 });
 
-test("toResultJson reports zero elapsed and zero tokens for a pre-attach failure with no startedAt", () => {
-  const result = toResultJson(terminalSnapshot({
+test("toResult reports zero elapsed and zero tokens for a pre-attach failure with no startedAt", () => {
+  const result = toResult(terminalSnapshot({
     status: { kind: "done", outcome: "skipped", completedAt: 900, error: "Agent skipped.", resumed: false },
     usage: undefined,
     activity: { turns: 0, compactions: 0, toolHistory: [] },

@@ -28,7 +28,7 @@ export interface RunHandle {
   readonly sessions: AgentSnapshot[];
   /** Live snapshot of the run tree (roots + descendants in pre-order). */
   tree(): AgentSnapshot[];
-  /** Terminal snapshots in input order. The tool layer projects each via `toResultJson`. */
+  /** Terminal snapshots in input order. The tool layer projects each via `toResult`. */
   readonly resultsPromise: Promise<AgentSnapshot[]>;
 }
 
@@ -99,7 +99,7 @@ export class AgentManager {
   /**
    * One render entry per requested id, in input order: the agent's current snapshot (terminal or
    * pending), or an error for an unknown id. The tool layer projects these into the model-facing
-   * `results` JSON via `toResultsJson`.
+   * `results` JSON via `toResults`.
    */
   backgroundResults(sessionIds: string[]): ResultEntry[] {
     return sessionIds.map(id => {

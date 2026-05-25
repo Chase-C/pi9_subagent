@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import type { AgentViewStatus } from "../../src/domain/agent-snapshot.js";
 import { completedRun, errorRun, interruptedRun } from "../../src/domain/agent-finalize.js";
-import { toResultJson } from "../../src/domain/agent-result.js";
+import { toResult } from "../../src/domain/agent-result.js";
 
 const noop: AgentUpdateListener = () => {};
 
@@ -23,16 +23,16 @@ const baseConfig = {
 
 test("finalize returns a terminal snapshot that projects the agent label across outcomes", () => {
   const labeled = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" }, noop);
-  assert.equal(toResultJson(completedRun(labeled, "done")).label, "researcher");
+  assert.equal(toResult(completedRun(labeled, "done")).label, "researcher");
 
   const labeledErr = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" }, noop);
-  assert.equal(toResultJson(errorRun(labeledErr, "fail")).label, "researcher");
+  assert.equal(toResult(errorRun(labeledErr, "fail")).label, "researcher");
 
   const labeledInt = new Agent("id3", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" }, noop);
-  assert.equal(toResultJson(interruptedRun(labeledInt, "stop")).label, "researcher");
+  assert.equal(toResult(interruptedRun(labeledInt, "stop")).label, "researcher");
 
   const unlabeled = new Agent("id4", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
-  const result = toResultJson(completedRun(unlabeled, "done"));
+  const result = toResult(completedRun(unlabeled, "done"));
   assert.equal(Object.prototype.hasOwnProperty.call(result, "label"), false);
 });
 
@@ -54,7 +54,7 @@ test("the projected result reflects the per-task resumable override and exposes 
 
   const agent = new Agent("id1", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: true }, noop);
   agent.attach(session as any);
-  const result = toResultJson(completedRun(agent, "done"));
+  const result = toResult(completedRun(agent, "done"));
 
   assert.equal(result.resumable, true);
   assert.equal(result.sessionId, "id1");
@@ -93,5 +93,5 @@ test("finalize is idempotent and returns the existing terminal snapshot when alr
 
   const second = errorRun(agent, "late");
   assert.equal(second.status.kind === "done" && second.status.outcome, "completed");
-  assert.equal(toResultJson(second).output, toResultJson(first).output);
+  assert.equal(toResult(second).output, toResult(first).output);
 });

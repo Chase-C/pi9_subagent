@@ -96,27 +96,22 @@ function formatSubagentToolDisplayLines(
   switch (narrowed.view) {
     case "agents":
       return formatAgentListLines(narrowed.agents, expanded, bold, display).map(text => ({ text }));
-
     case "results":
       return formatResultsLines(narrowed.results, expanded, now, bold, display);
-
     case "run": {
       const ordered = narrowed.subtree && narrowed.subtree.length > 0
         ? orderAsTree(narrowed.subtree)
         : narrowed.sessions.map(agent => ({ agent, depth: 0 }));
       return expandRows(ordered, expanded, now, bold, display, runRow, true);
     }
-
     case "inventory": {
       const { sessions, filter } = narrowed;
       if (sessions.length === 0) return [{ text: "No subagent sessions." }];
       if (!expanded && sessions.length > 1) return formatViewGroupLine(serializeGroup(sessions), filter);
       return expandRows(orderAsTree(sessions), expanded, now, bold, display, inventoryRow, false);
     }
-
     case "remove-summary":
       return formatRemoveSummaryLines(narrowed.summary, expanded);
-
     case "background-started":
       return formatBackgroundStartedLines(narrowed.handles, narrowed.count, expanded, bold);
   }
