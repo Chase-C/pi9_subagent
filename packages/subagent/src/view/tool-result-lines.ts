@@ -2,8 +2,8 @@ import type { Component } from "@earendil-works/pi-tui";
 
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
-import type { AgentResultJson, BackgroundResult } from "../domain/agent-result.js";
-import { effectiveStatus } from "../domain/agent-decisions.js";
+import type { ResultEntry } from "../domain/agent-result.js";
+import { effectiveStatus, getSnippet } from "../domain/agent-decisions.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
 import { compact } from "./view-helpers.js";
 import { serializeGroup } from "./serialize.js";
@@ -17,9 +17,9 @@ import {
 } from "./text-component.js";
 import {
   expandedLines,
-  formatElapsed,
   orderAsTree,
   plural,
+  rowElapsed,
   snippetLines,
   statusColorForOutcome,
   statusPresentation,
@@ -91,7 +91,7 @@ function formatSubagentToolDisplayLines(
       return formatAgentListLines(narrowed.agents, expanded, bold, display).map(text => ({ text }));
 
     case "results":
-      return formatResultsLines(narrowed.results, expanded, bold, display);
+      return formatResultsLines(narrowed.results, expanded, now, bold, display);
 
     case "run": {
       const ordered = narrowed.subtree && narrowed.subtree.length > 0
@@ -202,55 +202,65 @@ function expandRows(
  */
 const RESULT_COUNT_ORDER = ["completed", "running", "queued", "error", "aborted", "interrupted", "skipped"] as const;
 
-function formatResultsLines(results: readonly BackgroundResult[], expanded: boolean, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
+function formatResultsLines(entries: readonly ResultEntry[], expanded: boolean, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
   const counts = new Map<string, number>();
   const bump = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
   let hasFailure = false;
   let hasPending = false;
-  for (const entry of results) {
-    if ("error" in entry) { bump("error"); hasFailure = true; }
-    else if (!entry.ready) { bump(entry.status); hasPending = true; }
-    else { bump(entry.result.status); if (entry.result.status !== "completed") hasFailure = true; }
+  for (const entry of entries) {
+    if ("error" in entry) { bump("error"); hasFailure = true; continue; }
+    const status = effectiveStatus(entry.snapshot.status);
+    bump(status);
+    if (status === "queued" || status === "running") hasPending = true;
+    else if (status !== "completed") hasFailure = true;
   }
   return renderCountSummary({
-    total: plural(results.length, "result"),
+    total: plural(entries.length, "result"),
     counts: orderedCountSegments(counts, RESULT_COUNT_ORDER),
     headStatus: hasFailure ? "error" : hasPending ? "running" : "completed",
     expanded,
-    entries: results,
-    renderEntry: entry => resultEntryLines(entry, bold, display),
+    entries,
+    renderEntry: entry => resultEntryLines(entry, now, bold, display),
     blankBetween: true,
   });
 }
 
-/** One result entry: a terminal snapshot's projection, a still-pending session, or a bad id. */
-function resultEntryLines(entry: BackgroundResult, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
+/** One result entry: a terminal snapshot's block, a still-pending session row, or a bad id. */
+function resultEntryLines(entry: ResultEntry, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
   if ("error" in entry) {
     return [{ text: `${entry.sessionId} · error: ${entry.error}`, status: "error" }];
   }
-  if (!entry.ready) {
-    const labelSegment = entry.label ? `  ${entry.label}` : "";
+  const snapshot = entry.snapshot;
+  const status = effectiveStatus(snapshot.status);
+  if (status === "queued" || status === "running") {
+    const labelSegment = snapshot.label ? `  ${snapshot.label}` : "";
     return [{
-      text: `${applyBold(bold, entry.agent)}${labelSegment} · ${entry.status} · ${formatElapsed(0, entry.elapsedMs)}`,
-      status: entry.status,
+      text: `${applyBold(bold, snapshot.config.name)}${labelSegment} · ${status} · ${rowElapsed(snapshot, now)}`,
+      status: statusColorForOutcome(status),
     }];
   }
-  return resultBlock(entry.result, entry.result.sessionId ?? entry.sessionId, bold, display);
+  return resultBlock(snapshot, bold, display);
 }
 
-function resultBlock(result: AgentResultJson, sessionId: string | undefined, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
-  const color = statusColorForOutcome(result.status);
-  const labelSegment = result.label ? `  ${result.label}` : "";
+function resultBlock(snapshot: AgentSnapshot, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
+  const status = effectiveStatus(snapshot.status);
+  const color = statusColorForOutcome(status);
+  const labelSegment = snapshot.label ? `  ${snapshot.label}` : "";
+  // Persistent sessions are retained and collectable, so surface the handle; transient ones vanish
+  // after the run. This matches the gating on the projected top-level `sessionId`.
+  const sessionId = snapshot.retention === "persistent" ? snapshot.id : undefined;
+  const resumed = snapshot.status.kind === "done" && snapshot.status.resumed === true;
   const segments = [
-    `${applyBold(bold, result.agent)}${labelSegment}`,
-    result.status,
+    `${applyBold(bold, snapshot.config.name)}${labelSegment}`,
+    status,
     ...(sessionId ? [`session:${sessionId}`] : []),
-    ...(result.resumed ? ["resumed"] : []),
+    ...(resumed ? ["resumed"] : []),
   ];
   const lines: DisplayLine[] = [{ text: segments.join(" · "), status: color }];
-  const snippet = result.status === "completed" ? result.output : result.error ?? result.status;
+  const raw = getSnippet(snapshot.status);
+  const snippet = status === "completed" ? raw : raw ?? status;
   if (snippet) {
-    lines.push(...snippetLines(result.status === "completed" ? "Result" : "Error", snippet, 2, color, display));
+    lines.push(...snippetLines(status === "completed" ? "Result" : "Error", snippet, 2, color, display));
   }
   return lines;
 }

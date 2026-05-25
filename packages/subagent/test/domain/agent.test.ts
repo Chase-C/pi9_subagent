@@ -1,14 +1,15 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { Agent, type AgentStatus, type AgentUpdateListener } from "../../src/domain/agent.js";
+import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
+import type { AgentViewStatus } from "../../src/domain/agent-snapshot.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import { toResultJson } from "../../src/domain/agent-result.js";
 
 const noop: AgentUpdateListener = () => {};
 const view = (agent: Agent) => agent.snapshot();
 
-function doneStatus(agent: Agent): Extract<AgentStatus, { kind: "done" }> {
+function doneStatus(agent: Agent): Extract<AgentViewStatus, { kind: "done" }> {
   if (agent.status.kind !== "done") throw new Error(`expected done, got ${agent.status.kind}`);
   return agent.status;
 }
@@ -208,7 +209,7 @@ test("Agent.abort on a running agent aborts the underlying session and finalizes
   await agent.abort();
 
   assert.equal(abortCalls, 1);
-  assert.equal(doneStatus(agent).result.status, "aborted");
+  assert.equal(doneStatus(agent).outcome, "aborted");
 });
 
 test("Agent.abort on a queued agent finalizes as skipped without touching a session", async () => {
@@ -217,7 +218,7 @@ test("Agent.abort on a queued agent finalizes as skipped without touching a sess
 
   await agent.abort();
 
-  assert.equal(doneStatus(agent).result.status, "skipped");
+  assert.equal(doneStatus(agent).outcome, "skipped");
 });
 
 test("Agent.abort on a terminal agent is a no-op and does not re-finalize", async () => {
@@ -226,12 +227,12 @@ test("Agent.abort on a terminal agent is a no-op and does not re-finalize", asyn
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
   agent.attach(session as any);
   completedRun(agent, "done");
-  const settled = doneStatus(agent).result;
+  const settled = doneStatus(agent);
 
   await agent.abort();
 
   assert.equal(abortCalls, 0);
-  assert.equal(doneStatus(agent).result, settled);
+  assert.deepEqual(doneStatus(agent), settled);
 });
 
 test("Agent.resolve spawn for an unknown agent returns a preflight failure with a helpful error", () => {

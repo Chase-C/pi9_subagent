@@ -2,7 +2,7 @@ import type { AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
-import { toResultJson, type BackgroundResult } from "../domain/agent-result.js";
+import { toResultsJson, type ResultEntry } from "../domain/agent-result.js";
 import type { AgentManager, RunUpdate } from "../runtime/agent-manager.js";
 import { timingStart } from "../runtime/timing.js";
 import {
@@ -39,11 +39,16 @@ export interface ActionResult {
   isError?: boolean;
 }
 
-export function toolResult(details: SubagentDetails, isError = false): ActionResult {
+/**
+ * Builds a tool result. The model-facing `content` text is `json` when provided, else the
+ * serialized `details`. They diverge only for the `results` envelope, whose `details` carries
+ * snapshots for rendering while `content` carries the projected model-facing JSON.
+ */
+export function toolResult(details: SubagentDetails, opts: { isError?: boolean; json?: unknown } = {}): ActionResult {
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(opts.json ?? details, null, 2) }],
     details,
-    isError,
+    isError: opts.isError ?? false,
   };
 }
 
@@ -82,12 +87,12 @@ export async function resultsAction(deps: ActionDeps, params: SubagentParams): P
   if (!isStringArray(sessionIds)) return errorResult("results sessionIds must be an array of strings.");
   if (!isNonEmptyStringArray(sessionIds)) return errorResult("results sessionIds must be an array of non-empty strings.");
   if (sessionIds.length === 0) return errorResult("results requires at least one sessionId.");
-  const results = deps.agentManager.backgroundResults(sessionIds);
+  const entries = deps.agentManager.backgroundResults(sessionIds);
   if (params.remove) {
-    const terminalIds = results.flatMap(r => "ready" in r && r.ready && r.sessionId !== undefined ? [r.sessionId] : []);
+    const terminalIds = entries.flatMap(e => "snapshot" in e && e.snapshot.status.kind === "done" ? [e.snapshot.id] : []);
     await deps.agentManager.remove({ sessionIds: terminalIds });
   }
-  return toolResult(resultsDetails(results));
+  return toolResult(resultsDetails(entries), { json: resultsJson(entries, { exposeId: true }) });
 }
 
 export async function removeAction(deps: ActionDeps, params: SubagentParams): Promise<ActionResult> {
@@ -155,17 +160,15 @@ export async function runAction(
   runEnd({ ok: true, resultCount: settled.length });
   updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
   // The terminal snapshot is the result: each settled run is a ready entry, the same shape a
-  // background poll yields, so both feed the one `results` renderer.
-  const entries: BackgroundResult[] = settled.map((snapshot): BackgroundResult => {
-    const result = toResultJson(snapshot);
-    return {
-      ...(result.sessionId !== undefined ? { sessionId: result.sessionId } : {}),
-      ready: true,
-      result,
-    };
-  });
-  const isError = entries.some(entry => "result" in entry && entry.result.status !== "completed");
-  return toolResult(resultsDetails(entries), isError);
+  // background poll yields, so both feed the one `results` renderer and the one JSON projection.
+  const entries: ResultEntry[] = settled.map(snapshot => ({ snapshot }));
+  const isError = settled.some(s => s.status.kind === "done" && s.status.outcome !== "completed");
+  return toolResult(resultsDetails(entries), { isError, json: resultsJson(entries) });
+}
+
+/** The model-facing `results` envelope: the `view` tag plus the projected per-entry JSON. */
+function resultsJson(entries: ResultEntry[], opts?: { exposeId?: boolean }) {
+  return { view: "results" as const, results: toResultsJson(entries, opts) };
 }
 
 function widgetAgents(update: RunUpdate): AgentSnapshot[] {

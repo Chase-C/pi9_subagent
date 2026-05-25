@@ -11,11 +11,8 @@ import {
   resultsDetails,
   runDetails,
 } from "../../src/view/format.js";
-import type { AgentResultJson } from "../../src/domain/agent-result.js";
 import { serializeGroup } from "../../src/view/serialize.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
-
-const readyResult = (sessionId: string, result: AgentResultJson) => ({ sessionId, ready: true as const, result });
 
 test("subagent run display animates only the running status glyph", () => {
   const sessions = [
@@ -103,9 +100,9 @@ test("background-started view expanded shows one line per session with session i
 
 test("results view collapsed shows count summary by outcome status", () => {
   const details = resultsDetails([
-    readyResult("s1", { agent: "helper", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 }),
-    readyResult("s2", { agent: "flaky", prompt: "p", status: "error", error: "boom", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 }),
-    readyResult("s3", { agent: "stop", prompt: "p", status: "aborted", error: "Agent aborted.", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 }),
+    { snapshot: fakeAgent({ id: "s1", config: { name: "helper" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) },
+    { snapshot: fakeAgent({ id: "s2", config: { name: "flaky" }, status: { kind: "error", startedAt: 1, completedAt: 2, error: "boom" } }) },
+    { snapshot: fakeAgent({ id: "s3", config: { name: "stop" }, status: { kind: "aborted", startedAt: 1, completedAt: 2, error: "Agent aborted." } }) },
   ]);
   const joined = formatSubagentToolLines(details, false, 0).join("\n");
   assert.match(joined, /3 results/);
@@ -116,12 +113,11 @@ test("results view collapsed shows count summary by outcome status", () => {
 
 test("results view expanded shows agent, status, snippet, and session handle when resumable", () => {
   const details = resultsDetails([
-    readyResult("sess-1", {
-      agent: "helper", label: "phase 1", prompt: "p", status: "completed",
-      output: "all done", sessionId: "sess-1", resumable: true, resumed: true,
-      turns: 0, tokens: 0, elapsedMs: 0,
-    }),
-    readyResult("flaky-1", { agent: "flaky", prompt: "p", status: "error", error: "boom", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 }),
+    { snapshot: fakeAgent({
+      id: "sess-1", label: "phase 1", config: { name: "helper", resumable: true },
+      status: { kind: "completed", startedAt: 1, completedAt: 2, response: "all done", resumed: true },
+    }) },
+    { snapshot: fakeAgent({ id: "flaky-1", config: { name: "flaky" }, status: { kind: "error", startedAt: 1, completedAt: 2, error: "boom" } }) },
   ]);
   const expanded = formatSubagentToolLines(details, true, 0).join("\n");
   assert.match(expanded, /helper/);

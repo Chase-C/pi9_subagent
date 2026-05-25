@@ -1,13 +1,14 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { Agent, type AgentStatus, type AgentUpdateListener } from "../../src/domain/agent.js";
+import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
+import type { AgentViewStatus } from "../../src/domain/agent-snapshot.js";
 import { completedRun, errorRun, interruptedRun } from "../../src/domain/agent-finalize.js";
 import { toResultJson } from "../../src/domain/agent-result.js";
 
 const noop: AgentUpdateListener = () => {};
 
-function doneStatus(agent: Agent): Extract<AgentStatus, { kind: "done" }> {
+function doneStatus(agent: Agent): Extract<AgentViewStatus, { kind: "done" }> {
   if (agent.status.kind !== "done") throw new Error(`expected done, got ${agent.status.kind}`);
   return agent.status;
 }
@@ -71,18 +72,18 @@ test("agent transitions through start, finalize, and is idempotent on second fin
 
   completedRun(running, "done");
   const firstDone = doneStatus(running);
-  assert.equal(firstDone.result.status, "completed");
-  assert.equal(firstDone.result.output, "done");
+  assert.equal(firstDone.outcome, "completed");
+  assert.equal(firstDone.output, "done");
 
   errorRun(running, "late");
   const stillDone = doneStatus(running);
-  assert.equal(stillDone.result.status, "completed", "finalize is idempotent — terminal state is sticky");
+  assert.equal(stillDone.outcome, "completed", "finalize is idempotent — terminal state is sticky");
 
   const queued = new Agent("q", config, spawn, noop);
   errorRun(queued, "failed before start");
   const queuedDone = doneStatus(queued);
-  assert.equal(queuedDone.result.status, "error");
-  assert.equal(queuedDone.result.error, "failed before start");
+  assert.equal(queuedDone.outcome, "error");
+  assert.equal(queuedDone.error, "failed before start");
 });
 
 test("finalize is idempotent and returns the existing terminal snapshot when already done", () => {

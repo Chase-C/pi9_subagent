@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import subagentExtension from "../../src/index.js";
+import { fakeAgent } from "../helpers/fake-agent.js";
 
 function registerExtension() {
   let registeredTool: any;
@@ -25,8 +26,8 @@ test("results collapsed counts ready entries by outcome and pending entries by s
   const details = {
     view: "results",
     results: [
-      { sessionId: "s1", ready: true, result: { agent: "a", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false } },
-      { sessionId: "s2", ready: false, status: "running", elapsedMs: 1000, agent: "a" },
+      { snapshot: fakeAgent({ id: "s1", config: { name: "a" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) },
+      { snapshot: fakeAgent({ id: "s2", config: { name: "a" }, status: { kind: "running", startedAt: 1 } }) },
       { sessionId: "s3", error: "Unknown subagent session: s3" },
     ],
   };
@@ -43,7 +44,7 @@ test("results collapsed omits zero-count segments", () => {
   const details = {
     view: "results",
     results: [
-      { sessionId: "s1", ready: true, result: { agent: "a", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false } },
+      { snapshot: fakeAgent({ id: "s1", config: { name: "a" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) },
     ],
   };
 
@@ -59,8 +60,8 @@ test("results expanded shows a section per entry with status, snippet, and error
   const details = {
     view: "results",
     results: [
-      { sessionId: "ready-id", ready: true, result: { agent: "helper", label: "phase 1", prompt: "p", status: "completed", output: "all done", resumable: false, resumed: false } },
-      { sessionId: "queued-id", ready: false, status: "queued", elapsedMs: 5000, agent: "helper", label: "phase 2" },
+      { snapshot: fakeAgent({ id: "ready-id", label: "phase 1", config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "all done" } }) },
+      { snapshot: fakeAgent({ id: "queued-id", label: "phase 2", config: { name: "helper" }, status: { kind: "queued", queuedAt: 1 } }) },
       { sessionId: "err-id", error: "Unknown subagent session: err-id" },
     ],
   };
@@ -81,7 +82,7 @@ test("results expanded omits session label for ready entries without a collectab
   const details = {
     view: "results",
     results: [
-      { ready: true, result: { agent: "helper", prompt: "p", status: "completed", output: "all done", resumable: false, resumed: false } },
+      { snapshot: fakeAgent({ id: "x", config: { name: "helper" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "all done" } }) },
     ],
   };
 

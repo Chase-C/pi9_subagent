@@ -92,7 +92,7 @@ test("child subagent tool forwards list, results, and remove actions straight to
 
   const results = await tool.execute("c-results", { action: "results", sessionIds: [seededId] }, undefined, undefined, baseCtx());
   assert.equal(results.isError, false);
-  assert.equal(results.details.results[0].sessionId, seededId);
+  assert.equal(results.details.results[0].snapshot.id, seededId);
 
   const removed = await tool.execute("c-remove", { action: "remove", sessionIds: [seededId] }, undefined, undefined, baseCtx());
   assert.equal(removed.isError, false);

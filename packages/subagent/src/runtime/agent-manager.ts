@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { Agent, type AgentUpdateKind } from "../domain/agent.js";
-import { toResultJson, type BackgroundResult } from "../domain/agent-result.js";
+import type { ResultEntry } from "../domain/agent-result.js";
 import { activeOrRetainedAgents, effectiveStatus } from "../domain/agent-decisions.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
@@ -15,7 +15,7 @@ import { timingStart } from "./timing.js";
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
 export type { AgentRunner } from "./attempt-runner.js";
 export type { RunUpdate, RunUpdateListener } from "./run-group.js";
-export type { BackgroundResult } from "../domain/agent-result.js";
+export type { ResultEntry } from "../domain/agent-result.js";
 
 export interface StartRunOptions {
   background: boolean;
@@ -96,28 +96,16 @@ export class AgentManager {
     }
   }
 
-  backgroundResults(
-    sessionIds: string[],
-  ): BackgroundResult[] {
+  /**
+   * One render entry per requested id, in input order: the agent's current snapshot (terminal or
+   * pending), or an error for an unknown id. The tool layer projects these into the model-facing
+   * `results` JSON via `toResultsJson`.
+   */
+  backgroundResults(sessionIds: string[]): ResultEntry[] {
     return sessionIds.map(id => {
       const lookup = this._resolveSession(id);
       if ("error" in lookup) return lookup;
-
-      const agent = lookup.agent;
-      const status = agent.status;
-      if (status.kind === "done") {
-        return { sessionId: id, ready: true, result: toResultJson(agent.snapshot()) };
-      }
-
-      const beginAt = (status.kind === "running") ? status.startedAt : status.queuedAt;
-      return {
-        sessionId: id,
-        ready: false,
-        status: status.kind,
-        elapsedMs: Date.now() - beginAt,
-        agent: agent.agentName,
-        ...(agent.label ? { label: agent.label } : {}),
-      };
+      return { snapshot: lookup.agent.snapshot() };
     });
   }
 
@@ -273,7 +261,7 @@ export class AgentManager {
     if (kind !== "status") return;
     if (this._pendingFinalize.has(agent.id)) return;
 
-    const outcome = status.kind === "done" ? status.result.status : undefined;
+    const outcome = status.kind === "done" ? status.outcome : undefined;
     if (outcome !== "aborted" && outcome !== "error") return;
 
     const reason = `Parent ${agent.id} finalized as ${outcome}`;

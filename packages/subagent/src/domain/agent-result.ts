@@ -1,3 +1,4 @@
+import { getQueuedAt, getStartedAt } from "./agent-decisions.js";
 import type { AgentSnapshot } from "./agent-snapshot.js";
 
 export type AgentRunStatus = "completed" | "error" | "aborted" | "skipped" | "interrupted";
@@ -71,7 +72,50 @@ export function toOutcome(args: FinalizeRunArgs): AgentOutcome {
   };
 }
 
-export type BackgroundResult =
+/**
+ * Render-side entry for the `results` view (shared by `action: "run"` and `action: "results"`).
+ * A live or terminal snapshot renders through the shared snapshot row path; an unknown id renders
+ * as an error line. The model-facing JSON is projected from this by {@link toResultsJson}, so the
+ * renderer never depends on {@link AgentResultJson}.
+ */
+export type ResultEntry =
+  | { snapshot: AgentSnapshot }
+  | { sessionId: string; error: string };
+
+/** Model-facing per-entry JSON for the `results` envelope, projected from {@link ResultEntry}. */
+export type BackgroundResultJson =
   | { sessionId?: string; ready: true; result: AgentResultJson }
   | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
   | { sessionId: string; error: string };
+
+/**
+ * Projects render entries into the model-facing `results` array. Terminal snapshots become the
+ * `{ ready: true, result }` projection; pending snapshots become progress metadata; unknown ids
+ * pass through as errors. `exposeId` surfaces the top-level `sessionId` of a ready entry even when
+ * it isn't resumable — the `results` action echoes the requested id, while a synchronous `run`
+ * only surfaces collectable (resumable) ids.
+ */
+export function toResultsJson(
+  entries: readonly ResultEntry[],
+  opts: { exposeId?: boolean } = {},
+): BackgroundResultJson[] {
+  return entries.map(entry => {
+    if ("error" in entry) return { sessionId: entry.sessionId, error: entry.error };
+    const { snapshot } = entry;
+    const status = snapshot.status;
+    if (status.kind === "done") {
+      const result = toResultJson(snapshot);
+      const sessionId = opts.exposeId ? snapshot.id : result.sessionId;
+      return { ...(sessionId !== undefined ? { sessionId } : {}), ready: true, result };
+    }
+    const beginAt = getStartedAt(status) ?? getQueuedAt(status) ?? snapshot.createdAt;
+    return {
+      sessionId: snapshot.id,
+      ready: false,
+      status: status.kind,
+      elapsedMs: Math.max(0, Date.now() - beginAt),
+      agent: snapshot.config.name,
+      ...(snapshot.label !== undefined ? { label: snapshot.label } : {}),
+    };
+  });
+}

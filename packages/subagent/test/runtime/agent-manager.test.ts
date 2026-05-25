@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
-import { toResultJson } from "../../src/domain/agent-result.js";
+import { toResultJson, toResultsJson } from "../../src/domain/agent-result.js";
 import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers/runtime.js";
 
 test("AgentManager.listSessions returns all retained sessions when called with no filter", async () => {
@@ -231,7 +231,7 @@ test("AgentManager.backgroundResults reports queued resume elapsed from the curr
 
     await new Promise(resolve => setImmediate(resolve));
     now = 100_250;
-    const [queued] = await manager.backgroundResults([initial.sessionId!]) as any[];
+    const [queued] = toResultsJson(manager.backgroundResults([initial.sessionId!]), { exposeId: true }) as any[];
     assert.equal(queued.ready, false);
     assert.equal(queued.status, "queued");
     assert.equal(queued.elapsedMs, 250);
@@ -662,10 +662,10 @@ test("AgentManager.backgroundResults returns ready:true with the projected resul
   await batch.resultsPromise;
   const sessionId = batch.sessions[0].id;
 
-  const results = await manager.backgroundResults([sessionId]);
+  const entries = manager.backgroundResults([sessionId]);
 
-  assert.equal(results.length, 1);
-  const entry = results[0];
+  assert.equal(entries.length, 1);
+  const [entry] = toResultsJson(entries, { exposeId: true });
   assert.equal(entry.sessionId, sessionId);
   assert.equal((entry as any).ready, true);
   assert.equal((entry as any).result.status, "completed");
@@ -700,7 +700,7 @@ test("AgentManager.backgroundResults returns ready:false running with elapsedMs 
   await new Promise(resolve => setTimeout(resolve, 20));
   const sessionId = batch.sessions[0].id;
 
-  const results = await manager.backgroundResults([sessionId]);
+  const results = toResultsJson(manager.backgroundResults([sessionId]), { exposeId: true });
 
   assert.equal(results.length, 1);
   const entry = results[0] as any;
@@ -741,7 +741,7 @@ test("AgentManager.backgroundResults returns ready:false queued with elapsedMs f
   await new Promise(resolve => setTimeout(resolve, 20));
   const queuedId = batch.sessions[1].id;
 
-  const results = await manager.backgroundResults([queuedId]);
+  const results = toResultsJson(manager.backgroundResults([queuedId]), { exposeId: true });
 
   assert.equal(results.length, 1);
   const entry = results[0] as any;
@@ -758,7 +758,7 @@ test("AgentManager.backgroundResults returns a per-id error entry for an unknown
   const registry = { agents: new Map() };
   const manager = makeManager(registry as any, 1, async () => ({} as any));
 
-  const results = await manager.backgroundResults(["nope"]);
+  const results = toResultsJson(manager.backgroundResults(["nope"]), { exposeId: true });
 
   assert.equal(results.length, 1);
   const entry = results[0] as any;
@@ -800,7 +800,7 @@ test("AgentManager.backgroundResults preserves input order across mixed entries 
   await new Promise(resolve => setTimeout(resolve, 20));
   const runningId = runningBatch.sessions[0].id;
 
-  const results = await manager.backgroundResults([completedId, runningId, "missing", completedId]);
+  const results = toResultsJson(manager.backgroundResults([completedId, runningId, "missing", completedId]), { exposeId: true });
 
   assert.equal(results.length, 4);
   assert.equal(results[0].sessionId, completedId);
@@ -834,7 +834,7 @@ test("AgentManager.backgroundResults reads retained foreground sessions identica
   ]);
   assert.equal(manager.listSessions()[0].dispatch, "foreground");
 
-  const [entry] = await manager.backgroundResults([seed.sessionId!]) as any[];
+  const [entry] = toResultsJson(manager.backgroundResults([seed.sessionId!]), { exposeId: true }) as any[];
   assert.equal(entry.ready, true);
   assert.equal(entry.result.output, "retained-output");
   assert.equal(entry.result.resumable, true);

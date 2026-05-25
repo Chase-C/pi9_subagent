@@ -114,7 +114,7 @@ export class BackgroundNotifier {
     const entry: CompletionEntry = {
       sessionId: agent.id,
       agent: agent.agentName,
-      status: status.result.status,
+      status: status.outcome,
       elapsedMs,
     };
     if (agent.label !== undefined) entry.label = agent.label;

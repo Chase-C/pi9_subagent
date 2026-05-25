@@ -13,11 +13,6 @@ import { AgentRegistry } from "./agent-registry.js";
 
 export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
 
-export type AgentStatus =
-  | { kind: "queued"; queuedAt: number }
-  | { kind: "running"; session: AgentSession; startedAt: number }
-  | { kind: "done"; result: AgentOutcome; startedAt?: number; completedAt: number };
-
 interface ResolveArgs {
   task: SpawnRequest | ResumeRequest;
   background: boolean;
@@ -92,7 +87,7 @@ export class Agent {
       } else if (target.hasCurrentAttempt) {
         error = `Cannot resume subagent session ${task.sessionId}: it is already resuming.`;
       } else if (!target.canResume) {
-        error = `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.result.status : target.status.kind}.`;
+        error = `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.outcome : target.status.kind}.`;
       } else {
         if (task.label !== undefined) target._label = task.label;
         target._background = background;
@@ -133,19 +128,28 @@ export class Agent {
     return this._appliedResumableOverride;
   }
 
-  get status(): AgentStatus {
+  /**
+   * Canonical lifecycle status. This is exactly the snapshot's status arm — the live
+   * `AgentSession` lives on the current {@link Attempt}, not here, so the same shape serves the
+   * snapshot, the runtime, and the renderers without a separate internal status union.
+   */
+  get status(): AgentViewStatus {
     if (this._current) {
       const state = this._current.state;
       if (state.kind === "queued") return { kind: "queued", queuedAt: this._current.createdAt };
-      if (state.kind === "running") return { kind: "running", session: state.session, startedAt: state.startedAt };
+      if (state.kind === "running") return { kind: "running", startedAt: state.startedAt };
     }
     const last = this._lastAttempt;
     if (!last || last.state.kind !== "done") return { kind: "queued", queuedAt: this.createdAt };
+    const outcome = last.state.result;
     return {
       kind: "done",
-      result: last.state.result,
-      ...(last.state.startedAt !== undefined ? { startedAt: last.state.startedAt } : {}),
+      outcome: outcome.status,
       completedAt: last.state.completedAt,
+      resumed: outcome.resumed,
+      ...(last.state.startedAt !== undefined ? { startedAt: last.state.startedAt } : {}),
+      ...(outcome.output !== undefined ? { output: outcome.output } : {}),
+      ...(outcome.error !== undefined ? { error: outcome.error } : {}),
     };
   }
 
@@ -190,7 +194,8 @@ export class Agent {
    * text fields (snippet, messageSnippet); presentation code compacts them when rendering.
    */
   snapshot(options: { inputIndex?: number } = {}): AgentSnapshot {
-    const active = this.status.kind === "queued" || this.status.kind === "running";
+    const status = this.status;
+    const active = status.kind === "queued" || status.kind === "running";
     return {
       id: this.id,
       ...(options.inputIndex !== undefined ? { inputIndex: options.inputIndex } : {}),
@@ -211,29 +216,13 @@ export class Agent {
         ...(this.config.skills !== undefined ? { skills: this.config.skills } : {}),
         resumable: this.resumable,
       },
-      status: this._snapshotStatus(),
+      status,
       activity: this._activity.snapshot(),
       usage: this._activity.usage,
       capabilities: {
         canResume: this.canResume,
         canClear: this.resumable && !active,
       },
-    };
-  }
-
-  private _snapshotStatus(): AgentViewStatus {
-    const status = this.status;
-    if (status.kind === "queued") return { kind: "queued", queuedAt: status.queuedAt };
-    if (status.kind === "running") return { kind: "running", startedAt: status.startedAt };
-    const outcome = status.result;
-    return {
-      kind: "done",
-      outcome: outcome.status,
-      completedAt: status.completedAt,
-      resumed: outcome.resumed,
-      ...(status.startedAt !== undefined ? { startedAt: status.startedAt } : {}),
-      ...(outcome.output !== undefined ? { output: outcome.output } : {}),
-      ...(outcome.error !== undefined ? { error: outcome.error } : {}),
     };
   }
 
@@ -284,7 +273,7 @@ export class Agent {
 
   private _describe(): string {
     const status = this.status;
-    if (status.kind === "done") return `done (${status.result.status})`;
+    if (status.kind === "done") return `done (${status.outcome})`;
     return status.kind;
   }
 

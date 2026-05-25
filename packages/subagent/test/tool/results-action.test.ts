@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import subagentExtension from "../../src/index.js";
+import { fakeAgent } from "../helpers/fake-agent.js";
 
 const baseCtx = () => ({ cwd: process.cwd(), hasUI: false } as any);
 
@@ -17,7 +18,7 @@ test("subagent action=results delegates to manager.backgroundResults and returns
     listSessions(): any[] { return []; },
     backgroundResults(sessionIds: string[]) {
       calls.push({ sessionIds });
-      return [{ sessionId: "s1", ready: true, result: { agent: "helper", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false } }];
+      return [{ snapshot: fakeAgent({ id: "s1", config: { name: "helper" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) }];
     },
     async remove() { throw new Error("remove should not be called without params.remove"); },
   };
@@ -32,7 +33,7 @@ test("subagent action=results delegates to manager.backgroundResults and returns
   assert.deepEqual(calls, [{ sessionIds: ["s1"] }]);
   assert.equal(result.details.view, "results");
   assert.equal(result.details.results.length, 1);
-  assert.equal(result.details.results[0].ready, true);
+  assert.equal(result.details.results[0].snapshot.status.kind, "done");
 });
 
 test("subagent action=results with remove:true follows backgroundResults with a manager.remove of the terminal ids", async () => {
@@ -43,8 +44,8 @@ test("subagent action=results with remove:true follows backgroundResults with a 
     backgroundResults(sessionIds: string[]) {
       fetchCalls.push({ sessionIds });
       return [
-        { sessionId: "s1", ready: true, result: { agent: "helper", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false } },
-        { sessionId: "s2", ready: false, status: "running", elapsedMs: 1, agent: "helper" },
+        { snapshot: fakeAgent({ id: "s1", config: { name: "helper" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) },
+        { snapshot: fakeAgent({ id: "s2", config: { name: "helper" }, status: { kind: "running", startedAt: 1 } }) },
       ];
     },
     async remove(args: any) {

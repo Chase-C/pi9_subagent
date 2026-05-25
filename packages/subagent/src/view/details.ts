@@ -3,7 +3,7 @@ import { Value } from "typebox/value";
 
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
-import type { BackgroundResult } from "../domain/agent-result.js";
+import type { ResultEntry } from "../domain/agent-result.js";
 
 export type AgentListingEntry = Omit<AgentConfig, "systemPrompt">;
 
@@ -25,7 +25,7 @@ export type BackgroundSpawnHandle = {
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
   | { view: "run"; group: AgentGroupView; active?: boolean; subtree?: AgentSnapshot[] }
-  | { view: "results"; results: BackgroundResult[] }
+  | { view: "results"; results: ResultEntry[] }
   | { view: "inventory"; sessions: AgentSnapshot[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
   | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number; background: true }
@@ -55,7 +55,7 @@ export function runDetails(
   return { view: "run", group, ...extras };
 }
 
-export function resultsDetails(results: BackgroundResult[]): ResultsDetails {
+export function resultsDetails(results: ResultEntry[]): ResultsDetails {
   return { view: "results", results };
 }
 

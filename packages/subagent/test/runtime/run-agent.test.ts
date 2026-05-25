@@ -67,7 +67,7 @@ test("run-agent skips before prompting when signal aborts during setup", async (
   assert.equal(createCalled, false);
   assert.equal(promptCalled, false);
   if (agent.status.kind !== "done") throw new Error("expected done");
-  assert.equal(agent.status.result.status, "skipped");
+  assert.equal(agent.status.outcome, "skipped");
 });
 
 test("run-agent resolves relative task cwd against context cwd", async () => {
@@ -166,7 +166,7 @@ test("run-agent marks running parent cancellation as interrupted", async () => {
   assert.equal(abortCalls, 1);
   const final = agent.status;
   if (final.kind !== "done") throw new Error("expected done");
-  assert.equal(final.result.status, "interrupted");
+  assert.equal(final.outcome, "interrupted");
 });
 
 test("run-agent treats final assistant error stop reason as failed child run", async () => {
@@ -184,8 +184,8 @@ test("run-agent treats final assistant error stop reason as failed child run", a
   assert.equal(result.status, "error");
   assert.match(result.error ?? "", /model overloaded/);
   if (agent.status.kind !== "done") throw new Error("expected done");
-  assert.equal(agent.status.result.status, "error");
-  assert.equal(agent.status.result.error, "model overloaded");
+  assert.equal(agent.status.outcome, "error");
+  assert.equal(agent.status.error, "model overloaded");
 });
 
 test("run-agent injects requested skills into the system prompt and disables loader skill scanning", async () => {
@@ -237,7 +237,7 @@ test("run-agent reports an unknown skill from per-task or frontmatter sources as
     assert.match(result.error ?? "", /missing/);
     assert.equal(createCalled, false);
     if (agent.status.kind !== "done") throw new Error("expected done");
-    assert.equal(agent.status.result.status, "error");
+    assert.equal(agent.status.outcome, "error");
   }
 });
 
