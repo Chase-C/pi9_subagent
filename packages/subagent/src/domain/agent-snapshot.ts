@@ -9,6 +9,7 @@ export interface AgentToolUse {
   readonly startedAt: number;
   readonly completedAt?: number;
   readonly isError?: boolean;
+  readonly inputSummary?: string;
 }
 
 export interface AgentViewConfig {

@@ -67,11 +67,13 @@ export class AgentActivity {
     });
   }
 
-  private _startToolUse(event: { toolCallId?: string; toolName: string }) {
+  private _startToolUse(event: { toolCallId?: string; toolName: string; args?: unknown }) {
+    const inputSummary = toolInputSummary(event.toolName, event.args);
     this._toolHistory.push({
       id: event.toolCallId ?? `tool-${++this._nextSyntheticToolId}`,
       name: event.toolName,
       startedAt: Date.now(),
+      ...(inputSummary ? { inputSummary } : {}),
     });
   }
 
@@ -93,6 +95,70 @@ export class AgentActivity {
     }
     return -1;
   }
+}
+
+function toolInputSummary(toolName: string, args: unknown): string | undefined {
+  const input = asRecord(args);
+  if (!input) return undefined;
+
+  switch (toolName) {
+    case "read":
+      return joinParts([stringValue(input.path), numericPart("offset", input.offset), numericPart("limit", input.limit)]);
+    case "write":
+    case "ls":
+      return stringValue(input.path);
+    case "edit":
+      return joinParts([stringValue(input.path), countPart(input.edits, "edit")]);
+    case "bash":
+      return compactOneLine(stringValue(input.command));
+    case "grep":
+      return joinParts([quote(stringValue(input.pattern)), input.path ? `in ${String(input.path)}` : undefined]);
+    case "find":
+      return joinParts([stringValue(input.pattern) ?? stringValue(input.name), input.path ? `in ${String(input.path)}` : undefined]);
+    case "subagent":
+      return joinParts([stringValue(input.action), countPart(input.tasks, "task") ?? countPart(input.sessionIds, "session")]);
+    default:
+      return fallbackSummary(input);
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? compactOneLine(value) : undefined;
+}
+
+function numericPart(label: string, value: unknown): string | undefined {
+  return typeof value === "number" ? `${label} ${value}` : undefined;
+}
+
+function countPart(value: unknown, noun: string): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return `${value.length} ${noun}${value.length === 1 ? "" : "s"}`;
+}
+
+function quote(value: string | undefined): string | undefined {
+  return value ? `"${value}"` : undefined;
+}
+
+function joinParts(parts: Array<string | undefined>): string | undefined {
+  const summary = parts.filter((part): part is string => Boolean(part)).join(" ");
+  return summary || undefined;
+}
+
+function compactOneLine(value: string | undefined): string | undefined {
+  return value?.replace(/\\\s+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function fallbackSummary(input: Record<string, unknown>): string | undefined {
+  const safe = Object.entries(input)
+    .filter(([, value]) => ["string", "number", "boolean"].includes(typeof value))
+    .slice(0, 3)
+    .map(([key, value]) => `${key}:${String(value).replace(/\s+/g, " ")}`)
+    .join(" ");
+  return safe || undefined;
 }
 
 function CombineUsage(

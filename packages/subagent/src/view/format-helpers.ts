@@ -1,6 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
-import type { AgentSnapshot, AgentViewStatus } from "../domain/agent-snapshot.js";
+import type { AgentSnapshot, AgentToolUse, AgentViewStatus } from "../domain/agent-snapshot.js";
 import {
   effectiveStatus,
   getCompletedAt,
@@ -56,6 +56,19 @@ export function formatElapsed(from: number, to: number) {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return `${minutes}m${rest.toString().padStart(2, "0")}s`;
+}
+
+export function formatToolUseLine(tool: AgentToolUse, indent: number, now = Date.now()): DisplayLine {
+  const completed = tool.completedAt !== undefined;
+  const status = tool.isError ? "error" : completed ? "completed" : "running";
+  const glyph = tool.isError ? "✗" : completed ? "✓" : statusPresentation({ kind: "running", startedAt: tool.startedAt }, now).glyph;
+  const elapsed = formatElapsed(tool.startedAt, tool.completedAt ?? now);
+  const summary = tool.inputSummary ? ` ${tool.inputSummary}` : "";
+  return {
+    text: `${" ".repeat(indent)}${glyph} ${tool.name}${summary} · ${elapsed}`,
+    status,
+    hangingIndent: indent,
+  };
 }
 
 export function formatTimestamp(value: number) {

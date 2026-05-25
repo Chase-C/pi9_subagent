@@ -247,6 +247,49 @@ test("subagent run renders details.subtree as a depth-indented tree when present
   assert.match(lines[2], /^      ⠋ gamma/);
 });
 
+test("collapsed subagent run rows show three recent rich tool lines below the session row", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    status: { kind: "running", startedAt: 1_000 },
+    turns: 2,
+    activity: { toolHistory: [
+      { id: "old", name: "ls", inputSummary: "packages", startedAt: 2_000, completedAt: 3_000 },
+      { id: "read", name: "read", inputSummary: "packages/subagent/src/view/tool-result-lines.ts", startedAt: 4_000, completedAt: 4_500 },
+      { id: "grep", name: "grep", inputSummary: '"formatRunSessionLine" in packages/subagent/src', startedAt: 5_000, completedAt: 6_000 },
+      { id: "bash", name: "bash", inputSummary: "npm test --workspace=@pi9/subagent", startedAt: 7_000 },
+    ] },
+  });
+
+  const lines = formatSubagentToolLines(runDetails([session]), false, 19_000);
+
+  assert.equal(lines.length, 4);
+  assert.equal(lines[0], "  ⠇ reviewer · 2 turns · 0 tokens · 18s");
+  assert.equal(lines[1], "    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s");
+  assert.equal(lines[2], '    ✓ grep "formatRunSessionLine" in packages/subagent/src · 1s');
+  assert.equal(lines[3], "    ⠇ bash npm test --workspace=@pi9/subagent · 12s");
+});
+
+test("collapsed subagent run row shows only the active subagent tool line when present", () => {
+  const parent = fakeAgent({
+    id: "parent",
+    config: { name: "parent" },
+    status: { kind: "running", startedAt: 1_000 },
+    activity: { toolHistory: [
+      { id: "read", name: "read", inputSummary: "README.md", startedAt: 2_000, completedAt: 3_000 },
+      { id: "sub", name: "subagent", inputSummary: "run 2 tasks", startedAt: 4_000 },
+    ] },
+  });
+  const child = fakeAgent({ id: "child", parentSessionId: "parent", config: { name: "child" }, status: { kind: "running", startedAt: 5_000 } });
+
+  const lines = formatSubagentToolLines(runDetails([parent], { subtree: [parent, child] }), false, 10_000);
+
+  assert.deepEqual(lines, [
+    "  ⠸ parent · 0 turns · 0 tokens · 9s",
+    "    ⠸ subagent run 2 tasks · 6s",
+    "    ⠸ child · 0 turns · 0 tokens · 5s",
+  ]);
+});
+
 test("subagent session inspect output uses remove terminology", () => {
   const retainedSession = fakeAgent({
     config: { resumable: true },

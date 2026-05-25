@@ -108,14 +108,14 @@ export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, 
 export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold): DisplayLine {
   const { glyph, color } = statusPresentation(row.status, now);
   const name = `  ${glyph} ${applyBold(bold, row.config.name)}${(row.label) ? `  ${row.label}` : ""}`;
-  return { text: sessionRowSegments(row, now, name, { toolCount: false }).join(" · "), status: color };
+  return { text: sessionRowSegments(row, now, name, { toolCount: false, activeTool: false }).join(" · "), status: color };
 }
 
 function sessionRowSegments(
   row: AgentSnapshot,
   now: number,
   name: string,
-  options: { status?: string; toolCount: boolean },
+  options: { status?: string; toolCount: boolean; activeTool?: boolean },
 ) {
   const parts = [
     name,
@@ -126,7 +126,7 @@ function sessionRowSegments(
     plural(row.usage?.totalTokens ?? 0, "token"),
     rowElapsed(row, now),
   ];
-  const activeTool = getActiveTools(row).at(-1);
+  const activeTool = options.activeTool !== false ? getActiveTools(row).at(-1) : undefined;
   if (activeTool) parts.push(`tool:${activeTool}`);
   return parts;
 }

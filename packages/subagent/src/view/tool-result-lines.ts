@@ -18,6 +18,7 @@ import {
 import {
   expandedLines,
   formatElapsed,
+  formatToolUseLine,
   orderAsTree,
   plural,
   rowElapsed,
@@ -139,7 +140,7 @@ function formatSubagentToolDisplayLines(
       const ordered = narrowed.subtree && narrowed.subtree.length > 0
         ? orderAsTree(narrowed.subtree)
         : narrowed.sessions.map(agent => ({ agent, depth: 0 }));
-      return expandRows(ordered, expanded, now, bold, display, runRow, true);
+      return expandRows(ordered, expanded, now, bold, display, runRow, true, true);
     }
     case "inventory": {
       const { sessions, filter } = narrowed;
@@ -224,14 +225,34 @@ function expandRows(
   display: SubagentDisplaySettings,
   renderRow: RowRenderer,
   includeSnippet: boolean,
+  collapsedToolHistory = false,
 ): DisplayLine[] {
   const withIndent = ({ agent, depth }: { agent: AgentSnapshot; depth: number }): DisplayLine => {
     const line = renderRow(agent, now, bold, display);
     return depth > 0 ? { ...line, text: `${"  ".repeat(depth)}${line.text}` } : line;
   };
-  if (!expanded) return ordered.map(withIndent);
+  if (!expanded) {
+    return ordered.flatMap(entry => [
+      withIndent(entry),
+      ...(collapsedToolHistory ? recentToolLines(entry.agent, entry.depth, now) : []),
+    ]);
+  }
   return ordered.flatMap((entry, index) =>
     expandedLines(withIndent(entry), entry.agent, includeSnippet, index < ordered.length - 1, display));
+}
+
+function recentToolLines(agent: AgentSnapshot, depth: number, now: number): DisplayLine[] {
+  const activeSubagent = findLastActiveSubagentTool(agent.activity.toolHistory);
+  const tools = activeSubagent ? [activeSubagent] : agent.activity.toolHistory.slice(-3);
+  return tools.map(tool => formatToolUseLine(tool, 4 + depth * 2, now));
+}
+
+function findLastActiveSubagentTool(history: AgentSnapshot["activity"]["toolHistory"]) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const tool = history[i];
+    if (tool.name === "subagent" && tool.completedAt === undefined) return tool;
+  }
+  return undefined;
 }
 
 /**

@@ -200,6 +200,31 @@ test("agent stores tool-use history and keeps active tool correct for overlappin
   );
 });
 
+test("agent stores compact input summaries for known tool starts", () => {
+  let sessionEmit: ((event: any) => void) | undefined;
+  const session = {
+    messages: [],
+    subscribe(handler: any) { sessionEmit = handler; return () => { sessionEmit = undefined; }; },
+    prompt: async () => { },
+    abort: () => { },
+  };
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "a", prompt: "p" }, noop);
+
+  agent.attach(session as any);
+  assert.ok(sessionEmit);
+  sessionEmit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "src/index.ts", offset: 10, limit: 5 } });
+  sessionEmit({ type: "tool_execution_start", toolCallId: "edit", toolName: "edit", args: { path: "src/index.ts", edits: [{}, {}] } });
+  sessionEmit({ type: "tool_execution_start", toolCallId: "bash", toolName: "bash", args: { command: "npm test \\\n -- --runInBand" } });
+  sessionEmit({ type: "tool_execution_start", toolCallId: "sub", toolName: "subagent", args: { action: "run", tasks: [{}, {}] } });
+
+  assert.deepEqual(view(agent).activity.toolHistory.map(tool => tool.inputSummary), [
+    "src/index.ts offset 10 limit 5",
+    "src/index.ts 2 edits",
+    "npm test -- --runInBand",
+    "run 2 tasks",
+  ]);
+});
+
 test("Agent.abort on a running agent aborts the underlying session and finalizes as aborted", async () => {
   let abortCalls = 0;
   const session = { messages: [], subscribe: () => () => { }, prompt: async () => { }, abort: () => { abortCalls += 1; } };
