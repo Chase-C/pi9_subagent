@@ -24,6 +24,7 @@ export {
   formatSessionLine,
   formatRunSessionLine,
   formatWidgetLines,
+  hasBackgroundAncestor,
   stringifyWidgetModel,
   type WidgetModel,
   type WidgetRow,

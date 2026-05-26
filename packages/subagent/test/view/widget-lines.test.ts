@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { abbreviateTokens } from "../../src/view/format-helpers.js";
-import { formatWidgetLines } from "../../src/view/session-lines.js";
+import { buildWidgetModel, formatWidgetLines, hasBackgroundAncestor } from "../../src/view/session-lines.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 
@@ -166,6 +166,171 @@ test("formatWidgetLines omits footer when widgetShowForeground is false", () => 
 
   assert.equal(lines.length, 2);
   assert.doesNotMatch(lines.join("\n"), /foreground running/);
+});
+
+test("buildWidgetModel footer excludes foreground-transient agents nested under a background ancestor", () => {
+  const agents = [
+    fakeAgent({
+      id: "bg",
+      dispatch: "background",
+      config: { name: "parent-bg" },
+      status: { kind: "running", startedAt: 1 },
+    }),
+    fakeAgent({
+      id: "nested-fg",
+      parentSessionId: "bg",
+      retention: "transient",
+      config: { name: "nested-inline" },
+      status: { kind: "running", startedAt: 1 },
+    }),
+    fakeAgent({
+      id: "top-fg",
+      retention: "transient",
+      config: { name: "top-inline" },
+      status: { kind: "running", startedAt: 1 },
+    }),
+  ];
+
+  const model = buildWidgetModel(agents, 5_000);
+
+  assert.equal(model.footer, "+1 foreground running");
+});
+
+test("buildWidgetModel footer still counts foreground-transient agents nested under a foreground ancestor", () => {
+  const agents = [
+    fakeAgent({
+      id: "bg",
+      dispatch: "background",
+      config: { name: "scout" },
+      status: { kind: "running", startedAt: 1 },
+    }),
+    fakeAgent({
+      id: "fg-parent",
+      retention: "transient",
+      config: { name: "parent-inline" },
+      status: { kind: "running", startedAt: 1 },
+    }),
+    fakeAgent({
+      id: "nested-fg",
+      parentSessionId: "fg-parent",
+      retention: "transient",
+      config: { name: "nested-inline" },
+      status: { kind: "running", startedAt: 1 },
+    }),
+  ];
+
+  const model = buildWidgetModel(agents, 5_000);
+
+  assert.equal(model.footer, "+2 foreground running");
+});
+
+test("formatWidgetLines appends parent marker with immediate parent display name on nested rows", () => {
+  const agents = [
+    fakeAgent({
+      id: "bg-parent",
+      dispatch: "background",
+      label: "Orchestrator",
+      config: { name: "orchestrator" },
+      status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
+    }),
+    fakeAgent({
+      id: "bg-child",
+      parentSessionId: "bg-parent",
+      dispatch: "background",
+      config: { name: "worker" },
+      status: { kind: "running", startedAt: 4_000 },
+    }),
+  ];
+
+  const lines = formatWidgetLines(agents, 5_000);
+
+  assert.equal(lines[0], "Background · 1 running · 1 ready");
+  assert.match(lines[1], /^  [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] worker · 1s · ↳ Orchestrator$/);
+  assert.equal(lines[2], "  ✓ Orchestrator · 1s");
+});
+
+test("formatWidgetLines appends parent marker on nested Resumable section rows", () => {
+  const agents = [
+    fakeAgent({
+      id: "res-parent",
+      label: "Main Session",
+      config: { name: "main", resumable: true },
+      status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
+    }),
+    fakeAgent({
+      id: "res-child",
+      parentSessionId: "res-parent",
+      config: { name: "follow-up", resumable: true },
+      status: { kind: "completed", startedAt: 3_000, completedAt: 4_000, response: "ok" },
+    }),
+  ];
+
+  const lines = formatWidgetLines(agents, 5_000);
+
+  assert.equal(lines[0], "Resumable · 2 ready");
+  assert.equal(lines[1], "  ✓ Main Session · 1s");
+  assert.match(lines[2], /^  ✓ follow-up · 1s · ↳ Main Session$/);
+});
+
+test("formatWidgetLines omits parent marker when parent id is absent from the snapshot list", () => {
+  const agents = [
+    fakeAgent({
+      id: "orphan",
+      parentSessionId: "missing-parent",
+      dispatch: "background",
+      config: { name: "lonely" },
+      status: { kind: "running", startedAt: 4_000 },
+    }),
+  ];
+
+  const lines = formatWidgetLines(agents, 5_000);
+
+  assert.match(lines[1], /^  [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] lonely · 1s$/);
+  assert.doesNotMatch(lines.join("\n"), /↳/);
+});
+
+test("formatWidgetLines parent marker resolves only the immediate parent on multi-level nests", () => {
+  const agents = [
+    fakeAgent({
+      id: "root",
+      dispatch: "background",
+      config: { name: "root-agent" },
+      status: { kind: "running", startedAt: 1 },
+    }),
+    fakeAgent({
+      id: "child",
+      parentSessionId: "root",
+      dispatch: "background",
+      config: { name: "child-agent" },
+      status: { kind: "running", startedAt: 1 },
+    }),
+    fakeAgent({
+      id: "grand",
+      parentSessionId: "child",
+      dispatch: "background",
+      config: { name: "grand-agent" },
+      status: { kind: "running", startedAt: 1 },
+    }),
+  ];
+
+  const lines = formatWidgetLines(agents, 5_000).join("\n");
+
+  assert.match(lines, /grand-agent · .* · ↳ child-agent/);
+  assert.doesNotMatch(lines, /grand-agent · .* · ↳ root-agent/);
+});
+
+test("hasBackgroundAncestor walks the full chain but only through agents present in the snapshot", () => {
+  const root = fakeAgent({ id: "root", dispatch: "background", config: { name: "bg" } });
+  const mid = fakeAgent({ id: "mid", parentSessionId: "root", dispatch: "foreground", config: { name: "mid" } });
+  const leaf = fakeAgent({ id: "leaf", parentSessionId: "mid", retention: "transient", config: { name: "leaf" } });
+  const byId = new Map([root, mid, leaf].map(a => [a.id, a]));
+
+  assert.equal(hasBackgroundAncestor(leaf, byId), true);
+  assert.equal(hasBackgroundAncestor(mid, byId), true);
+  assert.equal(hasBackgroundAncestor(root, byId), false);
+
+  const orphanLeaf = fakeAgent({ id: "orphan", parentSessionId: "gone", retention: "transient", config: { name: "orphan" } });
+  assert.equal(hasBackgroundAncestor(orphanLeaf, byId), false);
 });
 
 test("formatWidgetLines never renders foreground-transient agents as section rows", () => {

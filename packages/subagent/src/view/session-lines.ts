@@ -92,7 +92,30 @@ export type WidgetRow = {
   elapsed: string;
   tokens?: string;
   activeTool?: string;
+  parentName?: string;
 };
+
+export function hasBackgroundAncestor(
+  agent: AgentSnapshot,
+  byId: Map<string, AgentSnapshot>,
+): boolean {
+  let parentId = agent.parentSessionId;
+  while (parentId !== undefined) {
+    const parent = byId.get(parentId);
+    if (!parent) return false;
+    if (parent.dispatch === "background") return true;
+    parentId = parent.parentSessionId;
+  }
+  return false;
+}
+
+function parentDisplayName(agent: AgentSnapshot, byId: Map<string, AgentSnapshot>): string | undefined {
+  const parentId = agent.parentSessionId;
+  if (parentId === undefined) return undefined;
+  const parent = byId.get(parentId);
+  if (!parent) return undefined;
+  return parent.label ?? parent.config.name;
+}
 
 export type WidgetSection = {
   title: WidgetSectionTitle;
@@ -108,16 +131,20 @@ export function buildWidgetModel(
   now = Date.now(),
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
 ): WidgetModel {
+  const byId = new Map(agents.map(a => [a.id, a]));
   const background = agents.filter(a => a.dispatch === "background");
   const resumable = agents.filter(a => a.dispatch === "foreground" && a.retention === "persistent" && !isActiveStatusKind(a.status.kind));
   const foregroundRunning = agents.filter(
-    a => a.dispatch === "foreground" && a.retention === "transient" && isActiveStatusKind(a.status.kind),
+    a => a.dispatch === "foreground"
+      && a.retention === "transient"
+      && isActiveStatusKind(a.status.kind)
+      && !hasBackgroundAncestor(a, byId),
   ).length;
 
   const sections: WidgetSection[] = [];
-  const backgroundSection = buildSection("Background", background, now, display);
+  const backgroundSection = buildSection("Background", background, now, display, byId);
   if (backgroundSection) sections.push(backgroundSection);
-  const resumableSection = buildSection("Resumable", resumable, now, display);
+  const resumableSection = buildSection("Resumable", resumable, now, display, byId);
   if (resumableSection) sections.push(resumableSection);
 
   if (sections.length === 0) return { sections: [] };
@@ -152,6 +179,7 @@ function buildSection(
   agents: AgentSnapshot[],
   now: number,
   display: SubagentDisplaySettings,
+  byId: Map<string, AgentSnapshot>,
 ): WidgetSection | undefined {
   const counts = { running: 0, queued: 0, ready: 0, error: 0 };
   for (const agent of agents) {
@@ -181,7 +209,7 @@ function buildSection(
   return {
     title,
     counts,
-    rows: visible.map(agent => toWidgetRow(agent, now)),
+    rows: visible.map(agent => toWidgetRow(agent, now, byId)),
     overflow,
   };
 }
@@ -195,16 +223,18 @@ function sortWidgetAgents(agents: AgentSnapshot[]): AgentSnapshot[] {
   return [...agents].sort((a, b) => priority(a) - priority(b) || a.createdAt - b.createdAt);
 }
 
-function toWidgetRow(agent: AgentSnapshot, now: number): WidgetRow {
+function toWidgetRow(agent: AgentSnapshot, now: number, byId: Map<string, AgentSnapshot>): WidgetRow {
   const { glyph } = statusPresentation(agent.status, now);
   const tokens = abbreviateTokens(agent.usage?.totalTokens ?? 0);
   const activeTool = isActiveStatusKind(agent.status.kind) ? getActiveTools(agent).at(-1) : undefined;
+  const parentName = parentDisplayName(agent, byId);
   return {
     glyph,
     name: agent.label ?? agent.config.name,
     elapsed: rowElapsed(agent, now),
     ...(tokens ? { tokens } : {}),
     ...(activeTool ? { activeTool } : {}),
+    ...(parentName ? { parentName } : {}),
   };
 }
 
@@ -222,6 +252,7 @@ function formatWidgetRow(row: WidgetRow): string {
   const parts = [row.name, row.elapsed];
   if (row.tokens) parts.push(row.tokens);
   if (row.activeTool) parts.push(`tool:${row.activeTool}`);
+  if (row.parentName) parts.push(`↳ ${row.parentName}`);
   return `  ${row.glyph} ${parts.join(" · ")}`;
 }
 
