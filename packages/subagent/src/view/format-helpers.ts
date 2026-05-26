@@ -60,7 +60,7 @@ export function formatElapsed(from: number, to: number) {
 
 export function formatToolUseLine(tool: AgentToolUse, indent: number, now = Date.now(), summaryMaxLength = DEFAULT_DISPLAY.toolInputSummaryLength): DisplayLine {
   const completed = tool.completedAt !== undefined;
-  const status = tool.isError ? "error" : completed ? "completed" : "running";
+  const status = tool.isError ? "error" : completed ? "queued" : "running";
   const glyph = tool.isError ? "✗" : completed ? "✓" : statusPresentation({ kind: "running", startedAt: tool.startedAt }, now).glyph;
   const elapsed = formatElapsed(tool.startedAt, tool.completedAt ?? now);
   const summary = tool.inputSummary ? ` ${compact(tool.inputSummary, summaryMaxLength)}` : "";
@@ -108,14 +108,12 @@ export function orderAsTree(sessions: readonly AgentSnapshot[]): Array<{ agent: 
   return out;
 }
 
-export function snippetLines(label: string, snippet: string, leadingIndent: number, color: DisplayStatus | undefined, display: SubagentDisplaySettings = DEFAULT_DISPLAY): DisplayLine[] {
+export function snippetLines(snippet: string, leadingIndent: number, color: DisplayStatus | undefined, display: SubagentDisplaySettings = DEFAULT_DISPLAY): DisplayLine[] {
   const compacted = compactMultiline(snippet, display.outputSnippetLength, display.outputSnippetMaxLines);
   const lead = " ".repeat(leadingIndent);
-  const continuationIndent = leadingIndent + label.length + 2;
-  const continuation = " ".repeat(continuationIndent);
   const [first, ...rest] = compacted.split("\n");
-  const head: DisplayLine = { text: `${lead}${label}: ${first}`, status: color, hangingIndent: leadingIndent };
-  return [head, ...rest.map(line => ({ text: `${continuation}${line}`, status: color, hangingIndent: continuationIndent }))];
+  const head: DisplayLine = { text: `${lead}${first}`, status: color, hangingIndent: leadingIndent };
+  return [head, ...rest.map(line => ({ text: `${lead}${line}`, status: color, hangingIndent: leadingIndent }))];
 }
 
 /**
@@ -169,24 +167,22 @@ function sectionElapsed(section: AgentRunSection, now: number): string | undefin
 function appendSnippet(lines: DisplayLine[], row: RunBody, display: SubagentDisplaySettings) {
   const snippet = getSnippet(row.status);
   if (!snippet) return;
-  const label = effectiveStatus(row.status) === "completed" ? "Result" : "Error";
-  lines.push(...snippetLines(label, snippet, 4, statusPresentation(row.status).color, display));
+  lines.push({ text: "" });
+  lines.push(...snippetLines(snippet, 4, statusPresentation(row.status).color, display));
 }
 
 function appendPrompt(lines: DisplayLine[], row: RunBody) {
   if (!row.prompt) return;
   lines.push({ text: "" });
   for (const part of [...row.prompt.split(/\r?\n/), ""]) {
-    lines.push({ text: `    ${part}`, hangingIndent: 4 });
+    lines.push({ text: `    ${part}`, status: "running", hangingIndent: 4 });
   }
 }
 
 function appendToolHistory(lines: DisplayLine[], row: RunBody, now: number, display: SubagentDisplaySettings) {
   const history = row.activity.toolHistory;
   if (history.length === 0) return;
-  lines.push({ text: "" });
-  lines.push({ text: "    Tools:", hangingIndent: 4 });
-  for (const tool of history) lines.push(formatToolUseLine(tool, 6, now, display.toolInputSummaryLength));
+  for (const tool of history) lines.push(formatToolUseLine(tool, 4, now, display.toolInputSummaryLength));
 }
 
 function appendToolCounts(lines: DisplayLine[], row: AgentSnapshot) {
