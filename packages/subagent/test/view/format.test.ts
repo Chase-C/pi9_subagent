@@ -126,9 +126,11 @@ test("results view expanded renders each entry as a run-style block with its res
   const expanded = formatSubagentToolLines(details, true, 0).join("\n");
   assert.match(expanded, /✓ helper  phase 1/);
   assert.match(expanded, /resumed/);
-  assert.match(expanded, /Result: all done/);
+  assert.match(expanded, /all done/);
   assert.match(expanded, /✗ flaky/);
-  assert.match(expanded, /Error: boom/);
+  assert.match(expanded, /boom/);
+  // The snippet renders bare in the run/results body — no "Result:"/"Error:" label.
+  assert.doesNotMatch(expanded, /Result:|Error:/);
   // Status shows via glyph, not text, and the raw session handle is no longer surfaced in the view.
   assert.doesNotMatch(expanded, /session:/);
 });
@@ -368,12 +370,12 @@ test("expanded subagent run renders the prompt and each current-run tool as a ri
   // Prompt still renders below the head row.
   assert.match(lines.join("\n"), /Review the auth changes and summarize risks\./);
 
-  // Tools section header plus one rich line per tool, chronological with newest at the bottom.
-  const toolsIdx = lines.findIndex(line => line === "    Tools:");
-  assert.notEqual(toolsIdx, -1);
-  assert.equal(lines[toolsIdx + 1], "      ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s");
-  assert.equal(lines[toolsIdx + 2], "      ✓ bash npm test --workspace=@pi9/subagent · 3s");
-  assert.equal(lines[toolsIdx + 3], "      ⠴ edit packages/subagent/src/view/session-lines.ts · 4s");
+  // One rich line per tool, chronological with newest at the bottom, and no "Tools:" header.
+  assert.doesNotMatch(lines.join("\n"), /Tools:/);
+  const readIdx = lines.indexOf("    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s");
+  assert.notEqual(readIdx, -1);
+  assert.equal(lines[readIdx + 1], "    ✓ bash npm test --workspace=@pi9/subagent · 3s");
+  assert.equal(lines[readIdx + 2], "    ⠴ edit packages/subagent/src/view/session-lines.ts · 4s");
 });
 
 test("expanded subagent run no longer renders the aggregate tool-count line", () => {
@@ -409,7 +411,7 @@ test("expanded subagent run renders every tool call, not just the most recent th
   });
 
   const lines = formatSubagentToolLines(runDetails([session]), true, 20_000);
-  const toolLines = lines.filter(line => /^      ✓ read file-\d\.ts/.test(line));
+  const toolLines = lines.filter(line => /^    ✓ read file-\d\.ts/.test(line));
 
   assert.equal(toolLines.length, 5);
   assert.match(toolLines[0], /file-0\.ts/);
@@ -431,13 +433,14 @@ test("expanded subagent run keeps the result snippet for a terminal row, after p
   const joined = lines.join("\n");
 
   assert.match(joined, /Summarize the risks\./);
-  const toolsIdx = lines.findIndex(line => line === "    Tools:");
-  assert.notEqual(toolsIdx, -1);
-  assert.equal(lines[toolsIdx + 1], "      ✓ read auth.ts · 0s");
-  assert.equal(lines[toolsIdx + 2], "      ✓ bash npm test · 2s");
+  assert.doesNotMatch(joined, /Tools:/);
+  const readIdx = lines.indexOf("    ✓ read auth.ts · 0s");
+  assert.notEqual(readIdx, -1);
+  const bashIdx = lines.indexOf("    ✓ bash npm test · 2s");
+  assert.equal(bashIdx, readIdx + 1);
 
-  const resultIdx = lines.findIndex(line => /Result: Found two issues\./.test(line));
-  assert.ok(resultIdx > toolsIdx, "result snippet should follow the tools section");
+  const resultIdx = lines.findIndex(line => /Found two issues\./.test(line));
+  assert.ok(resultIdx > bashIdx, "result snippet should follow the tools");
 });
 
 test("expanded subagent run renders a previous run section above the current run for a resumed agent", () => {
@@ -472,7 +475,7 @@ test("expanded subagent run renders a previous run section above the current run
   assert.match(joined, /Previous prompt: start the review\./);
   assert.match(joined, /✓ read packages\/subagent\/src\/domain\/agent\.ts · 1s/);
   assert.match(joined, /✓ bash npm test --workspace=@pi9\/subagent · 12s/);
-  assert.match(joined, /Result: previous output snippet/);
+  assert.match(joined, /previous output snippet/);
 
   // The current run still renders its own prompt and tool below the previous section.
   const currentPromptIdx = lines.findIndex(line => /Current prompt: finish the review\./.test(line));
@@ -576,11 +579,11 @@ test("results expanded mirrors the running view for a resumed snapshot, includin
   assert.match(expanded, /✓ helper  phase 2/);
   assert.match(expanded, /resumed/);
   assert.match(expanded, /Final prompt\./);
-  assert.match(expanded, /Result: final output/);
+  assert.match(expanded, /final output/);
   // Completed expanded now matches the running expanded view, so previous-run sections render too.
   assert.match(expanded, /Previous run 1 · completed/);
   assert.match(expanded, /First prompt\./);
-  assert.match(expanded, /Result: earlier output/);
+  assert.match(expanded, /earlier output/);
 });
 
 test("subagent session inspect output uses remove terminology", () => {

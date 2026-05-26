@@ -27,13 +27,6 @@ export function getSnippet(status: AgentViewStatus): string | undefined {
   return status.outcome === "completed" ? status.output : status.error;
 }
 
-export function getSnippetLabel(status: AgentViewStatus): "Output" | "Error" | undefined {
-  if (status.kind !== "done") return undefined;
-  const snippet = status.outcome === "completed" ? status.output : status.error;
-  if (!snippet) return undefined;
-  return status.outcome === "completed" ? "Output" : "Error";
-}
-
 export function getActiveTools(agent: AgentSnapshot): string[] {
   return activeToolsFromHistory(agent.activity.toolHistory);
 }

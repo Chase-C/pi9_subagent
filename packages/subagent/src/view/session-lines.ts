@@ -4,7 +4,6 @@ import {
   getActiveTools,
   getCompletedAt,
   getSnippet,
-  getSnippetLabel,
   getStartedAt,
   getToolUseCount,
   isActiveStatusKind,
@@ -67,9 +66,13 @@ export function formatSubagentSessionInspect(
   lines.push(`Timestamps: created ${formatTimestamp(agent.createdAt)}${startedAt ? ` · started ${formatTimestamp(startedAt)}` : ""}${completedAt ? ` · completed ${formatTimestamp(completedAt)}` : ""} · elapsed ${rowElapsed(agent, now)}`);
 
   const snippet = getSnippet(status);
-  const label = getSnippetLabel(status);
-  if (snippet && label) {
-    for (const line of snippetLines(label, snippet, 0, undefined, display)) lines.push(line.text);
+  if (snippet) {
+    // The inspect view is a labeled metadata list, so the output/error keeps a key here even
+    // though the run/results body now renders the snippet bare.
+    const label = effectiveStatus(status) === "completed" ? "Output" : "Error";
+    const rendered = snippetLines(snippet, 0, undefined, display).map(line => line.text);
+    rendered[0] = `${label}: ${rendered[0]}`;
+    lines.push(...rendered);
   }
   if (agent.activity.messageSnippet) lines.push(`Message: ${compact(agent.activity.messageSnippet, display.messageSnippetLength)}`);
 

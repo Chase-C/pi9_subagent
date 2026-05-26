@@ -70,7 +70,7 @@ test("results expanded renders each entry as a run-style block, with pending row
   const rendered = render(details, true);
 
   assert.match(rendered, /✓ helper  phase 1/);
-  assert.match(rendered, /Result: all done/);
+  assert.match(rendered, /all done/);
   assert.match(rendered, /○ helper  phase 2/);
   assert.match(rendered, /err-id · error: Unknown subagent session: err-id/);
   // Run-style rows convey status by glyph and no longer surface the raw session handle.
