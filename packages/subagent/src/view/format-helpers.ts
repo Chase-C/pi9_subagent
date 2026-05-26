@@ -62,13 +62,14 @@ export function formatElapsed(from: number, to: number) {
 }
 
 export function formatToolUseLine(tool: AgentToolUse, indent: number, now = Date.now(), summaryMaxLength = DEFAULT_DISPLAY.toolInputSummaryLength): DisplayLine {
-  const completed = tool.completedAt !== undefined;
-  const color = tool.isError ? "error" : completed ? "muted" : "accent";
-  const glyph = tool.isError ? "✗" : completed ? "✓" : statusPresentation({ kind: "running", startedAt: tool.startedAt }, now).glyph;
+  //const completed = tool.completedAt !== undefined;
+  const color = tool.isError ? "error" : "muted";
+  //const glyph = tool.isError ? "✗" : completed ? "✓" : statusPresentation({ kind: "running", startedAt: tool.startedAt }, now).glyph;
   const elapsed = formatElapsed(tool.startedAt, tool.completedAt ?? now);
-  const summary = tool.inputSummary ? ` ${compact(tool.inputSummary, summaryMaxLength)}` : "";
+  const summary = tool.inputSummary ? `(${compact(tool.inputSummary, summaryMaxLength)})` : "";
   return {
-    text: `${" ".repeat(indent)}${glyph} ${tool.name}${summary} · ${elapsed}`,
+    text: `${" ".repeat(indent)}${tool.name}${summary} · ${elapsed}`,
+    //text: `${" ".repeat(indent)}${glyph} ${tool.name}${summary} · ${elapsed}`,
     color,
     hangingIndent: indent,
   };
@@ -178,7 +179,7 @@ function appendPrompt(lines: DisplayLine[], row: RunBody) {
   if (!row.prompt) return;
   lines.push({ text: "" });
   for (const part of [...row.prompt.split(/\r?\n/), ""]) {
-    lines.push({ text: `    ${part}`, color: "accent", hangingIndent: 4 });
+    lines.push({ text: `    ${part}`, color: "text", hangingIndent: 4 });
   }
 }
 

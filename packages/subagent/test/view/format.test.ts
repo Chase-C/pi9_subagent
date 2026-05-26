@@ -269,9 +269,9 @@ test("collapsed subagent run rows show the three most recent tools newest-first 
   // Newest tool first, capped at three, then a tail line counting the older (4th) call.
   assert.equal(lines.length, 5);
   assert.equal(lines[0], "  ⠇ reviewer · 2 turns · 0 tokens · 18s");
-  assert.equal(lines[1], "    ⠇ bash npm test --workspace=@pi9/subagent · 12s");
-  assert.equal(lines[2], '    ✓ grep "formatRunSessionLine" in packages/subagent/src · 1s');
-  assert.equal(lines[3], "    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s");
+  assert.equal(lines[1], "    bash(npm test --workspace=@pi9/subagent) · 12s");
+  assert.equal(lines[2], '    grep("formatRunSessionLine" in packages/subagent/src) · 1s');
+  assert.equal(lines[3], "    read(packages/subagent/src/view/tool-result-lines.ts) · 0s");
   assert.equal(lines[4], "    +1 additional tool call");
 });
 
@@ -287,8 +287,8 @@ test("collapsed subagent run additional-calls tail pluralizes and counts every t
   const lines = formatSubagentToolLines(runDetails([session]), false, 19_000);
 
   assert.equal(lines.length, 5);
-  assert.equal(lines[1], "    ✓ read file-5.ts · 0s");
-  assert.equal(lines[3], "    ✓ read file-3.ts · 0s");
+  assert.equal(lines[1], "    read(file-5.ts) · 0s");
+  assert.equal(lines[3], "    read(file-3.ts) · 0s");
   assert.equal(lines[4], "    +3 additional tool calls");
 });
 
@@ -310,7 +310,7 @@ test("collapsed run view collapses a finished subagent's tools while a sibling k
   assert.equal(lines.length, 3);
   assert.match(lines[0], /^  ✓ done /);
   assert.match(lines[1], / active /);
-  assert.match(lines[2], /bash npm test/);
+  assert.match(lines[2], /bash\(npm test\)/);
   assert.doesNotMatch(lines.join("\n"), /read done\.ts/);
 });
 
@@ -323,7 +323,7 @@ test("tool lines truncate a long input summary to the configured length", () => 
 
   const lines = formatSubagentToolLines(runDetails([session]), false, 5_000);
 
-  const summary = lines[1].match(/ read (.+) · \d/)?.[1];
+  const summary = lines[1].match(/ read\((.+)\) · \d/)?.[1];
   assert.ok(summary, "expected a tool line with a summary segment");
   assert.equal(summary.length, 80); // 79 chars + the ellipsis
   assert.ok(summary.endsWith("…"));
@@ -346,7 +346,7 @@ test("collapsed subagent run row shows only the active subagent tool line when p
 
   assert.deepEqual(lines, [
     "  ⠸ parent · 0 turns · 0 tokens · 9s",
-    "    ⠸ subagent run 2 tasks · 6s",
+    "    subagent(run 2 tasks) · 6s",
     "    ⠸ child · 0 turns · 0 tokens · 5s",
   ]);
 });
@@ -372,10 +372,10 @@ test("expanded subagent run renders the prompt and each current-run tool as a ri
 
   // One rich line per tool, chronological with newest at the bottom, and no "Tools:" header.
   assert.doesNotMatch(lines.join("\n"), /Tools:/);
-  const readIdx = lines.indexOf("    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s");
+  const readIdx = lines.indexOf("    read(packages/subagent/src/view/tool-result-lines.ts) · 0s");
   assert.notEqual(readIdx, -1);
-  assert.equal(lines[readIdx + 1], "    ✓ bash npm test --workspace=@pi9/subagent · 3s");
-  assert.equal(lines[readIdx + 2], "    ⠴ edit packages/subagent/src/view/session-lines.ts · 4s");
+  assert.equal(lines[readIdx + 1], "    bash(npm test --workspace=@pi9/subagent) · 3s");
+  assert.equal(lines[readIdx + 2], "    edit(packages/subagent/src/view/session-lines.ts) · 4s");
 });
 
 test("expanded subagent run no longer renders the aggregate tool-count line", () => {
@@ -411,7 +411,7 @@ test("expanded subagent run renders every tool call, not just the most recent th
   });
 
   const lines = formatSubagentToolLines(runDetails([session]), true, 20_000);
-  const toolLines = lines.filter(line => /^    ✓ read file-\d\.ts/.test(line));
+  const toolLines = lines.filter(line => /^    read\(file-\d\.ts\) · \d+s$/.test(line));
 
   assert.equal(toolLines.length, 5);
   assert.match(toolLines[0], /file-0\.ts/);
@@ -434,9 +434,9 @@ test("expanded subagent run keeps the result snippet for a terminal row, after p
 
   assert.match(joined, /Summarize the risks\./);
   assert.doesNotMatch(joined, /Tools:/);
-  const readIdx = lines.indexOf("    ✓ read auth.ts · 0s");
+  const readIdx = lines.indexOf("    read(auth.ts) · 0s");
   assert.notEqual(readIdx, -1);
-  const bashIdx = lines.indexOf("    ✓ bash npm test · 2s");
+  const bashIdx = lines.indexOf("    bash(npm test) · 2s");
   assert.equal(bashIdx, readIdx + 1);
 
   const resultIdx = lines.findIndex(line => /Found two issues\./.test(line));
@@ -473,14 +473,14 @@ test("expanded subagent run renders a previous run section above the current run
 
   // The previous run's own prompt, tool history, and result snippet.
   assert.match(joined, /Previous prompt: start the review\./);
-  assert.match(joined, /✓ read packages\/subagent\/src\/domain\/agent\.ts · 1s/);
-  assert.match(joined, /✓ bash npm test --workspace=@pi9\/subagent · 12s/);
+  assert.match(joined, /read\(packages\/subagent\/src\/domain\/agent\.ts\) · 1s/);
+  assert.match(joined, /bash\(npm test --workspace=@pi9\/subagent\) · 12s/);
   assert.match(joined, /previous output snippet/);
 
   // The current run still renders its own prompt and tool below the previous section.
   const currentPromptIdx = lines.findIndex(line => /Current prompt: finish the review\./.test(line));
   assert.ok(currentPromptIdx > prevIdx, "current run renders below the previous run section");
-  assert.match(joined, /edit packages\/subagent\/src\/domain\/agent\.ts/);
+  assert.match(joined, /edit\(packages\/subagent\/src\/domain\/agent\.ts\)/);
 });
 
 test("the current run tool history excludes previous run tools for a resumed agent", () => {
@@ -507,10 +507,10 @@ test("the current run tool history excludes previous run tools for a resumed age
   const currentRunLines = lines.slice(currentPromptIdx);
 
   // The current run lists its own tool but never the previous run's tool.
-  assert.ok(currentRunLines.some(line => /edit current\.ts/.test(line)));
-  assert.ok(!currentRunLines.some(line => /read previous\.ts/.test(line)));
+  assert.ok(currentRunLines.some(line => /edit\(current\.ts\)/.test(line)));
+  assert.ok(!currentRunLines.some(line => /read\(previous\.ts\)/.test(line)));
   // The previous tool renders only in the previous section, above the current prompt.
-  assert.ok(lines.slice(0, currentPromptIdx).some(line => /read previous\.ts/.test(line)));
+  assert.ok(lines.slice(0, currentPromptIdx).some(line => /read\(previous\.ts\)/.test(line)));
 });
 
 test("expanded subagent run renders multiple previous run sections in chronological order", () => {
@@ -557,9 +557,9 @@ test("collapsed subagent run does not render previous run sections for a resumed
 
   assert.doesNotMatch(joined, /Previous run/);
   assert.doesNotMatch(joined, /Earlier work\./);
-  assert.doesNotMatch(joined, /read previous\.ts/);
+  assert.doesNotMatch(joined, /read\(previous\.ts\)/);
   // The collapsed current row and its recent tool still render.
-  assert.match(joined, /edit current\.ts/);
+  assert.match(joined, /edit\(current\.ts\)/);
 });
 
 test("results expanded mirrors the running view for a resumed snapshot, including its previous-run sections", () => {
