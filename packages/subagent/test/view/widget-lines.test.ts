@@ -69,6 +69,51 @@ test("formatWidgetLines returns empty when only foreground-transient agents are 
   assert.deepEqual(formatWidgetLines(agents, 5_000), []);
 });
 
+test("formatWidgetLines omits transient terminal background agents but keeps active transient background agents", () => {
+  const agents = [
+    fakeAgent({
+      id: "bg-running",
+      dispatch: "background",
+      retention: "transient",
+      config: { name: "runner" },
+      createdAt: 1,
+      status: { kind: "running", startedAt: 4_000 },
+    }),
+    fakeAgent({
+      id: "bg-queued",
+      dispatch: "background",
+      retention: "transient",
+      config: { name: "waiting" },
+      createdAt: 2,
+      status: { kind: "queued" },
+    }),
+    fakeAgent({
+      id: "bg-completed",
+      dispatch: "background",
+      retention: "transient",
+      config: { name: "done-transient" },
+      createdAt: 3,
+      status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
+    }),
+    fakeAgent({
+      id: "bg-error",
+      dispatch: "background",
+      retention: "transient",
+      config: { name: "error-transient" },
+      createdAt: 4,
+      status: { kind: "error", startedAt: 1, completedAt: 2_000, error: "boom" },
+    }),
+  ];
+
+  const lines = formatWidgetLines(agents, 5_000);
+
+  assert.equal(lines[0], "Background · 1 running · 1 queued");
+  assert.match(lines[1], /^  [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] runner · 1s$/);
+  assert.equal(lines[2], "  ○ waiting · 4s");
+  assert.equal(lines.length, 3);
+  assert.doesNotMatch(lines.join("\n"), /done-transient|error-transient|ready|error/);
+});
+
 test("formatWidgetLines omits retained rows but keeps counts when widgetShowRetainedSessions is false", () => {
   const agents = [
     fakeAgent({

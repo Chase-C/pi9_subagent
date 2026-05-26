@@ -155,6 +155,8 @@ function buildSection(
 ): WidgetSection | undefined {
   const counts = { running: 0, queued: 0, ready: 0, error: 0 };
   for (const agent of agents) {
+    if (!isActiveStatusKind(agent.status.kind) && agent.retention !== "persistent") continue;
+
     if (agent.status.kind === "running") counts.running++;
     else if (agent.status.kind === "queued") counts.queued++;
     else if (agent.status.kind === "done") {
@@ -165,7 +167,7 @@ function buildSection(
 
   const rowAgents = agents.filter(agent => {
     if (isActiveStatusKind(agent.status.kind)) return true;
-    return display.widgetShowRetainedSessions;
+    return agent.retention === "persistent" && display.widgetShowRetainedSessions;
   });
   const sorted = sortWidgetAgents(rowAgents);
   const maxRows = display.widgetMaxRowsPerSection;
