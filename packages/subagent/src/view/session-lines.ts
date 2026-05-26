@@ -12,6 +12,7 @@ import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../conf
 import { compact } from "./view-helpers.js";
 import { applyBold, type Bold, type DisplayLine } from "./text-component.js";
 import {
+  abbreviateTokens,
   formatTimestamp,
   formatUsage,
   orderAsTree,
@@ -83,13 +84,143 @@ export function formatSubagentSessionInspect(
   return lines;
 }
 
+export type WidgetSectionTitle = "Background" | "Resumable";
+
+export type WidgetRow = {
+  glyph: string;
+  name: string;
+  elapsed: string;
+  tokens?: string;
+  activeTool?: string;
+};
+
+export type WidgetSection = {
+  title: WidgetSectionTitle;
+  counts: { running: number; queued: number; ready: number; error: number };
+  rows: WidgetRow[];
+  overflow: number;
+};
+
+export type WidgetModel = { sections: WidgetSection[]; footer?: string };
+
+export function buildWidgetModel(
+  agents: AgentSnapshot[],
+  now = Date.now(),
+  display: SubagentDisplaySettings = DEFAULT_DISPLAY,
+): WidgetModel {
+  const background = agents.filter(a => a.dispatch === "background");
+  const resumable = agents.filter(a => a.dispatch === "foreground" && a.retention === "persistent" && !isActiveStatusKind(a.status.kind));
+  const foregroundRunning = agents.filter(
+    a => a.dispatch === "foreground" && a.retention === "transient" && isActiveStatusKind(a.status.kind),
+  ).length;
+
+  const sections: WidgetSection[] = [];
+  const backgroundSection = buildSection("Background", background, now, display);
+  if (backgroundSection) sections.push(backgroundSection);
+  const resumableSection = buildSection("Resumable", resumable, now, display);
+  if (resumableSection) sections.push(resumableSection);
+
+  if (sections.length === 0) return { sections: [] };
+
+  const footer = display.widgetShowForeground && foregroundRunning > 0
+    ? `+${foregroundRunning} foreground running`
+    : undefined;
+  return { sections, ...(footer ? { footer } : {}) };
+}
+
+export function stringifyWidgetModel(model: WidgetModel): string[] {
+  const lines: string[] = [];
+  for (const section of model.sections) {
+    lines.push(formatSectionHeader(section));
+    for (const row of section.rows) lines.push(formatWidgetRow(row));
+    if (section.overflow > 0) lines.push(`  +${section.overflow} more`);
+  }
+  if (model.footer) lines.push(model.footer);
+  return lines;
+}
+
 export function formatWidgetLines(
   agents: AgentSnapshot[],
   now = Date.now(),
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
 ): string[] {
-  const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || (display.widgetShowRetainedSessions && a.retention === "persistent"));
-  return orderAsTree(visible).map(({ agent, depth }) => `${"  ".repeat(depth)}${formatSessionLine(agent, now, undefined, display)}`);
+  return stringifyWidgetModel(buildWidgetModel(agents, now, display));
+}
+
+function buildSection(
+  title: WidgetSectionTitle,
+  agents: AgentSnapshot[],
+  now: number,
+  display: SubagentDisplaySettings,
+): WidgetSection | undefined {
+  const counts = { running: 0, queued: 0, ready: 0, error: 0 };
+  for (const agent of agents) {
+    if (agent.status.kind === "running") counts.running++;
+    else if (agent.status.kind === "queued") counts.queued++;
+    else if (agent.status.kind === "done") {
+      if (agent.status.outcome === "completed") counts.ready++;
+      else counts.error++;
+    }
+  }
+
+  const rowAgents = agents.filter(agent => {
+    if (isActiveStatusKind(agent.status.kind)) return true;
+    return display.widgetShowRetainedSessions;
+  });
+  const sorted = sortWidgetAgents(rowAgents);
+  const maxRows = display.widgetMaxRowsPerSection;
+  const visible = sorted.slice(0, maxRows);
+  const overflow = Math.max(0, sorted.length - visible.length);
+
+  if (visible.length === 0 && counts.running === 0 && counts.queued === 0 && counts.ready === 0 && counts.error === 0) {
+    return undefined;
+  }
+
+  return {
+    title,
+    counts,
+    rows: visible.map(agent => toWidgetRow(agent, now)),
+    overflow,
+  };
+}
+
+function sortWidgetAgents(agents: AgentSnapshot[]): AgentSnapshot[] {
+  const priority = (agent: AgentSnapshot): number => {
+    if (agent.status.kind === "running") return 0;
+    if (agent.status.kind === "queued") return 1;
+    return 2;
+  };
+  return [...agents].sort((a, b) => priority(a) - priority(b) || a.createdAt - b.createdAt);
+}
+
+function toWidgetRow(agent: AgentSnapshot, now: number): WidgetRow {
+  const { glyph } = statusPresentation(agent.status, now);
+  const tokens = abbreviateTokens(agent.usage?.totalTokens ?? 0);
+  const activeTool = isActiveStatusKind(agent.status.kind) ? getActiveTools(agent).at(-1) : undefined;
+  return {
+    glyph,
+    name: agent.label ?? agent.config.name,
+    elapsed: rowElapsed(agent, now),
+    ...(tokens ? { tokens } : {}),
+    ...(activeTool ? { activeTool } : {}),
+  };
+}
+
+function formatSectionHeader(section: WidgetSection): string {
+  const parts: string[] = [section.title];
+  const { running, queued, ready, error } = section.counts;
+  if (running) parts.push(`${running} running`);
+  if (queued) parts.push(`${queued} queued`);
+  if (ready) parts.push(`${ready} ready`);
+  if (error) parts.push(`${error} error`);
+  return parts.join(" · ");
+}
+
+function formatWidgetRow(row: WidgetRow): string {
+  const parts = [row.name, row.elapsed];
+  if (row.tokens) parts.push(row.tokens);
+  if (row.activeTool) parts.push(`tool:${row.activeTool}`);
+  return `  ${row.glyph} ${parts.join(" · ")}`;
 }
 
 export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, display: SubagentDisplaySettings = DEFAULT_DISPLAY): string {

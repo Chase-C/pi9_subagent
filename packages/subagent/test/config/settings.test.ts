@@ -20,6 +20,8 @@ test("subagent UI settings default to below editor when file is missing", async 
   assert.deepEqual(result.settings.agentDiscovery.agentFileExtensions, [".md"]);
   assert.equal(result.settings.display.outputSnippetLength, 400);
   assert.equal(result.settings.display.toolInputSummaryLength, 80);
+  assert.equal(result.settings.display.widgetShowForeground, true);
+  assert.equal(result.settings.display.widgetMaxRowsPerSection, 6);
   assert.equal(result.warning, undefined);
 });
 
@@ -79,6 +81,43 @@ test("subagent settings reject the legacy backgroundNotify names end-of-turn and
     assert.equal(result.settings.runtime.backgroundNotify, "auto", `${legacy}: should fall back to auto`);
     assert.match(result.warning ?? "", /backgroundNotify/, `${legacy}: warning should mention backgroundNotify`);
   }
+});
+
+test("subagent settings load widgetShowForeground and widgetMaxRowsPerSection overrides", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-settings-widget-"));
+  const settingsPath = join(root, "subagent", "settings.json");
+  await mkdir(join(root, "subagent"), { recursive: true });
+  await writeFile(
+    settingsPath,
+    JSON.stringify({
+      display: { widgetShowForeground: false, widgetMaxRowsPerSection: 4 },
+    }),
+  );
+
+  const result = await new SubagentSettingsStore(settingsPath).load();
+
+  assert.equal(result.settings.display.widgetShowForeground, false);
+  assert.equal(result.settings.display.widgetMaxRowsPerSection, 4);
+  assert.equal(result.warning, undefined);
+});
+
+test("subagent settings reject invalid widgetShowForeground and widgetMaxRowsPerSection with warnings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-settings-widget-invalid-"));
+  const settingsPath = join(root, "subagent", "settings.json");
+  await mkdir(join(root, "subagent"), { recursive: true });
+  await writeFile(
+    settingsPath,
+    JSON.stringify({
+      display: { widgetShowForeground: "yes", widgetMaxRowsPerSection: 0 },
+    }),
+  );
+
+  const result = await new SubagentSettingsStore(settingsPath).load();
+
+  assert.equal(result.settings.display.widgetShowForeground, true);
+  assert.equal(result.settings.display.widgetMaxRowsPerSection, 6);
+  assert.match(result.warning!, /widgetShowForeground/);
+  assert.match(result.warning!, /widgetMaxRowsPerSection/);
 });
 
 test("subagent settings load runtime, discovery, and display overrides", async () => {

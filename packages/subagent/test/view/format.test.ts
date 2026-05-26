@@ -151,17 +151,10 @@ test("background-started details project collectable handles with sessionId and 
   ]);
 });
 
-test("flat sessions (no parentSessionId) render in caller order with no indentation in widget and inventory", () => {
+test("flat sessions (no parentSessionId) render in caller order with no indentation in inventory", () => {
   const a = fakeAgent({ id: "a", config: { name: "alpha" }, createdAt: 30, status: { kind: "running", startedAt: 1 } });
   const b = fakeAgent({ id: "b", config: { name: "beta" }, createdAt: 10, status: { kind: "running", startedAt: 1 } });
   const orphan = fakeAgent({ id: "c", parentSessionId: "missing-parent", config: { name: "orphan" }, createdAt: 20, status: { kind: "running", startedAt: 1 } });
-
-  const widgetLines = formatWidgetLines([a, b, orphan], 1_000);
-  assert.equal(widgetLines.length, 3);
-  assert.match(widgetLines[0], /^alpha /);
-  assert.match(widgetLines[1], /^beta /);
-  assert.match(widgetLines[2], /^orphan /);
-  for (const line of widgetLines) assert.doesNotMatch(line, /^ /);
 
   const inventoryLines = formatSubagentToolLines(inventoryDetails([a, b, orphan]), true, 1_000);
   const headLines = inventoryLines.filter(line => line.includes(" · running "));
@@ -188,31 +181,22 @@ test("inventory expanded output orders descendants DFS under their parents with 
   assert.match(headLines[3], /^delta /);
 });
 
-test("formatWidgetLines includes persistent terminal rows even when they are not resumable", () => {
-  const foregroundResumable = fakeAgent({ id: "fg", config: { name: "foreground", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
-  const backgroundOneshot = fakeAgent({ id: "bg", dispatch: "background", retention: "persistent", config: { name: "background", resumable: false }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
-  const transient = fakeAgent({ id: "tmp", retention: "transient", config: { name: "transient", resumable: false }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
-
-  const lines = formatWidgetLines([foregroundResumable, backgroundOneshot, transient], 1_000);
-
-  assert.equal(lines.length, 2);
-  assert.match(lines[0], /^foreground /);
-  assert.match(lines[1], /^background /);
-});
-
-test("formatWidgetLines renders a 2-level tree with depth-based indentation", () => {
-  const root = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
-  const childA = fakeAgent({ id: "child-a", parentSessionId: "root", config: { name: "child-a" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
-  const childB = fakeAgent({ id: "child-b", parentSessionId: "root", config: { name: "child-b" }, createdAt: 3, status: { kind: "running", startedAt: 1 } });
-  const grandchild = fakeAgent({ id: "grand", parentSessionId: "child-a", config: { name: "grand" }, createdAt: 4, status: { kind: "running", startedAt: 1 } });
+test("formatWidgetLines flattens nested background agents into the Background section without tree indentation", () => {
+  const root = fakeAgent({ id: "root", dispatch: "background", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
+  const childA = fakeAgent({ id: "child-a", parentSessionId: "root", dispatch: "background", config: { name: "child-a" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+  const childB = fakeAgent({ id: "child-b", parentSessionId: "root", dispatch: "background", config: { name: "child-b" }, createdAt: 3, status: { kind: "running", startedAt: 1 } });
+  const grandchild = fakeAgent({ id: "grand", parentSessionId: "child-a", dispatch: "background", config: { name: "grand" }, createdAt: 4, status: { kind: "running", startedAt: 1 } });
 
   const lines = formatWidgetLines([root, childA, childB, grandchild], 1_000);
 
-  assert.equal(lines.length, 4);
-  assert.match(lines[0], /^root /);
-  assert.match(lines[1], /^  child-a /);
-  assert.match(lines[2], /^    grand /);
-  assert.match(lines[3], /^  child-b /);
+  assert.equal(lines[0], "Background · 4 running");
+  assert.equal(lines.length, 5);
+  for (const line of lines.slice(1)) assert.match(line, /^  /);
+  assert.match(lines.join("\n"), /root/);
+  assert.match(lines.join("\n"), /child-a/);
+  assert.match(lines.join("\n"), /child-b/);
+  assert.match(lines.join("\n"), /grand/);
+  assert.doesNotMatch(lines.join("\n"), /^    /m);
 });
 
 test("inventoryDetails passes parentSessionId through to each session view", () => {

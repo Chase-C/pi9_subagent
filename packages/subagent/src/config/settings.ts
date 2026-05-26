@@ -43,7 +43,12 @@ export interface SubagentDisplaySettings {
   toolInputSummaryLength: number;
   collapsedAgentListLimit: number;
   collapsedDescriptionLength: number;
+  /** When false, done/retained agents contribute to section counts only (no rows). */
   widgetShowRetainedSessions: boolean;
+  /** When false, omit the foreground-transient footer line. */
+  widgetShowForeground: boolean;
+  /** Max rows per Background/Resumable section before a +N more overflow line. */
+  widgetMaxRowsPerSection: number;
 }
 
 export interface SubagentSettings extends SubagentUiSettings {
@@ -83,6 +88,8 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = {
     collapsedAgentListLimit: 8,
     collapsedDescriptionLength: 100,
     widgetShowRetainedSessions: true,
+    widgetShowForeground: true,
+    widgetMaxRowsPerSection: 6,
   },
 };
 
@@ -176,6 +183,8 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
     assignPositiveInt(display, "collapsedAgentListLimit", value => { settings.display.collapsedAgentListLimit = value; }, warnings);
     assignPositiveInt(display, "collapsedDescriptionLength", value => { settings.display.collapsedDescriptionLength = value; }, warnings);
     assignBoolean(display, "widgetShowRetainedSessions", value => { settings.display.widgetShowRetainedSessions = value; }, warnings);
+    assignBoolean(display, "widgetShowForeground", value => { settings.display.widgetShowForeground = value; }, warnings);
+    assignPositiveInt(display, "widgetMaxRowsPerSection", value => { settings.display.widgetMaxRowsPerSection = value; }, warnings);
   }
 
   return { settings, ...(warnings.length ? { warning: warnings.join(" ") } : {}) };

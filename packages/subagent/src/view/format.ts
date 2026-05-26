@@ -18,11 +18,17 @@ export {
 } from "./details.js";
 
 export {
+  buildWidgetModel,
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
   formatSessionLine,
   formatRunSessionLine,
   formatWidgetLines,
+  stringifyWidgetModel,
+  type WidgetModel,
+  type WidgetRow,
+  type WidgetSection,
+  type WidgetSectionTitle,
 } from "./session-lines.js";
 
 export {

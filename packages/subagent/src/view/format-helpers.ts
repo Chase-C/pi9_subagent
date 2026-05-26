@@ -49,6 +49,16 @@ export function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
+export function abbreviateTokens(total: number): string | undefined {
+  if (total <= 0) return undefined;
+  if (total < 1000) return String(total);
+  if (total < 10_000) {
+    const rounded = Math.round(total / 100) / 10;
+    return `${rounded}k`;
+  }
+  return `${Math.round(total / 1000)}k`;
+}
+
 export function rowElapsed(row: AgentSnapshot, now: number): string {
   return formatElapsed(getStartedAt(row.status) ?? getQueuedAt(row.status) ?? row.createdAt, getCompletedAt(row.status) ?? now);
 }

@@ -274,6 +274,7 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
 test("subagent tool forwards live manager update tree to onUpdate and widget UI", async () => {
   const runningAgent = fakeAgent({
     id: "root",
+    dispatch: "background",
     config: { name: "root" },
     status: { kind: "running", startedAt: 1 },
     message: "working",
@@ -284,6 +285,7 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
   const childAgent = fakeAgent({
     id: "child",
     parentSessionId: "root",
+    dispatch: "background",
     config: { name: "child" },
     status: { kind: "running", startedAt: 1 },
     message: "child working",
@@ -326,8 +328,9 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
   assert.equal(partials[0].details.sessions[0].activity.toolHistory.at(-1)?.name, "read");
   assert.doesNotMatch(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], "subagent");
-  assert.match(widgets[0][1][0], /root/);
-  assert.match(widgets[0][1][1], /^  child/);
+  assert.equal(widgets[0][1][0], "Background · 2 running");
+  assert.match(widgets[0][1][1], /root/);
+  assert.match(widgets[0][1][2], /child/);
   assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: "belowEditor" }]);
 });
 
