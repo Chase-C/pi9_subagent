@@ -4,8 +4,9 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { DEFAULT_SUBAGENT_SETTINGS, normalizeSettings } from "../../src/config/settings.js";
 import {
-  WIDGET_COLUMNS_BREAKPOINT,
+  maxLineWidth,
   resolveWidgetLayout,
+  WIDGET_COLUMN_GUTTER,
   zipWidgetColumns,
 } from "../../src/view/widget-layout.js";
 import { buildWidgetModel, renderWidgetModelLines, formatThemedWidgetRow } from "../../src/view/session-lines.js";
@@ -23,16 +24,37 @@ test("normalizeSettings defaults widgetLayout to auto and validates enum values"
 });
 
 test("resolveWidgetLayout selects columns or stacked from setting and width", () => {
+  const gutter = visibleWidth(WIDGET_COLUMN_GUTTER);
   assert.equal(resolveWidgetLayout("columns", 40), "columns");
   assert.equal(resolveWidgetLayout("stacked", 120), "stacked");
-  assert.equal(resolveWidgetLayout("auto", WIDGET_COLUMNS_BREAKPOINT - 1), "stacked");
-  assert.equal(resolveWidgetLayout("auto", WIDGET_COLUMNS_BREAKPOINT), "columns");
+  assert.equal(resolveWidgetLayout("auto", 20 + gutter, false, 20), "stacked");
+  assert.equal(resolveWidgetLayout("auto", 20 + gutter + 1, true, 20), "columns");
 });
 
-test("zipWidgetColumns pads the shorter column and joins with a gutter", () => {
-  const lines = zipWidgetColumns(["left", "more"], ["right"], 5, " | ");
-  assert.equal(lines[0], "left  | right");
-  assert.equal(lines[1], "more  |      ");
+test("zipWidgetColumns aligns gutter after the widest natural left line", () => {
+  const width = 24;
+  const lines = zipWidgetColumns(["left", "more-left"], ["right-side", "r"], width, " │ ");
+  assert.equal(lines[0], "left      │ right-side");
+  assert.equal(lines[1], "more-left │ r");
+  assert.equal(lines[0].indexOf("│"), lines[1].indexOf("│"));
+  for (const line of lines) assert.ok(visibleWidth(line) <= width);
+
+  const tight = zipWidgetColumns(["more-left"], ["right-side-extra-long"], 20, " │ ");
+  assert.equal(visibleWidth(tight[0]), 20);
+  assert.match(tight[0], /^more-left │ right/);
+});
+
+test("zipWidgetColumns keeps a single aligned gutter close to the left content", () => {
+  const lines = zipWidgetColumns(
+    ["Background · 1 running", "  ⠋ scout · 1s"],
+    ["Resumable · 1 ready", "  ✓ helper · 4s"],
+    80,
+    " │ ",
+  );
+  assert.match(lines[0], /^Background · 1 running\s+│ Resumable · 1 ready$/);
+  assert.match(lines[1], /^  ⠋ scout · 1s\s+│   ✓ helper · 4s$/);
+  assert.equal(lines[0].indexOf("│"), lines[1].indexOf("│"));
+  assert.ok(visibleWidth(lines[0]) < 80);
 });
 
 test("renderWidgetModelLines renders side-by-side columns with full-width footer at wide width", () => {
@@ -70,7 +92,7 @@ test("renderWidgetModelLines renders side-by-side columns with full-width footer
 
   const columns = renderWidgetModelLines(model, now, formatRow, { layout: "columns", width });
   assert.equal(columns.length, 3);
-  assert.match(columns[0], /Background · 1 running\s+\|\s+Resumable · 1 ready/);
+  assert.match(columns[0], /Background · 1 running\s+│ Resumable · 1 ready/);
   assert.match(columns[1], /scout · 1s/);
   assert.match(columns[1], /helper · 4s/);
   assert.match(columns[2], /^\+1 foreground running\s*$/);
@@ -91,7 +113,7 @@ test("renderWidgetModelLines auto layout uses stacked for background-only at wid
 
   const lines = renderWidgetModelLines(model, now, formatRow, { layout: "auto", width: 80 });
   assert.equal(lines[0], "Background · 1 running");
-  assert.doesNotMatch(lines[0], /\|/);
+  assert.doesNotMatch(lines[0], /│/);
 });
 
 test("renderWidgetModelLines forced columns layout still uses columns with one section", () => {
@@ -107,10 +129,10 @@ test("renderWidgetModelLines forced columns layout still uses columns with one s
   const formatRow = (row: Parameters<typeof formatThemedWidgetRow>[0]) => formatThemedWidgetRow(row, mockTheme());
 
   const lines = renderWidgetModelLines(model, now, formatRow, { layout: "columns", width: 80 });
-  assert.match(lines[0], /Background · 1 running\s+\|\s+/);
+  assert.match(lines[0], /Background · 1 running\s+│ /);
 });
 
-test("renderWidgetModelLines auto layout falls back to stacked below breakpoint", () => {
+test("renderWidgetModelLines auto layout uses columns when content fits side by side", () => {
   const now = 10_000;
   const agents = [
     fakeAgent({
@@ -128,11 +150,33 @@ test("renderWidgetModelLines auto layout falls back to stacked below breakpoint"
   const formatRow = (row: Parameters<typeof formatThemedWidgetRow>[0]) => formatThemedWidgetRow(row, mockTheme());
 
   const narrow = renderWidgetModelLines(model, now, formatRow, { layout: "auto", width: 60 });
-  assert.equal(narrow[0], "Background · 1 running");
-  assert.equal(narrow[2], "Resumable · 1 ready");
+  assert.match(narrow[0], /Background · 1 running\s+│ Resumable · 1 ready/);
+  assert.match(narrow[1], /scout · 1s/);
+  assert.match(narrow[1], /helper · 4s/);
+});
 
-  const wide = renderWidgetModelLines(model, now, formatRow, { layout: "auto", width: 80 });
-  assert.match(wide[0], /Background · 1 running\s+\|\s+Resumable · 1 ready/);
+test("renderWidgetModelLines auto layout falls back to stacked when gutter cannot fit", () => {
+  const now = 10_000;
+  const agents = [
+    fakeAgent({
+      dispatch: "background",
+      config: { name: "scout" },
+      status: { kind: "running", startedAt: 9_000 },
+    }),
+    fakeAgent({
+      id: "res",
+      config: { name: "helper", resumable: true },
+      status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
+    }),
+  ];
+  const model = buildWidgetModel(agents, now);
+  const formatRow = (row: Parameters<typeof formatThemedWidgetRow>[0]) => formatThemedWidgetRow(row, mockTheme());
+  const leftWidth = maxLineWidth(["Background · 1 running", "  ⠋ scout · 1s"]);
+  const tooNarrow = leftWidth + visibleWidth(WIDGET_COLUMN_GUTTER);
+
+  const stacked = renderWidgetModelLines(model, now, formatRow, { layout: "auto", width: tooNarrow });
+  assert.equal(stacked[0], "Background · 1 running");
+  assert.equal(stacked[2], "Resumable · 1 ready");
 });
 
 test("renderWidgetModelLines truncates wide glyphs per column without breaking alignment", () => {
@@ -167,7 +211,7 @@ test("renderWidgetModelLines truncates wide glyphs per column without breaking a
   const lines = renderWidgetModelLines(model, now, formatRow, { layout: "columns", width });
 
   assert.equal(lines.length, 3);
-  for (const line of lines) assert.equal(visibleWidth(line), width);
+  for (const line of lines) assert.ok(visibleWidth(line) <= width);
   assert.match(lines[2], /↳ Orch/);
 });
 
@@ -190,5 +234,5 @@ test("SubagentWidgetComponent threads widgetLayout into column rendering", () =>
   assert.equal(stacked[0], "Background · 1 running");
 
   const columns = new SubagentWidgetComponent(model, mockTheme(), "columns").render(80);
-  assert.match(columns[0], /Background · 1 running\s+\|\s+Resumable · 1 ready/);
+  assert.match(columns[0], /Background · 1 running\s+│ Resumable · 1 ready/);
 });

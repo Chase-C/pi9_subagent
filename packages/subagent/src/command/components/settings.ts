@@ -33,7 +33,7 @@ export class SubagentSettingsComponent implements Component {
         label: "Widget layout",
         currentValue: settings.widgetLayout,
         values: ["auto", "columns", "stacked"],
-        description: "Values: auto, columns, stacked. auto uses side-by-side columns at width >= ~71 when both sections are present.",
+        description: "Values: auto, columns, stacked. auto uses side-by-side columns when both sections fit after the background content width.",
       },
       {
         id: "backgroundNotify",

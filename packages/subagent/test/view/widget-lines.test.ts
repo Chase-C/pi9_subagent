@@ -60,6 +60,30 @@ test("formatWidgetLines renders Background and Resumable sections with header co
   assert.equal(lines[5], "+1 foreground running");
 });
 
+test("formatWidgetLines keeps active foreground-resumable agents in the Resumable section", () => {
+  const agents = [
+    fakeAgent({
+      id: "bg",
+      dispatch: "background",
+      config: { name: "background" },
+      status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
+    }),
+    fakeAgent({
+      id: "active-res",
+      retention: "persistent",
+      config: { name: "active-helper", resumable: true },
+      status: { kind: "running", startedAt: 4_000 },
+    }),
+  ];
+
+  const lines = formatWidgetLines(agents, 5_000);
+
+  assert.equal(lines[0], "Background · 1 ready");
+  assert.match(lines[1], /background/);
+  assert.equal(lines[2], "Resumable · 1 running");
+  assert.match(lines[3], /active-helper/);
+});
+
 test("formatWidgetLines returns empty when only foreground-transient agents are active", () => {
   const agents = [
     fakeAgent({ retention: "transient", config: { name: "inline" }, status: { kind: "running", startedAt: 1 } }),

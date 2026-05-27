@@ -26,9 +26,9 @@ import {
 } from "./format-helpers.js";
 import {
   hasBothColumnSections,
+  maxLineWidth,
   resolveWidgetLayout,
   WIDGET_COLUMN_GUTTER,
-  widgetColumnWidths,
   zipWidgetColumns,
 } from "./widget-layout.js";
 
@@ -148,7 +148,7 @@ export function buildWidgetModel(
 ): WidgetModel {
   const byId = new Map(agents.map(a => [a.id, a]));
   const background = agents.filter(a => a.dispatch === "background");
-  const resumable = agents.filter(a => a.dispatch === "foreground" && a.retention === "persistent" && !isActiveStatusKind(a.status.kind));
+  const resumable = agents.filter(a => a.dispatch === "foreground" && a.retention === "persistent");
   const foregroundRunning = agents.filter(
     a => a.dispatch === "foreground"
       && a.retention === "transient"
@@ -183,8 +183,16 @@ export function renderWidgetModelLines(
   formatRow: WidgetRowFormatter,
   options?: RenderWidgetOptions,
 ): string[] {
-  if (options && resolveWidgetLayout(options.layout, options.width, hasBothColumnSections(model.sections)) === "columns") {
-    return renderWidgetModelColumns(model, now, formatRow, options.width);
+  if (!options) return renderWidgetModelStacked(model, now, formatRow);
+
+  const background = model.sections.find(section => section.title === "Background");
+  const resumable = model.sections.find(section => section.title === "Resumable");
+  const leftLines = background ? renderWidgetSectionLines(background, model, now, formatRow) : [];
+  const rightLines = resumable ? renderWidgetSectionLines(resumable, model, now, formatRow) : [];
+  const leftNaturalWidth = maxLineWidth(leftLines);
+
+  if (resolveWidgetLayout(options.layout, options.width, hasBothColumnSections(model.sections), leftNaturalWidth) === "columns") {
+    return renderWidgetModelColumns(leftLines, rightLines, model.footer, options.width);
   }
   return renderWidgetModelStacked(model, now, formatRow);
 }
@@ -203,18 +211,13 @@ function renderWidgetModelStacked(
 }
 
 function renderWidgetModelColumns(
-  model: WidgetModel,
-  now: number,
-  formatRow: WidgetRowFormatter,
+  leftLines: string[],
+  rightLines: string[],
+  footer: string | undefined,
   width: number,
 ): string[] {
-  const { left, right } = widgetColumnWidths(width);
-  const background = model.sections.find(section => section.title === "Background");
-  const resumable = model.sections.find(section => section.title === "Resumable");
-  const leftLines = background ? renderWidgetSectionLines(background, model, now, formatRow, left) : [];
-  const rightLines = resumable ? renderWidgetSectionLines(resumable, model, now, formatRow, right) : [];
-  const lines = zipWidgetColumns(leftLines, rightLines, left, WIDGET_COLUMN_GUTTER, right);
-  if (model.footer) lines.push(truncateToWidth(model.footer, width, "", true));
+  const lines = zipWidgetColumns(leftLines, rightLines, width, WIDGET_COLUMN_GUTTER);
+  if (footer) lines.push(truncateToWidth(footer, width, "", true));
   return lines;
 }
 

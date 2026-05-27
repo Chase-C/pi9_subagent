@@ -345,7 +345,7 @@ Configure widget layout with `/subagents settings`:
 
 | Value | Behavior |
 | --- | --- |
-| `auto` | Side-by-side columns at width >= ~71 when both Background and Resumable sections are present; otherwise stacked. This is the default. |
+| `auto` | Side-by-side columns when both Background and Resumable sections are present and the terminal is wider than the background content plus gutter; otherwise stacked. This is the default. |
 | `columns` | Always use side-by-side columns. |
 | `stacked` | Always use full-width stacked sections. |
 
