@@ -4,10 +4,18 @@ import { SettingsList, type Component, type SettingItem } from "@earendil-works/
 import type { BackgroundNotifyMode, SubagentSettings, WidgetLayout, WidgetPlacement } from "../../config/settings.js";
 import { accent, fitLinesToWidth, isCancelKey, isDownKey, isEnterKey, isUpKey, type SubagentKeybindings } from "../input.js";
 
+const COUNT_SETTING_VALUES = ["1", "2", "4", "8", "16", "32"];
+const ROW_SETTING_VALUES = ["1", "2", "4", "6", "8", "16", "32"];
+
 export type SubagentSettingsChange =
   | { kind: "widgetPlacement"; value: WidgetPlacement }
   | { kind: "widgetLayout"; value: WidgetLayout }
-  | { kind: "backgroundNotify"; value: BackgroundNotifyMode };
+  | { kind: "backgroundNotify"; value: BackgroundNotifyMode }
+  | { kind: "maxConcurrentSubagents"; value: number }
+  | { kind: "maxTasksPerRun"; value: number }
+  | { kind: "defaultResumable"; value: boolean }
+  | { kind: "widgetShowRetainedSessions"; value: boolean }
+  | { kind: "widgetMaxRowsPerSection"; value: number };
 
 export class SubagentSettingsComponent implements Component {
   private readonly settingsList: SettingsList;
@@ -43,6 +51,41 @@ export class SubagentSettingsComponent implements Component {
         values: ["auto", "steer", "none"],
         description: "Values: auto, steer, none. auto fires once the parent is idle; steer injects into the active run before a future model step.",
       },
+      {
+        id: "maxConcurrentSubagents",
+        label: "Max running",
+        currentValue: String(settings.runtime.maxConcurrentSubagents),
+        values: numericSettingValues(settings.runtime.maxConcurrentSubagents, COUNT_SETTING_VALUES),
+        description: "Maximum concurrently running subagents. This is a tree-wide cap across recursive parent/child subagents.",
+      },
+      {
+        id: "maxTasksPerRun",
+        label: "Max tasks per run",
+        currentValue: String(settings.runtime.maxTasksPerRun),
+        values: numericSettingValues(settings.runtime.maxTasksPerRun, COUNT_SETTING_VALUES),
+        description: "Maximum tasks accepted in one subagent run call. This limits single-call fanout before tasks enter the queue.",
+      },
+      {
+        id: "defaultResumable",
+        label: "Default resumable",
+        currentValue: String(settings.runtime.defaultResumable),
+        values: ["false", "true"],
+        description: "Default retention for agents that do not declare resumable in frontmatter. Per-task overrides still win.",
+      },
+      {
+        id: "widgetShowRetainedSessions",
+        label: "Show retained",
+        currentValue: String(settings.display.widgetShowRetainedSessions),
+        values: ["true", "false"],
+        description: "Whether the progress widget includes completed resumable sessions. Disable to reduce widget clutter.",
+      },
+      {
+        id: "widgetMaxRowsPerSection",
+        label: "Widget rows",
+        currentValue: String(settings.display.widgetMaxRowsPerSection),
+        values: numericSettingValues(settings.display.widgetMaxRowsPerSection, ROW_SETTING_VALUES),
+        description: "Maximum visible rows per Background or Resumable widget section before showing a +N more overflow line.",
+      },
     ];
     this.settingsList = new SettingsList(
       items,
@@ -52,6 +95,11 @@ export class SubagentSettingsComponent implements Component {
         if (id === "widgetPlacement") onChange({ kind: "widgetPlacement", value: newValue as WidgetPlacement });
         else if (id === "widgetLayout") onChange({ kind: "widgetLayout", value: newValue as WidgetLayout });
         else if (id === "backgroundNotify") onChange({ kind: "backgroundNotify", value: newValue as BackgroundNotifyMode });
+        else if (id === "maxConcurrentSubagents") onChange({ kind: "maxConcurrentSubagents", value: Number(newValue) });
+        else if (id === "maxTasksPerRun") onChange({ kind: "maxTasksPerRun", value: Number(newValue) });
+        else if (id === "defaultResumable") onChange({ kind: "defaultResumable", value: newValue === "true" });
+        else if (id === "widgetShowRetainedSessions") onChange({ kind: "widgetShowRetainedSessions", value: newValue === "true" });
+        else if (id === "widgetMaxRowsPerSection") onChange({ kind: "widgetMaxRowsPerSection", value: Number(newValue) });
       },
       done,
     );
@@ -73,6 +121,13 @@ export class SubagentSettingsComponent implements Component {
     this.requestRender();
   }
 
+}
+
+function numericSettingValues(current: number, presets: string[]): string[] {
+  const currentValue = String(current);
+  return presets.includes(currentValue)
+    ? presets
+    : [currentValue, ...presets];
 }
 
 function normalizeSettingsListInput(data: string, keybindings: SubagentKeybindings) {

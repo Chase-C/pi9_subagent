@@ -121,11 +121,29 @@ export async function openSubagentSettings(
           settings = { ...settings, widgetLayout: change.value };
           updateSubagentWidget(ctx, agentManager.listSessions(), settings);
           confirmation = `Subagent widget layout set to ${change.value}.`;
-        } else {
+        } else if (change.kind === "backgroundNotify") {
           settings = { ...settings, runtime: { ...settings.runtime, backgroundNotify: change.value } };
-          onSettingsUpdated?.(settings);
           confirmation = `Subagent background notify set to ${change.value}.`;
+        } else if (change.kind === "maxConcurrentSubagents") {
+          settings = { ...settings, runtime: { ...settings.runtime, maxConcurrentSubagents: change.value } };
+          agentManager.configure({ maxRunning: change.value });
+          confirmation = `Subagent max running set to ${change.value}.`;
+        } else if (change.kind === "maxTasksPerRun") {
+          settings = { ...settings, runtime: { ...settings.runtime, maxTasksPerRun: change.value } };
+          confirmation = `Subagent max tasks per run set to ${change.value}.`;
+        } else if (change.kind === "defaultResumable") {
+          settings = { ...settings, runtime: { ...settings.runtime, defaultResumable: change.value } };
+          confirmation = `Subagent default resumable set to ${change.value}.`;
+        } else if (change.kind === "widgetShowRetainedSessions") {
+          settings = { ...settings, display: { ...settings.display, widgetShowRetainedSessions: change.value } };
+          updateSubagentWidget(ctx, agentManager.listSessions(), settings);
+          confirmation = `Subagent show retained sessions set to ${change.value}.`;
+        } else {
+          settings = { ...settings, display: { ...settings.display, widgetMaxRowsPerSection: change.value } };
+          updateSubagentWidget(ctx, agentManager.listSessions(), settings);
+          confirmation = `Subagent widget rows per section set to ${change.value}.`;
         }
+        onSettingsUpdated?.(settings);
         const settingsToSave = settings;
         saveQueue = saveQueue.then(() => settingsStore.save(settingsToSave).then(
           () => notify(ctx, confirmation, "info"),

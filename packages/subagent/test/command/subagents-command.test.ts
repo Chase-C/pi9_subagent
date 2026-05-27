@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import subagentExtension from "../../src/index.js";
+import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 
 const passthroughTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
@@ -145,6 +146,73 @@ test("/subagents settings exposes widgetLayout with auto, columns, stacked and p
   const last = saved.at(-1);
   assert.ok(last, "expected at least one save");
   assert.equal(last.widgetLayout, "columns");
+});
+
+test("/subagents settings exposes runtime and widget clutter controls", async () => {
+  const runningSession = fakeAgent({ status: { kind: "running", startedAt: 1 }, turns: 1 });
+  const configured: any[] = [];
+  const fakeManager = {
+    listSessions(): any[] { return this.sessions; },
+    configure(options: any) { configured.push(options); },
+    sessions: [runningSession],
+  };
+  const saved: any[] = [];
+  const fakeSettingsStore = {
+    async load() { return { settings: DEFAULT_SUBAGENT_SETTINGS }; },
+    async save(settings: any) { saved.push(settings); },
+  };
+  const commands = registerCommand({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore: fakeSettingsStore,
+  });
+
+  let renderedInitial = "";
+  let renderedMaxRunning = "";
+  let renderedShowRetained = "";
+  const widgets: any[] = [];
+  await commands.get("subagents").handler("settings", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget: (...args: any[]) => widgets.push(args),
+      custom(factory: any) {
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        renderedInitial = component.render(120).join("\n");
+        component.handleInput("\x1b[B");
+        component.handleInput("\x1b[B");
+        component.handleInput("\x1b[B"); // down to max running
+        renderedMaxRunning = component.render(120).join("\n");
+        component.handleInput("\r"); // 4 -> 8
+        component.handleInput("\x1b[B"); // max tasks per run
+        component.handleInput("\r"); // 8 -> 16
+        component.handleInput("\x1b[B"); // default resumable
+        component.handleInput("\r"); // false -> true
+        component.handleInput("\x1b[B"); // show retained
+        renderedShowRetained = component.render(120).join("\n");
+        component.handleInput("\r"); // true -> false
+        component.handleInput("\x1b[B"); // widget rows
+        component.handleInput("\r"); // 6 -> 8
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.match(renderedInitial, /Max running/);
+  assert.match(renderedInitial, /Max tasks per run/);
+  assert.match(renderedInitial, /Default resumable/);
+  assert.match(renderedMaxRunning, /tree-wide cap/);
+  assert.match(renderedShowRetained, /Show retained/);
+  const last = saved.at(-1);
+  assert.ok(last, "expected settings to be saved");
+  assert.equal(last.runtime.maxConcurrentSubagents, 8);
+  assert.equal(last.runtime.maxTasksPerRun, 16);
+  assert.equal(last.runtime.defaultResumable, true);
+  assert.equal(last.display.widgetShowRetainedSessions, false);
+  assert.equal(last.display.widgetMaxRowsPerSection, 8);
+  assert.deepEqual(configured, [{ maxRunning: 4 }, { maxRunning: 8 }]);
+  assert.ok(widgets.length >= 2);
 });
 
 test("/subagents settings backgroundNotify changes update live notifier mode immediately", async () => {

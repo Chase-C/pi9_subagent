@@ -341,7 +341,7 @@ Configure widget placement with `/subagents settings`:
 | `aboveEditor` | Show the widget above the editor. |
 | `off` | Disable only the persistent widget. Tool rendering and `/subagents` still work. |
 
-Configure widget layout with `/subagents settings`:
+Configure widget layout and common runtime/widget limits with `/subagents settings`:
 
 | Value | Behavior |
 | --- | --- |
@@ -379,12 +379,16 @@ The settings are global for the user and stored at `${PI_AGENT_DIR ?? ~/.pi/agen
     "toolInputSummaryLength": 80,
     "collapsedAgentListLimit": 8,
     "collapsedDescriptionLength": 100,
-    "widgetShowRetainedSessions": true
+    "widgetShowRetainedSessions": true,
+    "widgetShowForeground": true,
+    "widgetMaxRowsPerSection": 6
   }
 }
 ```
 
-`runtime.defaultResumable` only applies when an agent definition omits `resumable`; explicit frontmatter and per-task overrides still win. `agentDiscovery.duplicateNamePolicy` controls which source wins when user and project agents share a runtime name.
+The `/subagents settings` view exposes the common controls: widget placement/layout, background notification mode, max running subagents, max tasks per run, default resumable behavior, retained-session widget visibility, and widget rows per section. Advanced discovery and truncation settings remain file-only.
+
+`runtime.defaultResumable` only applies when an agent definition omits `resumable`; explicit frontmatter and per-task overrides still win. `runtime.maxConcurrentSubagents` is a tree-wide running cap across recursive subagents; `runtime.maxTasksPerRun` limits how many tasks one `run` call can submit. `agentDiscovery.duplicateNamePolicy` controls which source wins when user and project agents share a runtime name.
 
 `runtime.backgroundNotify` controls how the parent agent is told a background subagent finished:
 
