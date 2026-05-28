@@ -1,13 +1,22 @@
 {
   "name": "@pi9/subagent",
   "version": "0.1.0",
-  "description": "Pi extension that adds subagent delegation, progress UI, and session management.",
+  "description": "Pi extension that adds subagent delegation.",
+  "license": "MIT",
+  "author": "Chase Cummings <chaseecummings@gmail.com>",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chase-C/pi9_subagent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Chase-C/pi9_subagent/issues"
+  },
+  "homepage": "https://github.com/Chase-C/pi9_subagent#readme",
   "files": [
     "src",
-    "agents",
     "README.md"
   ],
   "keywords": [
@@ -16,10 +25,17 @@
     "pi9",
     "subagent"
   ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "typecheck": "tsc",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
   "pi": {
     "extensions": [
@@ -32,16 +48,17 @@
     "jiti": "^2.7.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-ai": "^0.76.0",
+    "@earendil-works/pi-coding-agent": "^0.76.0",
+    "@earendil-works/pi-tui": "^0.76.0",
+    "typebox": "^1.1.38"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*",
+    "@earendil-works/pi-ai": "^0.76.0",
+    "@earendil-works/pi-coding-agent": "^0.76.0",
+    "@earendil-works/pi-tui": "^0.76.0",
+    "typebox": "^1.1.38",
+    "typescript": "~6.0.3",
     "vitest": "^4.1.6"
   }
 }

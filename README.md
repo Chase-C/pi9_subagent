@@ -17,18 +17,16 @@ What's distinctive about this package:
 
 ```bash
 npm install
-npm run build --workspace=@pi9/subagent
-pi install ./packages/subagent
+pi install .
 ```
 
 For quick testing without installing:
 
 ```bash
-npm run build --workspace=@pi9/subagent
-pi -e ./packages/subagent
+pi -e .
 ```
 
-After edits, rebuild the package and reload Pi if needed.
+After edits, reload Pi — it runs the TypeScript in `src/` directly, so there's no build step.
 
 ## Agent discovery
 
@@ -250,9 +248,9 @@ While a `run` is executing, the tool row shows one line per child with status, a
 
 ```text
   ⠋ reviewer  auth review · 2 turns · 18420 tokens · 37s
-    ⠋ bash npm test --workspace=@pi9/subagent · 12s
-    ✓ grep "formatRunSessionLine" in packages/subagent/src · 1s
-    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s
+    ⠋ bash npm test · 12s
+    ✓ grep "formatRunSessionLine" in src · 1s
+    ✓ read src/view/tool-result-lines.ts · 0s
     +2 additional tool calls
 ```
 
