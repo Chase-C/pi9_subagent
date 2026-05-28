@@ -20,8 +20,9 @@
     "README.md"
   ],
   "keywords": [
-    "pi-package",
     "pi",
+    "pi-extension",
+    "pi-package",
     "pi9",
     "subagent"
   ],
@@ -35,6 +36,10 @@
     "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "release": "node scripts/release.mjs",
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor",
+    "release:major": "node scripts/release.mjs major",
     "prepublishOnly": "npm run typecheck && npm test"
   },
   "pi": {
