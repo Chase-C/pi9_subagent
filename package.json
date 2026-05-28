@@ -1,13 +1,47 @@
 {
-  "name": "pi9",
-  "description": "A collection of plugins for the pi coding agent",
-  "private": true,
-  "workspaces": ["packages/*"],
+  "name": "@pi9/subagent",
+  "version": "0.1.0",
+  "description": "Pi extension that adds subagent delegation, progress UI, and session management.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "files": [
+    "src",
+    "agents",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi9",
+    "subagent"
+  ],
   "scripts": {
-    "build": "tsc --build",
-    "clean": "tsc --build --clean"
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [],
+    "prompts": []
+  },
+  "dependencies": {
+    "jiti": "^2.7.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "devDependencies": {
-    "typescript": "^5.9.0"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*",
+    "vitest": "^4.1.6"
   }
 }
