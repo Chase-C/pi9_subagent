@@ -8,10 +8,13 @@ import { baseCtx, makeManager } from "../helpers/runtime.js";
 test("parent finalizing with error cancels its non-background child via the observer", async () => {
   const aborts: string[] = [];
   const childFlag = { aborted: false };
+  let releaseParent!: () => void;
+  const parentHold = new Promise<void>(r => { releaseParent = r; });
   const runner = async (_ctx: any, agent: any) => {
     if (agent.spawn.prompt === "parent") {
-      // Parent finalizes with error after the child is attached.
-      await new Promise(r => setTimeout(r, 20));
+      // Parent finalizes with error only once the test releases it, so the
+      // child is deterministically still running at the assertion below.
+      await parentHold;
       throw new Error("parent boom");
     }
     agent.attach({
@@ -48,7 +51,8 @@ test("parent finalizing with error cancels its non-background child via the obse
     "running",
   );
 
-  // Wait for parent to error and observer to fan out.
+  // Release the parent so it errors and the observer fans out cancellation.
+  releaseParent();
   const [parentResult] = (await parentBatch.resultsPromise).map(toResult);
   const [childResult] = (await childBatch.resultsPromise).map(toResult);
 
