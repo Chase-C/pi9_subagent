@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { createSubagentResumeMessage } from "../../src/view/resume-message.js";
+import { createSubagentResumeMessage, formatSubagentResumeMessageRender } from "../../src/view/resume-message.js";
 
 const longOutput = `done ${"x".repeat(1500)} secret-tail`;
 const longPrompt = `follow up ${"y".repeat(300)} prompt-tail`;
@@ -37,4 +37,31 @@ test("subagent resume message truncates both prompt and output in the displayed 
 test("subagent resume message preserves the full result in details for structured consumers", () => {
   const message = makeMessage();
   assert.equal((message.details.result as { output: string }).output, longOutput);
+});
+
+test("subagent resume renderer colors status and keeps collapsed output compact", () => {
+  const message = makeMessage();
+  const rendered = formatSubagentResumeMessageRender(
+    message.details,
+    false,
+    { fg: (color: string, text: string) => `<${color}>${text}</${color}>` },
+  );
+
+  assert.match(rendered, /Subagent resume completed · helper · <success>completed<\/success> · session s1/);
+  assert.doesNotMatch(rendered, /\n/);
+  assert.equal(rendered.includes("secret-tail"), false);
+});
+
+test("subagent resume renderer expands to labeled detail lines", () => {
+  const message = createSubagentResumeMessage({
+    agent: "helper",
+    prompt: "try another approach",
+    status: "error",
+    error: "boom",
+    sessionId: "s2",
+  });
+
+  const rendered = formatSubagentResumeMessageRender(message.details, true, { fg: (_color: string, text: string) => text });
+
+  assert.match(rendered, /^Subagent resume finished\nagent: helper\nstatus: error\nsession: s2\nprompt: try another approach\nerror: boom$/);
 });

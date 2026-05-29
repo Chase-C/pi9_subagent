@@ -12,7 +12,7 @@ import { registerSubagentLifecycleEvents } from "./runtime/lifecycle-events.js";
 import { prepareSubagentRuntime } from "./runtime/prepare-subagent-runtime.js";
 import { registerSubagentsCommand } from "./command/register.js";
 import { formatBackgroundCompletionMessage } from "./view/background-completion-message.js";
-import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
+import { formatSubagentResumeMessageContent, formatSubagentResumeMessageRender } from "./view/resume-message.js";
 
 
 interface SubagentExtensionDependencies {
@@ -45,10 +45,13 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
     currentSettings = settings;
   });
   try {
-    pi.registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
-      const content = typeof message.content === "string"
-        ? message.content
-        : formatSubagentResumeMessageContent(message.details as any, currentSettings.display);
+    pi.registerMessageRenderer?.("subagent-resume", (message, options, theme) => {
+      const details = message.details as any;
+      const content = details && typeof details === "object"
+        ? formatSubagentResumeMessageRender(details, Boolean(options?.expanded), theme, currentSettings.display)
+        : typeof message.content === "string"
+          ? message.content
+          : formatSubagentResumeMessageContent(details, currentSettings.display);
       return new Text(theme?.fg ? theme.fg("customMessageText", content) : content, 0, 0);
     });
   } catch { }

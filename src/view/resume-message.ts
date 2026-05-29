@@ -1,3 +1,5 @@
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
 import { compact } from "./view-helpers.js";
 
@@ -65,4 +67,49 @@ export function formatSubagentResumeMessageContent(
   if (details.outputSnippet) parts.push(`output: ${compact(details.outputSnippet, display.resumeMessageSnippetLength)}`);
   if (details.errorSnippet) parts.push(`error: ${compact(details.errorSnippet, display.resumeMessageSnippetLength)}`);
   return parts.join(" · ");
+}
+
+export function formatSubagentResumeMessageRender(
+  details: SubagentResumeMessageDetails,
+  expanded: boolean,
+  theme: Pick<Theme, "fg"> | undefined,
+  display: SubagentDisplaySettings = DEFAULT_SUBAGENT_SETTINGS.display,
+): string {
+  const title = details.status === "completed" ? "Subagent resume completed" : "Subagent resume finished";
+  const status = colorResumeStatus(details.status, theme);
+  if (!expanded) {
+    const parts = [
+      title,
+      details.agent,
+      status,
+      `session ${details.sessionId}`,
+      `prompt: ${details.promptPreview}`,
+    ];
+    if (details.outputSnippet) parts.push(`output: ${compact(details.outputSnippet, display.resumeMessageSnippetLength)}`);
+    if (details.errorSnippet) parts.push(`error: ${compact(details.errorSnippet, display.resumeMessageSnippetLength)}`);
+    return parts.join(" · ");
+  }
+
+  const lines = [
+    title,
+    `agent: ${details.agent}`,
+    `status: ${status}`,
+    `session: ${details.sessionId}`,
+    `prompt: ${details.promptPreview}`,
+  ];
+  if (details.outputSnippet) lines.push(`output: ${compact(details.outputSnippet, display.resumeMessageSnippetLength)}`);
+  if (details.errorSnippet) lines.push(`error: ${compact(details.errorSnippet, display.resumeMessageSnippetLength)}`);
+  return lines.join("\n");
+}
+
+function colorResumeStatus(status: string, theme: Pick<Theme, "fg"> | undefined): string {
+  const color = resumeStatusColor(status);
+  return typeof theme?.fg === "function" ? theme.fg(color, status) : status;
+}
+
+function resumeStatusColor(status: string): ThemeColor {
+  if (status === "completed") return "success";
+  if (status === "error") return "error";
+  if (status === "aborted" || status === "interrupted") return "warning";
+  return "dim";
 }
