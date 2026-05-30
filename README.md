@@ -2,29 +2,49 @@
 
 A Pi package that adds subagent delegation: a single `subagent` tool the main agent uses to spawn isolated child `AgentSession`s, watch their progress live, and pick up where they left off. Reach for it when work would crowd the parent conversation or benefits from an independent perspective — focused research, planning, review, bug investigation, test analysis, and implementation handoffs.
 
-### Install
+![A subagent run with nested children rendering live progress, tool calls, and per-child counters](media/subagent-running.png)
+
+## Highlights
+
+- **[Resumable sessions](#resumable-sessions)** let the parent send follow-ups to the same child, which keeps its accumulated context across resumes instead of starting cold.
+- **[Background dispatch](#background-dispatch)** runs a batch without blocking, so the parent keeps working and is notified when children finish.
+- **[Recursive subagents](#recursive-subagents)** spawn their own children, and the parent sees the whole tree as one run under a single shared concurrency limit.
+- A **[single tool](#the-subagent-tool)** lists, spawns, resumes, collects, and cleans up, and its deliberately compact prompt won't bloat the parent's context.
+- **[Live, observable runs](#live-display)** show per-child status, turns, tokens, and tool calls in the tool row and a dockable widget, while lifecycle events and a persistent session index keep each one inspectable after it finishes.
+- **[Zero-code configuration](#settings)** puts concurrency, notifications, discovery, and layout in settings, with sensible defaults.
+
+## Install
 
 ```bash
 pi install npm:@pi9/subagent
 ```
 
-## Highlights
+## Quick start
 
-- **Resumable sessions** let the parent send follow-ups to the same child, which keeps its accumulated context across resumes instead of starting cold.
-- **Background dispatch** runs a batch without blocking, so the parent keeps working and is notified when children finish.
-- **Recursive subagents** spawn their own children, and the parent sees the whole tree as one run under a single shared concurrency limit.
-- A **single tool** lists, spawns, resumes, collects, and cleans up, and its deliberately compact prompt won't bloat the parent's context.
-- **Live, observable runs** show per-child status, turns, tokens, and tool calls in the tool row and a dockable widget, while lifecycle events and a persistent session index keep each one inspectable after it finishes.
-- **Zero-code configuration** puts concurrency, notifications, discovery, and layout in settings, with sensible defaults.
+1. **Install** the package (above).
+2. **Define an agent** — drop a markdown file in `.pi/agents/` (see [Define agents](#define-agents) for the full frontmatter):
 
-## Agent discovery
+```markdown
+---
+name: scout
+description: Read-only codebase reconnaissance
+model: anthropic/claude-sonnet-4
+tools: read, bash
+---
 
-Agents are markdown files discovered from:
+You are a fast codebase scout. Return concise, evidence-backed findings with file paths.
+```
 
-1. User `${PI_AGENT_DIR ?? ~/.pi/agent}/agents`.
-2. The nearest project `.pi/agents`, found by walking up from the tool's `cwd`.
+3. **Delegate to it** from the main agent:
 
-Each file is registered by its frontmatter `name`, not by filename. Project agents override user agents with the same name.
+```ts
+subagent({
+  action: "run",
+  tasks: [{ agent: "scout", prompt: "Find the auth entry points and summarize the relevant files." }]
+})
+```
+
+4. **Watch it run** live in the tool row and the progress widget, then collect the result when it finishes.
 
 ## Define agents
 
@@ -56,6 +76,15 @@ Supported frontmatter:
 | `resumable` | no | Boolean. When `true`, the session is retained after completion or failure and can be resumed with a follow-up prompt. Retention lasts for the current Pi process only — restart or extension reload releases it. |
 
 The markdown body is trimmed and used as the child's system prompt.
+
+## Agent discovery
+
+Agents are markdown files discovered from:
+
+1. User `${PI_AGENT_DIR ?? ~/.pi/agent}/agents`.
+2. The nearest project `.pi/agents`, found by walking up from the tool's `cwd`.
+
+Each file is registered by its frontmatter `name`, not by filename. Project agents override user agents with the same name.
 
 ## Resumable sessions
 
