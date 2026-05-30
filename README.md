@@ -2,26 +2,20 @@
 
 A Pi package that adds subagent delegation: a single `subagent` tool the main agent uses to spawn isolated child `AgentSession`s, watch their progress live, and pick up where they left off. Reach for it when work would crowd the parent conversation or benefits from an independent perspective — focused research, planning, review, bug investigation, test analysis, and implementation handoffs.
 
-## Highlights
-
-- **Resumable sessions** — send follow-ups to the same child, which keeps its accumulated context across resumes instead of starting cold.
-- **Background dispatch** — fire off a batch, keep working, and get notified when children finish.
-- **Recursive subagents** — children spawn their own children; the parent renders the whole tree as one run under a single shared concurrency limit.
-- **One tool, small footprint** — a single call lists, spawns, resumes, collects, and cleans up, with a deliberately compact prompt that won't bloat the parent's context.
-- **Visible and observable** — per-child status, turns, tokens, and tool calls live in the tool row and a dockable widget; lifecycle events and a persistent session index keep every run inspectable after it finishes.
-- **Configurable without code** — concurrency, notifications, discovery, and layout are all settings with sensible defaults.
-
-## Install
+### Install
 
 ```bash
 pi install npm:@pi9/subagent
 ```
 
-For quick testing without installing (in this repo):
+## Highlights
 
-```bash
-pi -e .
-```
+- **Resumable sessions** let the parent send follow-ups to the same child, which keeps its accumulated context across resumes instead of starting cold.
+- **Background dispatch** runs a batch without blocking, so the parent keeps working and is notified when children finish.
+- **Recursive subagents** spawn their own children, and the parent sees the whole tree as one run under a single shared concurrency limit.
+- A **single tool** lists, spawns, resumes, collects, and cleans up, and its deliberately compact prompt won't bloat the parent's context.
+- **Live, observable runs** show per-child status, turns, tokens, and tool calls in the tool row and a dockable widget, while lifecycle events and a persistent session index keep each one inspectable after it finishes.
+- **Zero-code configuration** puts concurrency, notifications, discovery, and layout in settings, with sensible defaults.
 
 ## Agent discovery
 
