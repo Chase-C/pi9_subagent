@@ -6,12 +6,12 @@ A Pi package that adds subagent delegation: a single `subagent` tool the main ag
 
 ## Highlights
 
-- **[Resumable sessions](#resumable-sessions)** let the parent send follow-ups to the same child, which keeps its accumulated context across resumes instead of starting cold.
-- **[Background dispatch](#background-dispatch)** runs a batch without blocking, so the parent keeps working and is notified when children finish.
-- **[Recursive subagents](#recursive-subagents)** spawn their own children, and the parent sees the whole tree as one run under a single shared concurrency limit.
-- A **[single tool](#the-subagent-tool)** lists, spawns, resumes, collects, and cleans up, and its deliberately compact prompt won't bloat the parent's context.
-- **[Live, observable runs](#live-display)** show per-child status, turns, tokens, and tool calls in the tool row and a dockable widget, while lifecycle events and a persistent session index keep each one inspectable after it finishes.
-- **[Zero-code configuration](#settings)** puts concurrency, notifications, discovery, and layout in settings, with sensible defaults.
+- **Resumable sessions** let the parent send follow-ups to the same child, which keeps its accumulated context across resumes instead of starting cold.
+- **Background dispatch** runs a batch without blocking, so the parent keeps working and is notified when children finish.
+- **Recursive subagents** spawn their own children, and the parent sees the whole tree as one run under a single shared concurrency limit.
+- A **single tool** lists, spawns, resumes, collects, and cleans up, and its deliberately compact prompt won't bloat the parent's context.
+- **Live, observable runs** show per-child status, turns, tokens, and tool calls in the tool row and a dockable widget, while lifecycle events and a persistent session index keep each one inspectable after it finishes.
+- **Zero-code configuration** puts concurrency, notifications, discovery, and layout in settings, with sensible defaults.
 
 ## Install
 
@@ -35,7 +35,11 @@ tools: read, bash
 You are a fast codebase scout. Return concise, evidence-backed findings with file paths.
 ```
 
-3. **Delegate to it** from the main agent:
+3. **Delegate to it** — just ask the main agent in plain language:
+
+> Run a scout subagent to find the auth entry points and summarize the relevant files.
+
+The agent translates that into a `subagent` tool call:
 
 ```ts
 subagent({
