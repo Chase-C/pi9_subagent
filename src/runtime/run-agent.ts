@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -102,6 +102,7 @@ export async function RunAttempt(
   if (signal?.aborted) return skippedRun(agent);
 
   const selectedModel = SelectModel(agent.spawn.model ?? agent.config.model, ctx.model, ctx.modelRegistry);
+  const requestedThinking = agent.spawn.thinking ?? agent.config.thinking;
   const sessionManager = dependencies.sessionManager(cwd);
   const settingsManager = dependencies.settingsManager(cwd, agentDir);
   const { session } = await timingAsync("runAgent.createAgentSession", { ...runData, cwd, model: selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : undefined }, () => dependencies.createAgentSession({
@@ -109,13 +110,27 @@ export async function RunAttempt(
     agentDir,
     resourceLoader,
     model: selectedModel,
-    thinkingLevel: agent.spawn.thinking ?? agent.config.thinking,
+    thinkingLevel: requestedThinking,
     modelRegistry: ctx.modelRegistry,
     tools: agent.config.tools,
     customTools: childTool ? [childTool] : [],
     sessionManager,
     settingsManager,
   }));
+
+  const effectiveModel = session.model ?? selectedModel;
+  const effectiveThinking = session.thinkingLevel ?? requestedThinking;
+  const activeTools = typeof session.getActiveToolNames === "function"
+    ? session.getActiveToolNames()
+    : agent.config.tools ?? [];
+  agent.setEffectiveConfig({
+    ...(effectiveModel ? { model: `${effectiveModel.provider}/${effectiveModel.id}` } : {}),
+    ...(effectiveThinking ? { thinking: effectiveThinking as ModelThinkingLevel } : {}),
+    cwd,
+    skills: requestedSkills,
+    tools: activeTools,
+    resumable: agent.resumableEnabled,
+  });
 
   if (signal?.aborted) {
     await AbortSession(session);

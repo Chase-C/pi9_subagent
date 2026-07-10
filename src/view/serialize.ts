@@ -37,3 +37,44 @@ export function serializeAgentConfig(config: AgentConfig) {
 export function listAgentDefinitions(agentRegistry: AgentRegistry) {
   return Array.from(agentRegistry.agents.values()).map(serializeAgentConfig);
 }
+
+export function listAgentDefinitionsForModel(agentRegistry: AgentRegistry) {
+  return listAgentDefinitions(agentRegistry).map(({ resumable, ...agent }) => ({
+    ...agent,
+    defaultResumable: resumable,
+  }));
+}
+
+export function serializeInventoryForModel(sessions: AgentSnapshot[], filter?: { status?: string[] }) {
+  return {
+    view: "inventory" as const,
+    sessions: sessions.map(serializeSessionForModel),
+    ...(filter ? { filter } : {}),
+  };
+}
+
+function serializeSessionForModel(session: AgentSnapshot) {
+  const { capabilities, ...snapshot } = session;
+  return {
+    ...snapshot,
+    status: serializeStatusForModel(session.status),
+    ...(session.previousRuns
+      ? {
+          previousRuns: session.previousRuns.map(run => ({
+            ...run,
+            status: serializeStatusForModel(run.status),
+          })),
+        }
+      : {}),
+    capabilities: {
+      canResume: capabilities.canResume,
+      canRemove: true,
+    },
+  };
+}
+
+function serializeStatusForModel(status: AgentSnapshot["status"]) {
+  if (status.kind !== "done") return status;
+  const { kind: _kind, outcome, ...terminal } = status;
+  return { ...terminal, kind: outcome };
+}

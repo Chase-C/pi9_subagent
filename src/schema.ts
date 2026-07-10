@@ -1,21 +1,32 @@
 import { StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 
+export const MODEL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+
 export const TaskSchema = Type.Object({
-  agent: Type.Optional(Type.String({ description: "Agent name for a new spawn. Mutually exclusive with sessionId." })),
-  sessionId: Type.Optional(Type.String({ description: "Retained session to resume. Mutually exclusive with agent." })),
-  prompt: Type.String({ description: "Self-contained task/follow-up: objective, relevant files/dirs, known facts, constraints, expected output." }),
+  agent: Type.Optional(Type.String({
+    minLength: 1,
+    description: "Spawn: agent name; mutually exclusive with sessionId.",
+  })),
+  sessionId: Type.Optional(Type.String({
+    minLength: 1,
+    description: "Resume: retained session ID; mutually exclusive with agent.",
+  })),
+  prompt: Type.String({
+    minLength: 1,
+    description: "Self-contained task or follow-up: goal, relevant context/files, constraints, and expected output.",
+  }),
   label: Type.Optional(Type.String({
-    description: "Display label for widgets/logs."
+    description: "Display label for UI/logs.",
   })),
   resumable: Type.Optional(Type.Boolean({
-    description: "Keep/discard session after completion."
+    description: "Override conversation follow-ups. true retains context; false releases it after this attempt (foreground sessions then leave inventory).",
   })),
-  model: Type.Optional(Type.String({ description: "Model override." })),
-  thinking: Type.Optional(Type.String({ description: "Thinking override." })),
-  cwd: Type.Optional(Type.String({ description: "Subagent working directory." })),
-  skills: Type.Optional(Type.Array(Type.String(), {
-    description: "Skill names to inject; replaces agent defaults ([] disables)."
+  model: Type.Optional(Type.String({ minLength: 1, description: "Spawn-only model override." })),
+  thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS, { description: "Spawn-only thinking override." })),
+  cwd: Type.Optional(Type.String({ minLength: 1, description: "Spawn-only working directory." })),
+  skills: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
+    description: "Spawn-only skills; replaces defaults ([] disables).",
   })),
 });
 
@@ -24,20 +35,28 @@ export const SESSION_STATUSES = ["queued", "running", "completed", "error", "abo
 export const REMOVAL_SCOPES = ["background", "retained", "non-running"] as const;
 
 export const SubagentParams = Type.Object({
-  action: StringEnum(SUBAGENT_ACTIONS, { description: "Action to perform." }),
-  tasks: Type.Optional(Type.Array(TaskSchema, { description: "Tasks for action=run. Multiple tasks run concurrently — they must not write to overlapping files." })),
+  action: StringEnum(SUBAGENT_ACTIONS, {
+    description: "agents=definitions; list=sessions; run=spawn/resume; results=fetch; remove=delete or abort.",
+  }),
+  tasks: Type.Optional(Type.Array(TaskSchema, {
+    minItems: 1,
+    description: "For run. One or more spawn/resume tasks. Tasks execute concurrently; do not assign overlapping file writes.",
+  })),
   background: Type.Optional(Type.Boolean({
-    description: "For action=run. Return immediately; fetch later with action=results. Use only when results are not needed next.",
+    description: "For run. false (default) waits for all tasks and returns results; true returns handles immediately. Background results remain retrievable until removed, regardless of resumable.",
   })),
   status: Type.Optional(Type.Array(StringEnum(SESSION_STATUSES), {
-    description: "Filter list by status.",
+    description: "For list. Session statuses to include.",
   })),
-  sessionIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "Session ids for action=remove or action=results." })),
+  sessionIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
+    minItems: 1,
+    description: "For results/remove. Session handles returned by background dispatch, results, or resumable runs.",
+  })),
   scope: Type.Optional(StringEnum(REMOVAL_SCOPES, {
-    description: "Removal scope for action=remove.",
+    description: "For remove. background=all background sessions; retained=non-running resumable foreground sessions; non-running=all queued or terminal sessions. Mutually exclusive with sessionIds.",
   })),
   remove: Type.Optional(Type.Boolean({
-    description: "Remove terminal sessions when fetching results.",
+    description: "For results. Remove terminal sessions after returning them.",
   })),
 });
 
@@ -46,6 +65,10 @@ export type SessionStatus = typeof SESSION_STATUSES[number];
 
 export function isSessionStatus(value: unknown): value is SessionStatus {
   return typeof value === "string" && (SESSION_STATUSES as readonly string[]).includes(value);
+}
+
+export function isModelThinkingLevel(value: unknown): value is ModelThinkingLevel {
+  return typeof value === "string" && (MODEL_THINKING_LEVELS as readonly string[]).includes(value);
 }
 
 export type TaskRequest =
@@ -119,8 +142,8 @@ export function parseTask(raw: unknown): ParsedTask {
     if (task.model !== undefined && typeof task.model !== "string") {
       return { error: "Task model must be a string when present." };
     }
-    if (task.thinking !== undefined && typeof task.thinking !== "string") {
-      return { error: "Task thinking must be a string when present." };
+    if (task.thinking !== undefined && !isModelThinkingLevel(task.thinking)) {
+      return { error: `Task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.` };
     }
     if (task.cwd !== undefined && typeof task.cwd !== "string") {
       return { error: "Task cwd must be a string when present." };

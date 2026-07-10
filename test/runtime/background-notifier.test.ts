@@ -29,7 +29,7 @@ interface FakeCtx {
 interface FakePi extends NotifierPi {
   fireAgentEnd: () => void;
   fireTurnEnd: () => void;
-  fireToolExecutionStart: () => void;
+  fireToolExecutionStart: (event?: unknown) => void;
   fireSessionStart: (ctx: FakeCtx) => void;
   fireSessionShutdown: () => void;
   sent: SentMessage[];
@@ -62,8 +62,8 @@ function fakePi(): FakePi {
     fireTurnEnd() {
       for (const h of handlers.turnEnd) h({}, currentCtx);
     },
-    fireToolExecutionStart() {
-      for (const h of handlers.toolStart) h({}, currentCtx);
+    fireToolExecutionStart(event = {}) {
+      for (const h of handlers.toolStart) h(event, currentCtx);
     },
     fireSessionStart(ctx: FakeCtx) {
       currentCtx = ctx;
@@ -313,6 +313,75 @@ test("BackgroundNotifier in auto mode defers send while ctx.isIdle() is false, t
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
   assert.equal(retry.pending(), 0, "no further retries pending");
 
+  notifier.unsubscribe();
+});
+
+test("BackgroundNotifier drops a queued completion when its session is removed before dispatch", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const retry = manualRetry();
+  let idle = false;
+  const notifier = new BackgroundNotifier({
+    pi,
+    manager,
+    getMode: () => "auto",
+    scheduleRetry: retry.schedule,
+  });
+
+  pi.fireSessionStart({ isIdle: () => idle });
+  const sessionId = await runBackgroundOne(manager);
+  assert.equal(retry.pending(), 1);
+
+  await manager.remove({ sessionIds: [sessionId] });
+  idle = true;
+  retry.flushOne();
+
+  assert.equal(pi.sent.length, 0, "removed sessions must not produce stale retrieval instructions");
+  notifier.unsubscribe();
+});
+
+test("BackgroundNotifier drops a queued completion after results retrieves it", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const retry = manualRetry();
+  let idle = false;
+  const notifier = new BackgroundNotifier({
+    pi,
+    manager,
+    getMode: () => "auto",
+    scheduleRetry: retry.schedule,
+  });
+
+  pi.fireSessionStart({ isIdle: () => idle });
+  const sessionId = await runBackgroundOne(manager);
+  assert.equal(retry.pending(), 1);
+
+  const [entry] = manager.backgroundResults([sessionId]);
+  assert.ok("snapshot" in entry && entry.snapshot.status.kind === "done");
+  idle = true;
+  retry.flushOne();
+
+  assert.equal(pi.sent.length, 0, "retrieved results acknowledge pending completion notifications");
+  notifier.unsubscribe();
+});
+
+test("BackgroundNotifier suppresses results-targeted completions before a steer flush", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "steer" });
+
+  const retrievedId = await runBackgroundOne(manager, "retrieved");
+  const pendingId = await runBackgroundOne(manager, "pending");
+
+  pi.fireToolExecutionStart({
+    type: "tool_execution_start",
+    toolName: "subagent",
+    args: { action: "results", sessionIds: [retrievedId] },
+  });
+
+  assert.equal(pi.sent.length, 1, "the unrelated completion still triggers a steer notification");
+  assert.doesNotMatch(pi.sent[0].content ?? "", new RegExp(retrievedId));
+  assert.match(pi.sent[0].content ?? "", new RegExp(pendingId));
   notifier.unsubscribe();
 });
 
@@ -602,6 +671,7 @@ test("BackgroundNotifier notifies again when a background session resumes and co
   pi.fireAgentEnd();
   assert.equal(pi.sent.length, 1);
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+  manager.backgroundResults([sessionId]);
 
   const resumed = manager.startRun(
     baseCtx(),

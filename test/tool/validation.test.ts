@@ -22,11 +22,19 @@ test("subagent extension still registers the tool when custom resume renderer re
   assert.equal(registeredTool.name, "subagent");
 });
 
-test("subagent tool registers a non-empty description", () => {
+test("subagent tool registers concise prompt metadata", () => {
   const tool = registerExtension();
 
-  assert.equal(typeof tool.description, "string");
-  assert.ok(tool.description.length > 0);
+  assert.equal(
+    tool.description,
+    "Manage isolated subagent sessions: discover agents, spawn or resume tasks, list sessions, fetch results, and remove sessions.",
+  );
+  assert.equal(tool.promptSnippet, "Delegate bounded work to isolated subagents");
+  assert.deepEqual(tool.promptGuidelines, [
+    "Use subagent for user-requested delegation or bounded specialist, independent, parallel, or context-heavy work.",
+    "Skip subagent when direct work is only a few tool calls or its output would need to be redone.",
+    "Use subagent action=agents before the first spawn unless the user named an agent or available agents are already known.",
+  ]);
 });
 
 test("tool execution requires action", async () => {

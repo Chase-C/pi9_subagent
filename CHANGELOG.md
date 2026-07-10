@@ -1,8 +1,30 @@
 # Changelog
 
-This changelog starts with changes made after the last released tag, `v0.1.1`.
+This changelog starts with version `v0.2.1`.
 
-## [Unreleased] - 2026-05-29
+## [Unreleased]
+
+### Added
+
+- Add concise tool metadata and delegation guidance for deciding when and how to use subagents.
+- Add dedicated model-facing projections for agent discovery and session inventory.
+- Expose resolved model, thinking, working directory, skills, tools, and resumability as `effectiveConfig` in results and inventory.
+
+### Changed
+
+- Streamline the tool description and move action mechanics into the provider-compatible schema.
+- Clarify foreground/background behavior, result retention, conversation resumability, session IDs, and removal scopes.
+- Report agent defaults as `defaultResumable` and normalize model-facing statuses and capabilities.
+- Hide sessions from inventory as soon as removal begins.
+- Update the release script to create dated changelog sections and include their entries in GitHub Release notes.
+
+### Fixed
+
+- Suppress stale background notifications after removal, result retrieval, or the start of a matching `results` call.
+- Improve errors for follow-ups to non-resumable sessions.
+- Reject empty task and session arrays, empty identifiers and overrides, and unsupported thinking levels.
+
+## [0.2.1] - 2026-07-09
 
 ### Added
 
@@ -30,4 +52,5 @@ This changelog starts with changes made after the last released tag, `v0.1.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9_subagent/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9_subagent/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Chase-C/pi9_subagent/compare/v0.1.1...v0.2.1

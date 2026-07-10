@@ -133,6 +133,50 @@ test("run-agent forwards configured tools allowlist to createAgentSession", asyn
   assert.deepEqual(createOptions.tools, ["read", "grep"]);
 });
 
+test("run-agent records the complete resolved effective config in snapshots and results", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-effective-config-"));
+  const selectedModel = { provider: "test", id: "child-model" } as any;
+  const session = {
+    model: selectedModel,
+    thinkingLevel: "high",
+    getActiveToolNames: () => ["read", "subagent"],
+    messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+    subscribe: () => () => {},
+    prompt: async () => {},
+    abort: () => {},
+  };
+  const dependencies = makeBaseDeps({ createAgentSession: async () => ({ session }) });
+  const agent = new Agent(
+    "id",
+    { ...baseConfig, tools: ["read"], skills: ["default-skill"] },
+    {
+      kind: "spawn",
+      agent: "helper",
+      prompt: "work",
+      model: "test/child-model",
+      thinking: "high",
+      cwd: "nested",
+      skills: [],
+      resumable: true,
+    },
+    noop,
+  );
+  const ctx = { cwd: root, modelRegistry: { getAll: () => [selectedModel] } } as any;
+
+  const result = toResult(await RunAttempt(ctx, agent, agent.requireCurrentAttempt(), undefined, dependencies));
+
+  const effectiveConfig = {
+    model: "test/child-model",
+    thinking: "high",
+    cwd: join(root, "nested"),
+    skills: [],
+    tools: ["read", "subagent"],
+    resumable: true,
+  };
+  assert.deepEqual(result.effectiveConfig, effectiveConfig);
+  assert.deepEqual(agent.snapshot().effectiveConfig, effectiveConfig);
+});
+
 test("run-agent marks running parent cancellation as interrupted", async () => {
   const controller = new AbortController();
   let abortCalls = 0;

@@ -1,5 +1,5 @@
 import { getQueuedAt, getStartedAt } from "./agent-decisions.js";
-import type { AgentSnapshot } from "./agent-snapshot.js";
+import type { AgentEffectiveConfig, AgentSnapshot } from "./agent-snapshot.js";
 
 export type AgentRunStatus =
   | "completed"
@@ -17,6 +17,7 @@ export interface AgentResult {
   output?: string;
   error?: string;
   model?: string;
+  effectiveConfig?: AgentEffectiveConfig;
   sessionId?: string;
   resumable: boolean;
   resumed: boolean;
@@ -43,6 +44,7 @@ export function toResult(snapshot: AgentSnapshot): AgentResult {
     ...(done?.output !== undefined ? { output: done.output } : {}),
     ...(done?.error !== undefined ? { error: done.error } : {}),
     ...(snapshot.config.model !== undefined ? { model: snapshot.config.model } : {}),
+    ...(snapshot.effectiveConfig ? { effectiveConfig: snapshot.effectiveConfig } : {}),
     ...(resumable ? { sessionId: snapshot.id } : {}),
     resumable,
     resumed: Boolean(done?.resumed),
