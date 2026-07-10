@@ -316,6 +316,55 @@ test("BackgroundNotifier in auto mode defers send while ctx.isIdle() is false, t
   notifier.unsubscribe();
 });
 
+test("BackgroundNotifier drops a queued completion when its session is removed before dispatch", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const retry = manualRetry();
+  let idle = false;
+  const notifier = new BackgroundNotifier({
+    pi,
+    manager,
+    getMode: () => "auto",
+    scheduleRetry: retry.schedule,
+  });
+
+  pi.fireSessionStart({ isIdle: () => idle });
+  const sessionId = await runBackgroundOne(manager);
+  assert.equal(retry.pending(), 1);
+
+  await manager.remove({ sessionIds: [sessionId] });
+  idle = true;
+  retry.flushOne();
+
+  assert.equal(pi.sent.length, 0, "removed sessions must not produce stale retrieval instructions");
+  notifier.unsubscribe();
+});
+
+test("BackgroundNotifier drops a queued completion after results retrieves it", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const retry = manualRetry();
+  let idle = false;
+  const notifier = new BackgroundNotifier({
+    pi,
+    manager,
+    getMode: () => "auto",
+    scheduleRetry: retry.schedule,
+  });
+
+  pi.fireSessionStart({ isIdle: () => idle });
+  const sessionId = await runBackgroundOne(manager);
+  assert.equal(retry.pending(), 1);
+
+  const [entry] = manager.backgroundResults([sessionId]);
+  assert.ok("snapshot" in entry && entry.snapshot.status.kind === "done");
+  idle = true;
+  retry.flushOne();
+
+  assert.equal(pi.sent.length, 0, "retrieved results acknowledge pending completion notifications");
+  notifier.unsubscribe();
+});
+
 test("BackgroundNotifier drops pending auto notification if mode flips to none before retry sees idle", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
@@ -602,6 +651,7 @@ test("BackgroundNotifier notifies again when a background session resumes and co
   pi.fireAgentEnd();
   assert.equal(pi.sent.length, 1);
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+  manager.backgroundResults([sessionId]);
 
   const resumed = manager.startRun(
     baseCtx(),

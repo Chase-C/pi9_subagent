@@ -105,6 +105,14 @@ test("subagent tool action=list with an unknown status value returns the unknown
 
 test("subagent tool action=list with no filter returns retained sessions tagged kind: retained", async () => {
   const runner = async (_ctx: any, agent: any, _attempt: any) => {
+    agent.setEffectiveConfig({
+      model: "test/model",
+      thinking: "high",
+      cwd: "/work/project",
+      skills: ["review"],
+      tools: ["read"],
+      resumable: true,
+    });
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "The final answer from the child.");
   };
@@ -135,4 +143,17 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   assert.equal(retained.status.output, "The final answer from the child.");
   assert.equal(retained.dispatch, "foreground");
   assert.equal(retained.retention, "persistent");
+
+  const modelSession = JSON.parse(result.content[0].text).sessions[0];
+  assert.equal(modelSession.status.kind, "completed");
+  assert.equal(Object.prototype.hasOwnProperty.call(modelSession.status, "outcome"), false);
+  assert.equal(modelSession.status.output, "The final answer from the child.");
+  assert.deepEqual(modelSession.effectiveConfig, {
+    model: "test/model",
+    thinking: "high",
+    cwd: "/work/project",
+    skills: ["review"],
+    tools: ["read"],
+    resumable: true,
+  });
 });

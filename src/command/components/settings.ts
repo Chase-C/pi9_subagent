@@ -70,7 +70,7 @@ export class SubagentSettingsComponent implements Component {
         label: "Default resumable",
         currentValue: String(settings.runtime.defaultResumable),
         values: ["false", "true"],
-        description: "Default retention for agents that do not declare resumable in frontmatter. Per-task overrides still win.",
+        description: "Default conversation resumability when agent frontmatter omits it. Per-task overrides still win.",
       },
       {
         id: "widgetShowRetainedSessions",

@@ -547,7 +547,9 @@ test("AgentManager.remove with a running sessionId aborts the underlying session
   const runningId = manager.listSessions()[0].id;
   assert.equal(manager.listSessions()[0].status.kind, "running");
 
-  const result = await manager.remove({ sessionIds: [runningId] });
+  const removal = manager.remove({ sessionIds: [runningId] });
+  assert.deepEqual(manager.listSessions(), [], "sessions disappear from public inventory as removal begins");
+  const result = await removal;
   await pending;
 
   assert.equal(result.removed, 1);

@@ -23,6 +23,17 @@ test("TaskSchema accepts an optional skills string array and rejects non-string-
   assert.equal(Check(TaskSchema, { agent: "helper", skills: ["tdd", "review"], prompt: "do work" }), true);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", skills: "tdd" }), false);
   assert.equal(Check(TaskSchema, { agent: "helper", skills: [42], prompt: "do work" }), false);
+  assert.equal(Check(TaskSchema, { agent: "helper", skills: [""], prompt: "do work" }), false);
+});
+
+test("TaskSchema rejects empty strings and unsupported thinking levels", () => {
+  assert.equal(Check(TaskSchema, { agent: "", prompt: "do work" }), false);
+  assert.equal(Check(TaskSchema, { sessionId: "", prompt: "follow up" }), false);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "" }), false);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", model: "" }), false);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", cwd: "" }), false);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "extreme" }), false);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "xhigh" }), true);
 });
 
 test("parseTask classifies spawn vs resume by which key is present and preserves all fields", () => {
@@ -104,6 +115,12 @@ test("parseTask rejects skills entries that are not non-empty strings", () => {
   assert.match(notArray.error, /skills must be an array/);
 });
 
+test("parseTask rejects unsupported thinking levels", () => {
+  const result = parseTask({ agent: "helper", prompt: "p", thinking: "extreme" });
+  assert.ok("error" in result);
+  assert.match(result.error, /thinking must be one of/);
+});
+
 test("parseTask rejects a task carrying the batch-level background field", () => {
   const spawn = parseTask({ agent: "helper", prompt: "do work", background: true });
   assert.ok("error" in spawn);
@@ -120,12 +137,32 @@ test("SubagentParams accepts results action with sessionIds and optional remove 
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: false }), true);
 });
 
-test("SubagentParams rejects empty sessionId strings", () => {
+test("SubagentParams rejects empty task and session ID arrays", () => {
+  assert.equal(Check(SubagentParams, { action: "run", tasks: [] }), false);
+  assert.equal(Check(SubagentParams, { action: "results", sessionIds: [] }), false);
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: [""] }), false);
 });
 
 test("SubagentParams rejects results action when remove is not a boolean", () => {
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: "yes" }), false);
+});
+
+test("schema distinguishes result retention from conversation resumability", () => {
+  assert.equal(
+    (TaskSchema.properties.resumable as any).description,
+    "Override the agent default for conversation follow-ups; true retains context for later resume.",
+  );
+  assert.equal(
+    (SubagentParams.properties.background as any).description,
+    "For run. false (default) waits for all tasks and returns results; true returns handles immediately. Background results remain retrievable until removed, regardless of resumable.",
+  );
+});
+
+test("schema defines every remove scope", () => {
+  assert.equal(
+    (SubagentParams.properties.scope as any).description,
+    "For remove. background=all background sessions; retained=non-running resumable foreground sessions; non-running=all queued or terminal sessions. Mutually exclusive with sessionIds.",
+  );
 });
 
 test("SubagentParams constrains action, status, and scope values", () => {

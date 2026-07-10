@@ -77,7 +77,7 @@ Supported frontmatter:
 | `thinking` | no | Thinking level for the child session. |
 | `tools` | no | Comma-separated tool allowlist. If set, include `subagent` for agents that should be able to delegate recursively. |
 | `skills` | no | Comma-separated default skill names injected into the system prompt. Per-task `skills` replaces this list (no merge); use `none` or omit to declare none. |
-| `resumable` | no | Boolean. When `true`, the session is retained after completion or failure and can be resumed with a follow-up prompt. Retention lasts for the current Pi process only — restart or extension reload releases it. |
+| `resumable` | no | Boolean. When `true`, conversation context is retained for follow-up prompts. This is separate from background result retention. Resumability lasts for the current Pi process only — restart or extension reload releases it. |
 
 The markdown body is trimmed and used as the child's system prompt.
 
@@ -108,7 +108,7 @@ Retention lasts for the current Pi process only — restart or extension reload 
 
 ## Background dispatch
 
-Add `background: true` to a run and the call returns immediately with initial session views. Children keep running independently of the call that started them and stay visible in `list` until removed or collected, even if the agent isn't resumable.
+By default (`background: false`), a run waits for every task and returns their results. With `background: true`, the call returns session handles immediately while children continue independently. Background sessions stay available to `list` and `results` until removed, even when `resumable: false`; this result retention does not make their conversation context resumable.
 
 ```ts
 subagent({
@@ -202,17 +202,19 @@ The package emits `queued`, `started`, and `completed` lifecycle events on the h
 
 ## The `subagent` tool
 
-The tool takes one required `action`. The full parameter and result shapes live in `src/schema.ts` and are surfaced to the agent through the tool description; this is just the map of what each action does:
+The tool takes one required `action`. Its parameter shapes live in `src/schema.ts` and are surfaced to the agent through the tool schema; this is just the map of what each action does:
 
 | Action | What it does |
 | --- | --- |
-| `agents` | List configured agent definitions with their tools and default skills. |
+| `agents` | List configured agent definitions, including tools, default skills, and `defaultResumable`. |
 | `list` | List active and retained sessions; filter with `status`. |
 | `run` | Spawn (via `agent`) and/or resume (via `sessionId`) a `tasks` array. `background: true` dispatches non-blocking. |
 | `results` | Fetch results by `sessionIds` without blocking; `remove: true` sweeps terminal entries. |
 | `remove` | Remove sessions by `sessionIds` or `scope`; running ones are aborted. |
 
-Spawn tasks accept per-task overrides — `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable`. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`), plus a `sessionId` to resume when the result is resumable.
+Spawn tasks accept per-task overrides — `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable`. Agent discovery calls the configured default `defaultResumable` because a task can override it. Successful results and session inventory expose the resolved `effectiveConfig` (`model`, `thinking`, `cwd`, `skills`, `tools`, and `resumable`) for debugging overrides. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`), plus a `sessionId` to resume when the result is resumable.
+
+Removal scopes select: `background` for all background-dispatched sessions, `retained` for non-running resumable foreground sessions, and `non-running` for every queued or terminal session.
 
 ## Architecture
 

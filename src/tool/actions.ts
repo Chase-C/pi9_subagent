@@ -24,7 +24,11 @@ import {
   runDetails,
   type SubagentDetails,
 } from "../view/format.js";
-import { listAgentDefinitions } from "../view/serialize.js";
+import {
+  listAgentDefinitions,
+  listAgentDefinitionsForModel,
+  serializeInventoryForModel,
+} from "../view/serialize.js";
 
 export interface ActionDeps {
   agentManager: AgentManager;
@@ -61,7 +65,9 @@ export function errorResult(message: string, extra: { errors?: string[] } = {}):
 }
 
 export function agentsAction(deps: ActionDeps): ActionResult {
-  return toolResult(agentsDetails(listAgentDefinitions(deps.agentRegistry)));
+  return toolResult(agentsDetails(listAgentDefinitions(deps.agentRegistry)), {
+    json: { view: "agents", agents: listAgentDefinitionsForModel(deps.agentRegistry) },
+  });
 }
 
 export function listAction(deps: ActionDeps, params: SubagentParams): ActionResult {
@@ -79,7 +85,10 @@ export function listAction(deps: ActionDeps, params: SubagentParams): ActionResu
     return errorResult(`Unknown status '${String(invalidStatus)}'. Valid: ${SESSION_STATUSES.join(", ")}.`);
   }
   const filter = statusFilter !== undefined ? { status: statusFilter as SessionStatus[] } : undefined;
-  return toolResult(inventoryDetails(deps.agentManager.listSessions(filter), filter));
+  const sessions = deps.agentManager.listSessions(filter);
+  return toolResult(inventoryDetails(sessions, filter), {
+    json: serializeInventoryForModel(sessions, filter),
+  });
 }
 
 export async function resultsAction(deps: ActionDeps, params: SubagentParams): Promise<ActionResult> {
@@ -102,6 +111,7 @@ export async function removeAction(deps: ActionDeps, params: SubagentParams): Pr
   if (hasIds && hasScope) return errorResult("remove requires exactly one of sessionIds or scope.");
   if (!hasIds && !hasScope) return errorResult("remove requires either sessionIds or scope.");
   if (hasIds && !isStringArray(sessionIds)) return errorResult("remove sessionIds must be an array of strings.");
+  if (hasIds && sessionIds.length === 0) return errorResult("remove requires at least one sessionId.");
   if (hasScope && !isRemoveScope(scope)) {
     return errorResult('remove scope must be "background", "retained", or "non-running".');
   }

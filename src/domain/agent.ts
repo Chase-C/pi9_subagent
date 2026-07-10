@@ -5,7 +5,7 @@ import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { AgentConfig } from "./agent-config.js";
 import { Attempt, type AttemptKind } from "./agent-attempt.js";
 import type { AgentOutcome } from "./agent-result.js";
-import type { AgentRunSection, AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
+import type { AgentEffectiveConfig, AgentRunSection, AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
 import { preflightFailure } from "./preflight-failure.js";
 import { AgentRegistry } from "./agent-registry.js";
@@ -39,6 +39,7 @@ export class Agent {
   private _appliedResumableOverride: boolean | undefined;
   private _unsubscribe?: () => void;
   private _background: boolean;
+  private _effectiveConfig: AgentEffectiveConfig | undefined;
 
   constructor(
     readonly id: string,
@@ -88,6 +89,8 @@ export class Agent {
         error = `Unknown resumable subagent session: ${task.sessionId}`;
       } else if (target.hasCurrentAttempt) {
         error = `Cannot resume subagent session ${task.sessionId}: it is already resuming.`;
+      } else if (!target.resumableEnabled) {
+        error = `Cannot resume subagent session ${task.sessionId}: it was created with resumable: false.`;
       } else if (!target.canResume) {
         error = `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.outcome : target.status.kind}.`;
       } else {
@@ -181,16 +184,18 @@ export class Agent {
     return last.state.result.status === "completed";
   }
 
+  get resumableEnabled(): boolean {
+    return this._appliedResumableOverride ?? this.config.resumable;
+  }
+
   get resumable(): boolean {
-    const base = this._appliedResumableOverride ?? this.config.resumable;
-    if (!base) return false;
+    if (!this.resumableEnabled) return false;
     if (this._current) return true;
     return this._retainedSession !== undefined;
   }
 
   hasResumableSession(): boolean {
-    const base = this._appliedResumableOverride ?? this.config.resumable;
-    if (!base) return false;
+    if (!this.resumableEnabled) return false;
     if (this._current?.state.kind === "running") return true;
     return this._retainedSession !== undefined;
   }
@@ -248,11 +253,16 @@ export class Agent {
       activity: activeActivity ? activeActivity.snapshot() : { turns: 0, compactions: 0, toolHistory: [] },
       ...(previousRuns.length > 0 ? { previousRuns } : {}),
       usage: activeActivity?.usage,
+      ...(this._effectiveConfig ? { effectiveConfig: this._effectiveConfig } : {}),
       capabilities: {
         canResume: this.canResume,
         canClear: this.resumable && !active,
       },
     };
+  }
+
+  setEffectiveConfig(config: AgentEffectiveConfig): void {
+    this._effectiveConfig = config;
   }
 
   async abort(reason?: string): Promise<void> {
@@ -280,6 +290,9 @@ export class Agent {
     current.attach(session);
     if (current.resumableOverride !== undefined) {
       this._appliedResumableOverride = current.resumableOverride;
+      if (this._effectiveConfig) {
+        this._effectiveConfig = { ...this._effectiveConfig, resumable: this.resumableEnabled };
+      }
     }
     this._retainedSession = session;
     this._emit("status");

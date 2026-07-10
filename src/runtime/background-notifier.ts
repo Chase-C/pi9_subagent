@@ -198,8 +198,12 @@ export class BackgroundNotifier {
 
   private _dispatch(via: "auto" | "steer"): void {
     if (this._queue.length === 0) return;
-    const entries = this._queue;
+    const listedIds = new Set(this.deps.manager.listSessions().map(session => session.id));
+    const entries = this._queue.filter(entry =>
+      listedIds.has(entry.sessionId) && !this.deps.manager.isResultAcknowledged(entry.sessionId)
+    );
     this._queue = [];
+    if (entries.length === 0) return;
     const display = this.deps.getDisplay?.() ?? DEFAULT_SUBAGENT_SETTINGS.display;
     const content = formatNotification(entries, display);
     this.deps.pi.sendMessage(

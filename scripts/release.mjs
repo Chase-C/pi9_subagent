@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Cuts a release in one step: bumps the version, tags it, pushes, and creates
-// a GitHub Release. The Release triggers .github/workflows/publish.yml, which
-// publishes to npm via OIDC trusted publishing.
+// Cuts a release in one step: bumps the version, rolls [Unreleased] into a
+// dated changelog section, tags and pushes the release commit, then creates a
+// GitHub Release with those changelog entries. The Release triggers
+// .github/workflows/publish.yml, which publishes to npm via OIDC trusted publishing.
 //
 // This script does NOT publish to npm directly — that stays with the workflow.
 //
@@ -14,7 +15,9 @@
 //   npm run release -- patch --skip-checks   # skip the local typecheck+test gate
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const RELEASE_BRANCH = "main";
 const KEYWORDS = ["patch", "minor", "major", "prepatch", "preminor", "premajor", "prerelease"];
@@ -54,6 +57,54 @@ function mutate(cmd, cmdArgs) {
   execFileSync(cmd, cmdArgs, { stdio: "inherit" });
 }
 
+function resolveNextVersion(currentVersion, bump) {
+  if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(bump)) return bump;
+
+  const dir = mkdtempSync(join(tmpdir(), "pi9-release-version-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "version-probe", version: currentVersion }));
+    return capture("npm", ["version", bump, "--no-git-tag-version", "--ignore-scripts", "--prefix", dir]).replace(/^v/, "");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function prepareChangelog(content, version, date) {
+  const heading = content.match(/^## \[Unreleased\](?: - .*?)?$/m);
+  if (!heading || heading.index === undefined) abort("CHANGELOG.md must contain a '## [Unreleased]' section.");
+  if (new RegExp(`^## \\[${version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\](?: |$)`, "m").test(content)) {
+    abort(`CHANGELOG.md already contains a ${version} release section.`);
+  }
+
+  const sectionStart = heading.index;
+  const bodyStart = sectionStart + heading[0].length;
+  const nextHeading = content.slice(bodyStart).match(/^## \[/m);
+  if (!nextHeading || nextHeading.index === undefined) abort("CHANGELOG.md needs a released section after [Unreleased].");
+  const nextSectionStart = bodyStart + nextHeading.index;
+  const notes = content.slice(bodyStart, nextSectionStart).trim();
+  if (!notes) abort("CHANGELOG.md [Unreleased] has no entries to release.");
+
+  const link = content.match(/^\[Unreleased\]:\s+(.+?\/compare\/)([^\s]+)\.\.\.HEAD$/m);
+  if (!link) abort("CHANGELOG.md must contain an [Unreleased] comparison link ending in ...HEAD.");
+  const [, comparePrefix, previousTag] = link;
+  const tag = `v${version}`;
+
+  let updated = [
+    content.slice(0, sectionStart),
+    "## [Unreleased]\n\n",
+    `## [${version}] - ${date}\n\n`,
+    notes,
+    "\n\n",
+    content.slice(nextSectionStart),
+  ].join("");
+  updated = updated.replace(
+    /^\[Unreleased\]:.*$/m,
+    `[Unreleased]: ${comparePrefix}${tag}...HEAD\n[${version}]: ${comparePrefix}${previousTag}...${tag}`,
+  );
+
+  return { updated, notes };
+}
+
 // --- Validate arguments ----------------------------------------------------
 if (!bump) {
   abort([
@@ -70,8 +121,18 @@ if (!KEYWORDS.includes(bump) && !isExplicitVersion) {
 const currentVersion = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 ).version;
+const nextVersion = resolveNextVersion(currentVersion, bump);
+const newTag = `v${nextVersion}`;
+const now = new Date();
+const releaseDate = [
+  now.getFullYear(),
+  String(now.getMonth() + 1).padStart(2, "0"),
+  String(now.getDate()).padStart(2, "0"),
+].join("-");
+const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
+const changelog = prepareChangelog(readFileSync(changelogUrl, "utf8"), nextVersion, releaseDate);
 
-console.log(`\n→ Releasing @pi9/subagent (current v${currentVersion}, bump: ${bump})${dryRun ? "  [dry-run]" : ""}\n`);
+console.log(`\n→ Releasing @pi9/subagent (v${currentVersion} → ${newTag})${dryRun ? "  [dry-run]" : ""}\n`);
 
 // --- Preflight -------------------------------------------------------------
 let ghInstalled = true;
@@ -105,29 +166,38 @@ if (skipChecks) {
   mutate("npm", ["test"]);
 }
 
-// --- Bump, push, release ---------------------------------------------------
-let newTag;
+// --- Bump, changelog, push, release ---------------------------------------
 if (dryRun) {
-  console.log(`\n  [dry-run] npm version ${bump} -m "Release v%s"   (from v${currentVersion})`);
-  newTag = `v<next:${bump}>`;
+  console.log(`\n  [dry-run] npm version ${bump} --no-git-tag-version   (${newTag})`);
+  console.log(`  [dry-run] move CHANGELOG.md [Unreleased] entries to [${nextVersion}] - ${releaseDate}`);
 } else {
-  newTag = execFileSync("npm", ["version", bump, "-m", "Release v%s"], { encoding: "utf8" }).trim();
+  const bumpedTag = execFileSync("npm", ["version", bump, "--no-git-tag-version"], { encoding: "utf8" }).trim();
+  if (bumpedTag !== newTag) abort(`npm resolved ${bumpedTag}, expected ${newTag}.`);
+  writeFileSync(changelogUrl, changelog.updated);
 }
+
+mutate("git", ["add", "package.json", "package-lock.json", "CHANGELOG.md"]);
+mutate("git", ["commit", "-m", `Release ${newTag}`]);
+mutate("git", ["tag", "-a", newTag, "-m", `Release ${newTag}`]);
+
 console.log(`\n→ Version tag: ${newTag}`);
 
 mutate("git", ["push", "origin", RELEASE_BRANCH]);
 mutate("git", ["push", "origin", newTag]);
 
 if (dryRun) {
-  console.log(`  [dry-run] gh release create ${newTag} --title ${newTag} --generate-notes`);
+  console.log(`  [dry-run] gh release create ${newTag} --title ${newTag} --generate-notes --notes <${nextVersion} changelog entries>`);
 } else {
   try {
-    execFileSync("gh", ["release", "create", newTag, "--title", newTag, "--generate-notes"], { stdio: "inherit" });
+    execFileSync(
+      "gh",
+      ["release", "create", newTag, "--title", newTag, "--generate-notes", "--notes", changelog.notes],
+      { stdio: "inherit" },
+    );
   } catch {
     abort([
       `Tag ${newTag} was pushed, but creating the GitHub Release failed.`,
-      "Create it manually to trigger the publish workflow:",
-      `  gh release create ${newTag} --generate-notes`,
+      "Create it manually with the matching CHANGELOG section to trigger the publish workflow.",
     ].join("\n"));
   }
 }

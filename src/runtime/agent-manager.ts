@@ -38,6 +38,8 @@ export class AgentManager {
   private _updateListeners = new Set<AgentUpdateListener>();
   private readonly _runner: AttemptRunner;
   private readonly _groups = new Map<string, RunGroup>();
+  private readonly _removingSessionIds = new Set<string>();
+  private readonly _acknowledgedResultIds = new Set<string>();
   /** In-flight cancellation fanouts keyed by the finalized parent's session id. */
   private readonly _pendingFinalize = new Map<string, Promise<void>>();
 
@@ -54,7 +56,8 @@ export class AgentManager {
   }
 
   listSessions(filter?: { status?: SessionStatus[] }): AgentSnapshot[] {
-    const views = activeOrRetainedAgents(this._agents).map(agent => agent.snapshot());
+    const listed = this._agents.filter(agent => !this._removingSessionIds.has(agent.id));
+    const views = activeOrRetainedAgents(listed).map(agent => agent.snapshot());
     if (!filter || filter.status === undefined) return views;
     const allowed = new Set(filter.status);
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
@@ -105,8 +108,14 @@ export class AgentManager {
     return sessionIds.map(id => {
       const lookup = this._resolveSession(id);
       if ("error" in lookup) return lookup;
-      return { snapshot: lookup.agent.snapshot() };
+      const snapshot = lookup.agent.snapshot();
+      if (snapshot.status.kind === "done") this._acknowledgedResultIds.add(id);
+      return { snapshot };
     });
+  }
+
+  isResultAcknowledged(sessionId: string): boolean {
+    return this._acknowledgedResultIds.has(sessionId);
   }
 
   async remove(
@@ -121,24 +130,30 @@ export class AgentManager {
 
     const uniqueRunning = new Set(agents.filter(a => a.status.kind === "running").map(a => a.id));
     const aborted = uniqueRunning.size;
+    for (const agent of agents) this._removingSessionIds.add(agent.id);
 
-    await Promise.all(agents.map(async agent => {
-      await agent.abort();
-      await this._pendingFinalize.get(agent.id);
-    }));
+    try {
+      await Promise.all(agents.map(async agent => {
+        await agent.abort();
+        await this._pendingFinalize.get(agent.id);
+      }));
 
-    const removedIds = new Set(agents.map(a => a.id));
-    this._agents = this._agents.filter(a => !removedIds.has(a.id));
-    for (const group of this._groups.values()) {
-      if (agents.some(a => group.contains(a.id))) group.emit();
+      const removedIds = new Set(agents.map(a => a.id));
+      this._agents = this._agents.filter(a => !removedIds.has(a.id));
+      for (const id of removedIds) this._acknowledgedResultIds.delete(id);
+      for (const group of this._groups.values()) {
+        if (agents.some(a => group.contains(a.id))) group.emit();
+      }
+
+      return {
+        removed: removedIds.size,
+        aborted,
+        sessionIds: Array.from(removedIds),
+        errors,
+      };
+    } finally {
+      for (const agent of agents) this._removingSessionIds.delete(agent.id);
     }
-
-    return {
-      removed: removedIds.size,
-      aborted,
-      sessionIds: Array.from(removedIds),
-      errors,
-    };
   }
 
   /**
@@ -182,6 +197,8 @@ export class AgentManager {
 
       if (result.kind === "spawn") {
         this._agents.push(result.agent);
+      } else {
+        this._acknowledgedResultIds.delete(result.agent.id);
       }
 
       group.addAgent(result.agent, inputIndex, resumed);
@@ -217,15 +234,16 @@ export class AgentManager {
 
   /** Looks up an agent by sessionId or returns the standard not-found error entry. */
   private _resolveSession(id: string): { agent: Agent } | { sessionId: string; error: string } {
-    const agent = this._agents.find(a => a.id === id);
+    const agent = this._agents.find(a => a.id === id && !this._removingSessionIds.has(a.id));
     if (agent) return { agent };
     return { sessionId: id, error: `Unknown subagent session: ${id}` };
   }
 
   private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
-    if (scope === "background") return this._agents.filter(a => a.background);
-    if (scope === "retained") return this._agents.filter(a => !a.background && a.status.kind !== "running" && a.resumable);
-    if (scope === "non-running") return this._agents.filter(a => a.status.kind !== "running");
+    const available = this._agents.filter(agent => !this._removingSessionIds.has(agent.id));
+    if (scope === "background") return available.filter(a => a.background);
+    if (scope === "retained") return available.filter(a => !a.background && a.status.kind !== "running" && a.resumable);
+    if (scope === "non-running") return available.filter(a => a.status.kind !== "running");
     throw new Error(`Unknown remove scope: ${String(scope)}`);
   }
 

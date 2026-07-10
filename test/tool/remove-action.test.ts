@@ -153,8 +153,8 @@ test("subagent action=remove rejects an invalid scope without calling manager.re
   assert.equal(removeCalls, 0);
 });
 
-test("subagent action=remove rejects malformed sessionIds (non-array or non-string entries) without calling manager.remove", async () => {
-  for (const sessionIds of ["s1", ["s1", 42]] as const) {
+test("subagent action=remove rejects malformed or empty sessionIds without calling manager.remove", async () => {
+  for (const sessionIds of ["s1", ["s1", 42], []] as const) {
     let removeCalls = 0;
     const tool = registerExtension({
       agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
@@ -164,7 +164,7 @@ test("subagent action=remove rejects malformed sessionIds (non-array or non-stri
     const result = await tool.execute("tool-call", { action: "remove", sessionIds }, undefined, undefined, baseCtx());
 
     assert.equal(result.isError, true, `sessionIds=${JSON.stringify(sessionIds)}: expected error`);
-    assert.match(result.content[0].text, /sessionIds must be an array of strings/);
+    assert.match(result.content[0].text, /sessionIds must be an array of strings|requires at least one sessionId/);
     assert.equal(removeCalls, 0);
   }
 });

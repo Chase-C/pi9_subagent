@@ -55,38 +55,7 @@ export interface SubagentToolDeps {
   parentSessionId?: string;
 }
 
-const TOOL_DESCRIPTION = `Spawn a specialized subagent for bounded, separable work in an isolated context.
-Subagent prompt *must* be self-contained: objective, relevant files/dirs, known facts, constraints, expected output.
-
-Delegate when:
-- The user explicitly asks for delegation: named agent, second opinion/reviewer, or parallel investigation.
-- The work would crowd this conversation: large searches/reads, many docs, big diffs, or long-running work.
-- The subagent adds distinct value: specialized skill/tooling, or fresh inspection of a bounded slice.
-
-Skip delegation when:
-- you would finish it in a handful of tool calls, given the context you already have
-- using the subagent's output would require redoing the work yourself
-- it would only add generic QA or extra confidence
-
-If the user names an agent, run it. Otherwise list agents first; if none fit, do it yourself.
-
-Call shapes:
-
-  { action: "agents" } — list known agents
-  { action: "list", status?: [SessionStatus, ...] } — list active and retained sessions
-  { action: "run", background?: boolean, tasks: [SpawnTask | ResumeTask, ...] } — spawn or resume tasks
-  { action: "results", sessionIds: [string, ...], remove?: boolean } — fetch output, optionally removing sessions
-  { action: "remove", sessionIds: [string, ...] } — remove specific sessions (running ones abort)
-  { action: "remove", scope: Scope } — remove all sessions matching a scope
-
-  SpawnTask = { agent, prompt, label?, resumable?, model?, thinking?, cwd?, skills? }
-  ResumeTask = { sessionId, prompt, label?, resumable? }
-  SessionStatus = "queued" | "running" // active
-                | "completed" | "error" | "aborted" | "interrupted" | "skipped" // terminal
-  Scope = "background" // background-dispatched sessions
-        | "retained" // resumable foreground sessions kept after completion
-        | "non-running" // everything except currently-running sessions
-`;
+const TOOL_DESCRIPTION = "Manage isolated subagent sessions: discover agents, spawn or resume tasks, list sessions, fetch results, and remove sessions.";
 
 export function defineSubagentTool(deps: SubagentToolDeps) {
   const { agentManager, agentRegistry, getCurrentSettings, prepareInvocation, parentSessionId } = deps;
@@ -98,6 +67,12 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     name: "subagent",
     label: "Subagent",
     description: TOOL_DESCRIPTION,
+    promptSnippet: "Delegate bounded work to isolated subagents",
+    promptGuidelines: [
+      "Use subagent for user-requested delegation or bounded specialist, independent, parallel, or context-heavy work.",
+      "Skip subagent when direct work is only a few tool calls or its output would need to be redone.",
+      "Use subagent action=agents before the first spawn unless the user named an agent or available agents are already known.",
+    ],
     parameters: SubagentParams,
     renderCall(args, theme, context) {
       const action = typeof args?.action === "string" ? args.action : "pending";

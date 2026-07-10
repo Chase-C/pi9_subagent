@@ -398,6 +398,21 @@ test("Agent.resolve spawn for an unknown agent returns a preflight failure with 
   assert.equal(result.failure.status.kind, "done");
 });
 
+test("Agent.resolve explains that a completed non-resumable session cannot accept follow-ups", () => {
+  const { resolve } = resolveScenario();
+  const spawn = resolve({ kind: "spawn", agent: "helper", prompt: "work" });
+  if (spawn.kind !== "spawn") throw new Error("expected spawn");
+  spawn.agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} } as any);
+  completedRun(spawn.agent, "done");
+
+  const resumed = resolve({ kind: "resume", sessionId: spawn.agent.id, prompt: "follow up" });
+
+  assert.equal(resumed.kind, "failure");
+  if (resumed.kind === "failure") {
+    assert.match(toResult(resumed.failure).error ?? "", /created with resumable: false/);
+  }
+});
+
 test("Agent.resolve resume rejects sessions that are mid-attempt or non-resumable, leaving the existing attempt intact", () => {
   const { resolve, tracked } = resolveScenario({ config: { ...baseConfig, source: "user", resumable: true } });
   const spawn = resolve({ kind: "spawn", agent: "helper", prompt: "work" });

@@ -63,6 +63,15 @@ export type AgentDispatch = "foreground" | "background";
 
 export type AgentRetention = "transient" | "persistent";
 
+export interface AgentEffectiveConfig {
+  readonly model?: string;
+  readonly thinking?: ModelThinkingLevel;
+  readonly cwd: string;
+  readonly skills: readonly string[];
+  readonly tools: readonly string[];
+  readonly resumable: boolean;
+}
+
 export interface AgentViewCapabilities {
   readonly canResume: boolean;
   readonly canClear: boolean;
@@ -84,6 +93,7 @@ export interface AgentSnapshot {
   readonly usage: Usage | undefined;
   readonly dispatch: AgentDispatch;
   readonly retention: AgentRetention;
+  readonly effectiveConfig?: AgentEffectiveConfig;
   readonly capabilities: AgentViewCapabilities;
 }
 
