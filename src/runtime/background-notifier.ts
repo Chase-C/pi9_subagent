@@ -79,7 +79,7 @@ export class BackgroundNotifier {
       deps.pi.on("session_shutdown", (() => this._onSessionShutdown()) as PiEventHandler);
       deps.pi.on("agent_end", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("auto-event", ctx)) as PiEventHandler);
       deps.pi.on("turn_end", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("auto-event", ctx)) as PiEventHandler);
-      deps.pi.on("tool_execution_start", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("steer-event", ctx)) as PiEventHandler);
+      deps.pi.on("tool_execution_start", ((event: unknown, ctx?: NotifierContext) => this._onToolExecutionStart(event, ctx)) as PiEventHandler);
     }
   }
 
@@ -121,6 +121,14 @@ export class BackgroundNotifier {
     this._queue.push(entry);
     this._flush("generic");
   };
+
+  private _onToolExecutionStart(event: unknown, ctx: NotifierContext | undefined): void {
+    const requestedIds = resultsSessionIds(event);
+    if (requestedIds.size > 0) {
+      this._queue = this._queue.filter(entry => !requestedIds.has(entry.sessionId));
+    }
+    this._onDispatchEvent("steer-event", ctx);
+  }
 
   private _onDispatchEvent(trigger: "auto-event" | "steer-event", ctx: NotifierContext | undefined): void {
     if (ctx && this._ctx !== ctx) {
@@ -215,6 +223,15 @@ export class BackgroundNotifier {
       via === "steer" ? { deliverAs: "steer" } : { triggerTurn: true },
     );
   }
+}
+
+function resultsSessionIds(event: unknown): Set<string> {
+  if (!event || typeof event !== "object") return new Set();
+  const { toolName, args } = event as { toolName?: unknown; args?: unknown };
+  if (toolName !== "subagent" || !args || typeof args !== "object") return new Set();
+  const { action, sessionIds } = args as { action?: unknown; sessionIds?: unknown };
+  if (action !== "results" || !Array.isArray(sessionIds)) return new Set();
+  return new Set(sessionIds.filter((id): id is string => typeof id === "string"));
 }
 
 function formatNotification(entries: CompletionEntry[], display: SubagentDisplaySettings): string {

@@ -150,7 +150,7 @@ test("SubagentParams rejects results action when remove is not a boolean", () =>
 test("schema distinguishes result retention from conversation resumability", () => {
   assert.equal(
     (TaskSchema.properties.resumable as any).description,
-    "Override the agent default for conversation follow-ups; true retains context for later resume.",
+    "Override conversation follow-ups. true retains context; false releases it after this attempt (foreground sessions then leave inventory).",
   );
   assert.equal(
     (SubagentParams.properties.background as any).description,

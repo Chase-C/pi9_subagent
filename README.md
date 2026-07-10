@@ -104,7 +104,7 @@ subagent({
 })
 ```
 
-Retention lasts for the current Pi process only — restart or extension reload releases it. Resume from the tool, or interactively from `/subagents`.
+Retention lasts for the current Pi process only — restart or extension reload releases it. Setting `resumable: false` on a follow-up prevents further follow-ups and releases its conversation context after that attempt; a foreground session then leaves inventory, while a background session remains listed for result retrieval or removal. Resume from the tool, or interactively from `/subagents`.
 
 ## Background dispatch
 
@@ -212,7 +212,7 @@ The tool takes one required `action`. Its parameter shapes live in `src/schema.t
 | `results` | Fetch results by `sessionIds` without blocking; `remove: true` sweeps terminal entries. |
 | `remove` | Remove sessions by `sessionIds` or `scope`; running ones are aborted. |
 
-Spawn tasks accept per-task overrides — `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable`. Agent discovery calls the configured default `defaultResumable` because a task can override it. Successful results and session inventory expose the resolved `effectiveConfig` (`model`, `thinking`, `cwd`, `skills`, `tools`, and `resumable`) for debugging overrides. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`), plus a `sessionId` to resume when the result is resumable.
+Spawn tasks accept per-task overrides — `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable`. Agent discovery calls the configured default `defaultResumable` because a task can override it. Successful results and session inventory expose the resolved `effectiveConfig` (`model`, `thinking`, `cwd`, `skills`, `tools`, and `resumable`) for debugging overrides. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`). A synchronous `run` result includes `sessionId` only when it remains actionable for a follow-up; background handles and `results` entries include an ID for retrieval or removal even when conversation context is not resumable.
 
 Removal scopes select: `background` for all background-dispatched sessions, `retained` for non-running resumable foreground sessions, and `non-running` for every queued or terminal session.
 

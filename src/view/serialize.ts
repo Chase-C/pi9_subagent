@@ -54,8 +54,9 @@ export function serializeInventoryForModel(sessions: AgentSnapshot[], filter?: {
 }
 
 function serializeSessionForModel(session: AgentSnapshot) {
+  const { capabilities, ...snapshot } = session;
   return {
-    ...session,
+    ...snapshot,
     status: serializeStatusForModel(session.status),
     ...(session.previousRuns
       ? {
@@ -65,6 +66,10 @@ function serializeSessionForModel(session: AgentSnapshot) {
           })),
         }
       : {}),
+    capabilities: {
+      canResume: capabilities.canResume,
+      canRemove: true,
+    },
   };
 }
 

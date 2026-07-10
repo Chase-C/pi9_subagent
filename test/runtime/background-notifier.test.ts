@@ -29,7 +29,7 @@ interface FakeCtx {
 interface FakePi extends NotifierPi {
   fireAgentEnd: () => void;
   fireTurnEnd: () => void;
-  fireToolExecutionStart: () => void;
+  fireToolExecutionStart: (event?: unknown) => void;
   fireSessionStart: (ctx: FakeCtx) => void;
   fireSessionShutdown: () => void;
   sent: SentMessage[];
@@ -62,8 +62,8 @@ function fakePi(): FakePi {
     fireTurnEnd() {
       for (const h of handlers.turnEnd) h({}, currentCtx);
     },
-    fireToolExecutionStart() {
-      for (const h of handlers.toolStart) h({}, currentCtx);
+    fireToolExecutionStart(event = {}) {
+      for (const h of handlers.toolStart) h(event, currentCtx);
     },
     fireSessionStart(ctx: FakeCtx) {
       currentCtx = ctx;
@@ -362,6 +362,26 @@ test("BackgroundNotifier drops a queued completion after results retrieves it", 
   retry.flushOne();
 
   assert.equal(pi.sent.length, 0, "retrieved results acknowledge pending completion notifications");
+  notifier.unsubscribe();
+});
+
+test("BackgroundNotifier suppresses results-targeted completions before a steer flush", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "steer" });
+
+  const retrievedId = await runBackgroundOne(manager, "retrieved");
+  const pendingId = await runBackgroundOne(manager, "pending");
+
+  pi.fireToolExecutionStart({
+    type: "tool_execution_start",
+    toolName: "subagent",
+    args: { action: "results", sessionIds: [retrievedId] },
+  });
+
+  assert.equal(pi.sent.length, 1, "the unrelated completion still triggers a steer notification");
+  assert.doesNotMatch(pi.sent[0].content ?? "", new RegExp(retrievedId));
+  assert.match(pi.sent[0].content ?? "", new RegExp(pendingId));
   notifier.unsubscribe();
 });
 

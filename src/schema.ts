@@ -20,7 +20,7 @@ export const TaskSchema = Type.Object({
     description: "Display label for UI/logs.",
   })),
   resumable: Type.Optional(Type.Boolean({
-    description: "Override the agent default for conversation follow-ups; true retains context for later resume.",
+    description: "Override conversation follow-ups. true retains context; false releases it after this attempt (foreground sessions then leave inventory).",
   })),
   model: Type.Optional(Type.String({ minLength: 1, description: "Spawn-only model override." })),
   thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS, { description: "Spawn-only thinking override." })),
@@ -50,7 +50,7 @@ export const SubagentParams = Type.Object({
   })),
   sessionIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
     minItems: 1,
-    description: "For results/remove. Session IDs.",
+    description: "For results/remove. Session handles returned by background dispatch, results, or resumable runs.",
   })),
   scope: Type.Optional(StringEnum(REMOVAL_SCOPES, {
     description: "For remove. background=all background sessions; retained=non-running resumable foreground sessions; non-running=all queued or terminal sessions. Mutually exclusive with sessionIds.",

@@ -156,4 +156,36 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
     tools: ["read"],
     resumable: true,
   });
+  assert.deepEqual(modelSession.capabilities, { canResume: true, canRemove: true });
+});
+
+test("model-facing inventory reports background sessions as removable without leaking canClear", async () => {
+  const runner = async (_ctx: any, agent: any, _attempt: any) => {
+    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    return completedRun(agent, "done");
+  };
+  const fakeRegistry = {
+    agents: new Map([
+      ["oneshot", { name: "oneshot", description: "", systemPrompt: "", source: "project", resumable: false, tools: [] }],
+    ]),
+    async reload() {},
+    summarizeAgent() { return ""; },
+  };
+  const manager = new AgentManager(fakeRegistry as any, 1, runner);
+  const handle = manager.startRun(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "oneshot", prompt: "go" }],
+    undefined,
+    { background: true },
+  );
+  await handle.resultsPromise;
+  const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
+
+  const result = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
+
+  assert.equal(result.details.sessions[0].capabilities.canClear, false, "renderer details retain the command UI capability");
+  const modelSession = JSON.parse(result.content[0].text).sessions[0];
+  assert.deepEqual(modelSession.capabilities, { canResume: false, canRemove: true });
+  assert.equal(Object.prototype.hasOwnProperty.call(modelSession.capabilities, "canClear"), false);
 });
