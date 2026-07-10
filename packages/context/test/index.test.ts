@@ -17,6 +17,8 @@ describe("context command", () => {
     const ctx = {
       mode: "rpc",
       hasUI: true,
+      cwd: "/project",
+      isProjectTrusted: () => false,
       ui: { custom, notify },
       model: { provider: "test", id: "model", name: "Model", contextWindow: 10_000 },
       getContextUsage: () => ({ contextWindow: 10_000, tokens: 100, percent: 1 }),

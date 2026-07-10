@@ -18,6 +18,7 @@
   "homepage": "https://github.com/Chase-C/pi9_subagent/tree/main/packages/context#readme",
   "files": [
     "src",
+    "media",
     "README.md",
     "LICENSE"
   ],
