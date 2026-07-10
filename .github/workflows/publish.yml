@@ -27,6 +27,11 @@ jobs:
         shell: bash
         run: |
           case "$GITHUB_REF_NAME" in
+            context-v*)
+              echo "workspace=@pi9/context" >> "$GITHUB_OUTPUT"
+              echo "path=packages/context" >> "$GITHUB_OUTPUT"
+              echo "version=${GITHUB_REF_NAME#context-v}" >> "$GITHUB_OUTPUT"
+              ;;
             subagent-v*)
               echo "workspace=@pi9/subagent" >> "$GITHUB_OUTPUT"
               echo "path=packages/subagent" >> "$GITHUB_OUTPUT"

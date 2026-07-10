@@ -1,0 +1,68 @@
+{
+  "name": "@pi9/context",
+  "version": "0.1.0",
+  "description": "Pi extension to show a breakdown of your current context usage.",
+  "license": "MIT",
+  "author": "Chase Cummings <chaseecummings@gmail.com>",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chase-C/pi9_subagent.git",
+    "directory": "packages/context"
+  },
+  "bugs": {
+    "url": "https://github.com/Chase-C/pi9_subagent/issues"
+  },
+  "homepage": "https://github.com/Chase-C/pi9_subagent/tree/main/packages/context#readme",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "pi9",
+    "context"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "release": "node ../../scripts/release.mjs context",
+    "release:patch": "node ../../scripts/release.mjs context patch",
+    "release:minor": "node ../../scripts/release.mjs context minor",
+    "release:major": "node ../../scripts/release.mjs context major",
+    "prepublishOnly": "npm run typecheck && npm test"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [],
+    "prompts": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.76.0",
+    "@earendil-works/pi-coding-agent": "^0.76.0",
+    "@earendil-works/pi-tui": "^0.76.0",
+    "typebox": "^1.1.38",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

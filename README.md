@@ -4,6 +4,7 @@ Pi9 is a collection of extensions for the [Pi coding agent](https://github.com/b
 
 ## Packages
 
+- [`@pi9/context`](./packages/context) — an inline breakdown of current context-window usage.
 - [`@pi9/subagent`](./packages/subagent) — resumable, background, and recursive subagents with live progress and tree-wide concurrency limits.
 - [`@pi9/whisper`](./packages/whisper) — local agent-to-agent communication.
 
@@ -18,6 +19,7 @@ npm run build
 Run a command for one package with npm's workspace flag:
 
 ```bash
+npm test --workspace @pi9/context
 npm test --workspace @pi9/subagent
 npm test --workspace @pi9/whisper
 ```
