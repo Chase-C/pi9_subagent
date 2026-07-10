@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Show unknown context capacity accurately after compaction.
+- Build reports from the current session and prompt configuration.
+- Avoid opening terminal-only UI in non-TUI modes.
+- Report active tool tokens consistently across summaries and details.
+
+### Changed
+
+- Align development dependencies with Pi 0.80 and remove the unused `typebox` peer.
+
 ## [0.1.0] - 2026-07-09
 
 ### Added

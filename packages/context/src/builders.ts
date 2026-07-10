@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 import {
   buildSessionContext,
   estimateTokens as estimateMessageTokens,
+  type BuildSystemPromptOptions,
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import type { PromptSnapshot } from "./prompt-snapshot.js";
 import type {
   ContextReport,
   ConversationDetails,
@@ -24,14 +24,14 @@ type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 export function buildContextReport(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
-  snapshot?: PromptSnapshot,
 ): ContextReport | undefined {
   const usage = ctx.getContextUsage();
   if (!usage) {
     return undefined;
   }
 
-  const systemPrompt = snapshot?.systemPrompt ?? ctx.getSystemPrompt() ?? "";
+  const systemPrompt = ctx.getSystemPrompt() ?? "";
+  const promptOptions = ctx.getSystemPromptOptions();
   const model: ModelDetails = {
     provider: ctx.model?.provider ?? "Unknown Provider",
     id: ctx.model?.id ?? "unknown-model",
@@ -40,26 +40,15 @@ export function buildContextReport(
     contextWindow: usage.contextWindow ?? ctx.model?.contextWindow,
   };
 
-  if (!snapshot) {
-    return {
-      kind: "static",
-      model,
-      usage,
-      promptTokens: estimateTokens(systemPrompt),
-      tools: collectToolDetails(pi),
-      skills: collectSkillDetails(pi),
-    };
-  }
-
   return {
     kind: "conversation",
     model,
     usage,
     promptTokens: estimateTokens(systemPrompt),
     tools: collectToolDetails(pi),
-    skills: collectSkillDetails(pi, snapshot),
-    memory: collectMemoryDetails(snapshot),
-    snapshot: { capturedAt: snapshot.capturedAt },
+    skills: collectSkillDetails(pi, promptOptions),
+    memory: collectMemoryDetails(promptOptions),
+    snapshot: { capturedAt: Date.now() },
     conversation: collectConversationDetails(ctx),
   };
 }
@@ -73,11 +62,11 @@ export function estimateTokens(text: unknown): number {
 
 export function collectSkillDetails(
   pi: ExtensionAPI,
-  snapshot?: PromptSnapshot,
+  promptOptions?: BuildSystemPromptOptions,
 ): SkillDetails[] {
   const details: SkillDetails[] = [];
-  const skills = snapshot
-    ? (snapshot.options.skills ?? []).filter((skill) => !skill.disableModelInvocation)
+  const skills = promptOptions
+    ? (promptOptions.skills ?? []).filter((skill) => !skill.disableModelInvocation)
     : pi.getCommands().filter((cmd) => cmd.source === "skill");
 
   const visited = new Set<string>();
@@ -145,8 +134,8 @@ export function collectToolDetails(pi: ExtensionAPI): ToolDetails[] {
   return details;
 }
 
-export function collectMemoryDetails(snapshot?: PromptSnapshot): MemoryDetails[] {
-  const files = snapshot?.options.contextFiles ?? [];
+export function collectMemoryDetails(promptOptions?: BuildSystemPromptOptions): MemoryDetails[] {
+  const files = promptOptions?.contextFiles ?? [];
   const details = files.map((file): MemoryDetails => ({
     path: file.path,
     tokens: estimateTokens(file.content),

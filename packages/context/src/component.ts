@@ -20,6 +20,7 @@ const GRAPH_STYLE = {
   conversation: { glyph: "◍", color: "accent" },
   other: { glyph: "◇", color: "dim" },
   free: { glyph: "□", color: "borderMuted" },
+  unknown: { glyph: "?", color: "dim" },
 } as const satisfies Record<string, { glyph: string; color: ThemeColor }>;
 
 type TreeBranch = "├" | "└";
@@ -204,10 +205,14 @@ function formatUsageOverview(report: ContextReport, theme: Theme, width: number)
   const contextWindow = knownTokenValue(report.usage.contextWindow) ?? 0;
   const currentTotal = knownTokenValue(report.usage.tokens);
   const usedCategories = buildGraphCategories(report, currentTotal);
+  const knownTokens = sum(usedCategories.map((category) => category.tokens));
   const freeTokens = contextWindow > 0 && currentTotal !== null ? Math.max(0, contextWindow - currentTotal) : 0;
-  const graphCategories = freeTokens > 0
-    ? [...usedCategories, { label: "Free space", tokens: freeTokens, ...GRAPH_STYLE.free }]
-    : usedCategories;
+  const unknownTokens = contextWindow > 0 && currentTotal === null ? Math.max(0, contextWindow - knownTokens) : 0;
+  const graphCategories = [
+    ...usedCategories,
+    ...(freeTokens > 0 ? [{ label: "Free space", tokens: freeTokens, ...GRAPH_STYLE.free }] : []),
+    ...(unknownTokens > 0 ? [{ label: "Unknown capacity", tokens: unknownTokens, ...GRAPH_STYLE.unknown }] : []),
+  ];
   const totalGraphTokens = contextWindow > 0
     ? contextWindow
     : Math.max(GRAPH_CELL_TOKENS, sum(graphCategories.map((category) => category.tokens)));
@@ -215,7 +220,7 @@ function formatUsageOverview(report: ContextReport, theme: Theme, width: number)
     ? graphCategories
     : [{ label: "Free space", tokens: totalGraphTokens, ...GRAPH_STYLE.free }];
   const graphLines = formatGraphGrid(visibleGraphCategories, totalGraphTokens, graphColumnCount(width), theme);
-  const summaryLines = formatUsageSummary(report, usedCategories, freeTokens, theme);
+  const summaryLines = formatUsageSummary(report, usedCategories, freeTokens, unknownTokens, theme);
 
   if (!shouldRenderSideBySide(width, graphLines)) {
     return [
@@ -238,6 +243,7 @@ function formatUsageSummary(
   report: ContextReport,
   categories: GraphCategory[],
   freeTokens: number,
+  unknownTokens: number,
   theme: Theme,
 ): string[] {
   const contextWindow = knownTokenValue(report.usage.contextWindow) ?? 0;
@@ -263,6 +269,9 @@ function formatUsageSummary(
   }
   if (freeTokens > 0) {
     lines.push(`${theme.fg(GRAPH_STYLE.free.color, GRAPH_STYLE.free.glyph)} Free space: ${formatTokens(freeTokens)}${formatCategoryPercent(freeTokens, contextWindow)}`);
+  }
+  if (unknownTokens > 0) {
+    lines.push(`${theme.fg(GRAPH_STYLE.unknown.color, GRAPH_STYLE.unknown.glyph)} Unknown capacity: ${formatTokens(unknownTokens)}${formatCategoryPercent(unknownTokens, contextWindow)}`);
   }
 
   lines.push("", `${theme.fg("text", "Snapshot:")} ${snapshot}`);
@@ -419,7 +428,10 @@ function formatToolsSection(report: ContextReport, theme: Theme): string[] {
       color: tool.active ? sourceColor(tool.source) : "dim",
     })),
     theme,
-    { limit: TOOL_DETAIL_LIMIT },
+    {
+      limit: TOOL_DETAIL_LIMIT,
+      totalTokens: sum(report.tools.filter((tool) => tool.active).map((tool) => tool.tokens)),
+    },
   );
 }
 
@@ -427,12 +439,15 @@ function formatDetailSection(
   title: string,
   items: DetailItem[],
   theme: Theme,
-  { limit = Number.POSITIVE_INFINITY }: { limit?: number } = {},
+  {
+    limit = Number.POSITIVE_INFINITY,
+    totalTokens = sum(items.map((item) => item.tokens)),
+  }: { limit?: number; totalTokens?: number } = {},
 ): string[] {
   if (items.length === 0) return [];
 
   const visible = items.slice(0, limit);
-  const lines = [heading(theme, title, sum(items.map((item) => item.tokens)))];
+  const lines = [heading(theme, title, totalTokens)];
   visible.forEach((item, index) => {
     const hidden = items.length - visible.length;
     const isLast = hidden === 0 && index === visible.length - 1;

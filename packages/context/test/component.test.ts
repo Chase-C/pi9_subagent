@@ -94,7 +94,7 @@ describe("context report formatting", () => {
     expect(text).toContain("Estimated breakdown · 640 tokens");
     expect(text).toContain("Conversation (estimated) · 340 tokens");
     expect(text).toContain("Memory files (estimated) · 50 tokens");
-    expect(text).toContain("Tools (estimated) · 140 tokens");
+    expect(text).toContain("Tools (estimated) · 120 tokens");
     expect(text).toContain("Skills (estimated) · 30 tokens");
   });
 
@@ -116,6 +116,18 @@ describe("context report formatting", () => {
     for (const line of graphLines) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(20);
     }
+  });
+
+  it("renders unknown capacity separately when current usage is unavailable", () => {
+    const unknownUsageReport: ContextReport = {
+      ...graphReport,
+      usage: { contextWindow: 5_000, tokens: null, percent: null },
+    };
+
+    const text = formatContextReportLines(unknownUsageReport, plainTheme as never, 80).join("\n");
+
+    expect(text).toMatch(/^● ● ◆ \? \? {4}/m);
+    expect(text).toContain("? Unknown capacity: 2K");
   });
 });
 
