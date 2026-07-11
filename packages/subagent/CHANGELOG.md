@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-11
+
 ### Fixed
 
 - Always show spawned session handles in background run results, including the collapsed view.
@@ -60,6 +62,7 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.3.1...HEAD
+[0.3.1]: https://github.com/Chase-C/pi9/compare/v0.3.0...subagent-v0.3.1
 [0.3.0]: https://github.com/Chase-C/pi9/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Chase-C/pi9/compare/v0.1.1...v0.2.1
