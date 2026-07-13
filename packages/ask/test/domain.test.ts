@@ -19,7 +19,8 @@ describe("AskParamsSchema", () => {
       allowMultiple: true,
       allowFreeform: false,
     })).toBe(true);
-    expect(Check(AskParamsSchema, { question: "Choose", answered: true })).toBe(true);
+    expect(Check(AskParamsSchema, { question: "Choose" })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", answered: true })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", unknown: true })).toBe(false);
   });
 });
@@ -43,8 +44,7 @@ describe("validateAskParams", () => {
     [{ question: " " }, "question"],
     [{ question: "Choose", options: [{ label: " ", description: "No" }] }, "label"],
     [{ question: "Choose", options: [{ label: "A", description: "1" }, { label: " A ", description: "2" }] }, "duplicate"],
-    [{ question: "Choose", allowFreeform: false }, "option"],
-    [{ question: "Choose", answered: true }, "reserved"],
+    [{ question: "Choose", options: [], allowFreeform: false }, "option"],
   ])("rejects invalid parameters %#", (params, message) => {
     expect(() => validateAskParams(params as never)).toThrow(message as string);
   });

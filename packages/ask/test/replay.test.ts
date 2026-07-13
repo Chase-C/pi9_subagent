@@ -43,7 +43,18 @@ describe("replay records", () => {
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: args }] },
       { role: "custom", timestamp: 12, ...message },
     ]) as any[];
-    expect(projected[1]).toMatchObject({ role: "toolResult", toolCallId: "call-1", isError: false, timestamp: 12 });
+    expect(projected).toEqual([{
+      role: "custom",
+      customType: "ask:summary",
+      display: false,
+      content: JSON.stringify({
+        type: "ask_response",
+        question: "Choose?",
+        selectionMode: "single",
+        answer: [{ label: "A" }],
+      }),
+      timestamp: 12,
+    }]);
     expect(renderAskReanswerMessage(message, { expanded: false }, undefined).render(80).join("\n")).toContain("Selected: A");
   });
 });
@@ -88,12 +99,18 @@ describe("resolveAskReplayTarget", () => {
       { role: "custom", timestamp: 12, ...message },
     ]) as any[];
 
-    expect(projected).toHaveLength(2);
-    expect(projected[0].content[0].arguments).toEqual({ question: "Choose?", answered: true });
-    expect(projected[1]).toMatchObject({
-      role: "toolResult", toolCallId: "call-1", content: [{ type: "text", text: "Selected: B" }],
-      details: { status: "answered", answer: { selections: [{ label: "B" }] } }, isError: false,
-    });
+    expect(projected).toEqual([{
+      role: "custom",
+      customType: "ask:summary",
+      display: false,
+      content: JSON.stringify({
+        type: "ask_response",
+        question: "Choose?",
+        selectionMode: "single",
+        answer: [{ label: "B" }],
+      }),
+      timestamp: 12,
+    }]);
   });
 
   it.each([

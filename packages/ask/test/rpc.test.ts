@@ -26,7 +26,7 @@ describe("ask RPC fallback", () => {
     const select = vi.fn().mockResolvedValue("1. Type a response…");
     const input = vi.fn().mockResolvedValue("   ");
 
-    const result = await askWithRpc(ui(select, input), { question: "What next?" });
+    const result = await askWithRpc(ui(select, input), { question: "What next?", options: [] });
 
     expect(select).toHaveBeenCalledWith("What next?", ["1. Type a response…"]);
     expect(input).toHaveBeenCalledWith("What next?");
@@ -42,7 +42,7 @@ describe("ask RPC fallback", () => {
 
     const cancelledInput = await askWithRpc(
       ui(vi.fn().mockResolvedValue("1. Type a response…"), vi.fn().mockResolvedValue(undefined)),
-      { question: "Continue?" },
+      { question: "Continue?", options: [] },
     );
     expect(cancelledInput).toBeNull();
   });
@@ -179,7 +179,7 @@ describe("ask RPC fallback", () => {
     const controller = new AbortController();
     controller.abort();
     const dialog = ui(vi.fn(), vi.fn());
-    await expect(askWithRpc(dialog, { question: "Choose" }, controller.signal)).resolves.toBeNull();
+    await expect(askWithRpc(dialog, { question: "Choose", options: [] }, controller.signal)).resolves.toBeNull();
     expect(dialog.select).not.toHaveBeenCalled();
   });
 

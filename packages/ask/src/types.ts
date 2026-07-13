@@ -6,10 +6,9 @@ export type AskOption = {
 export type AskParams = {
   question: string;
   context?: string;
-  options?: AskOption[];
+  options: AskOption[];
   allowMultiple?: boolean;
   allowFreeform?: boolean;
-  answered?: boolean;
 };
 
 export type ValidatedAskParams = {

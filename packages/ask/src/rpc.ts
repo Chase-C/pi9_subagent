@@ -14,7 +14,7 @@ export async function askWithRpc(
   params: AskParams,
   signal?: AbortSignal,
 ): Promise<AskAnswer | null> {
-  const options = params.options ?? [];
+  const options = params.options;
   const allowFreeform = params.allowFreeform !== false;
   const prompt = params.context ? `${params.context}\n\n${params.question}` : params.question;
 

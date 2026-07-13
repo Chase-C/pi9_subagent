@@ -28,14 +28,14 @@ function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): 
   const title = `${theme.fg("toolTitle", "ask")} ${theme.fg(questionColor, args.question)}`;
   if (state.settled === true) return title;
 
-  const optionCount = args.options?.length ?? 0;
+  const optionCount = args.options.length;
   const mode = args.allowMultiple === true ? "multi · " : "";
   return `${title}\n${theme.fg("dim", `╰ ${mode}options:${optionCount}`)}`;
 }
 
 function renderAnsweredOptions(args: AskParams, answer: AskAnswer, theme: Theme): string {
   const selections = new Map(answer.selections.map(selection => [selection.label, selection]));
-  const lines = (args.options ?? []).map(option => {
+  const lines = args.options.map(option => {
     const label = option.label.trim();
     const selection = selections.get(label);
     const comment = selection?.comment ? ` (${selection.comment})` : "";
@@ -146,11 +146,13 @@ export default function askExtension(pi: ExtensionAPI) {
   pi.registerTool<typeof AskParamsSchema, AskToolDetails, AskRendererState>({
     name: "ask",
     label: "Ask",
-    description: "Ask one focused question with optional choices, comments, multiple selection, and freeform input.",
-    promptSnippet: "Ask the user a focused question when a decision is required",
+    description:
+      "Ask the user one focused question using selectable options, multiple selection, comments, and freeform input.",
+    promptSnippet: "Ask the user a focused question with selectable options when input is required",
     promptGuidelines: [
-      "Use ask only when user input is required; ask one focused question per call.",
-      "Offer concise, distinct options and enable freeform when choices may be incomplete.",
+      "Use ask only when you can offer a short list of useful options; ask open-ended questions normally.",
+      "Keep options concise and distinct, and enable freeform when other answers may be valid.",
+      "An `ask_response` contains the user's answer; use it instead of re-asking.",
     ],
     parameters: AskParamsSchema,
     executionMode: "sequential",

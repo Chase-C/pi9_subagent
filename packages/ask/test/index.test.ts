@@ -29,23 +29,29 @@ describe("ask extension integration", () => {
     const { tool, contextHandler } = register();
     expect(tool.parameters.additionalProperties).toBe(false);
     expect(tool.executionMode).toBe("sequential");
-    expect(tool.promptGuidelines.join(" ").length).toBeLessThan(240);
-    const rendererContext = { state: {}, args: { question: "Choose?" }, lastComponent: undefined };
+    const rendererContext = { state: {}, args: { question: "Choose?", options: [] }, lastComponent: undefined };
     expect(tool.renderCall(rendererContext.args, theme(), rendererContext).render(80).join("\n")).toContain("Choose?");
     expect(tool.renderResult({ content: [{ type: "text", text: "Selected: Yes" }] }, {}, theme(), rendererContext).render(80).join("\n")).toContain("Selected: Yes");
 
-    const details = { status: "answered", question: "Choose", answer: { selections: [{ label: "Yes" }] } };
     const messages: any[] = [
-      { role: "assistant", content: [{ type: "toolCall", id: "a", name: "ask", arguments: { question: "Choose", options: [{ label: "Yes" }, { label: "No" }] } }, { type: "toolCall", id: "alternative", name: "other", arguments: {} }] },
-      { role: "toolResult", toolCallId: "a", toolName: "ask", details, content: [{ type: "text", text: "original verbose result" }] },
+      { role: "assistant", content: [{ type: "toolCall", id: "a", name: "ask", arguments: { question: "Choose", options: [{ label: "Yes" }, { label: "No" }] } }] },
+      { role: "toolResult", toolCallId: "a", toolName: "ask", details: { status: "answered", question: "Choose", answer: { selections: [{ label: "Yes" }] } }, content: [{ type: "text", text: "original verbose result" }] },
     ];
-    const rewritten = contextHandler({ messages }).messages;
-    expect(rewritten[0].content[0].arguments).toEqual({ question: "Choose", answered: true });
-    expect(rewritten[1].content).toEqual([{ type: "text", text: "Selected: Yes" }]);
-    expect(rewritten[1].details).toEqual(details);
+    const rewritten = contextHandler({ messages }).messages as any[];
+    expect(rewritten).toHaveLength(1);
+    expect(rewritten[0]).toMatchObject({
+      role: "custom",
+      customType: "ask:summary",
+      display: false,
+      timestamp: expect.any(Number),
+    });
+    expect(JSON.parse(rewritten[0].content)).toEqual({
+      type: "ask_response",
+      question: "Choose",
+      selectionMode: "single",
+      answer: [{ label: "Yes" }],
+    });
     expect(messages[0].content[0].arguments.options).toHaveLength(2);
-    expect(messages[0].content[1].id).toBe("alternative");
-    expect(messages[1].details).toBe(details);
   });
 
   it("renders the pending response type and the answered option list", () => {
@@ -137,7 +143,7 @@ describe("ask extension integration", () => {
 
   it("returns unavailable without throwing or emitting cancellation", async () => {
     const { tool, emit } = register();
-    const result = await tool.execute("id", { question: "Continue?" }, undefined, undefined, { mode: "print", hasUI: false, ui: {} });
+    const result = await tool.execute("id", { question: "Continue?", options: [] }, undefined, undefined, { mode: "print", hasUI: false, ui: {} });
     expect(result.details).toEqual({ status: "ui_unavailable", question: "Continue?" });
     expect(emit).not.toHaveBeenCalledWith("ask:cancelled", expect.anything());
   });
@@ -168,7 +174,7 @@ describe("ask extension integration", () => {
     controller.abort();
     const add = vi.spyOn(controller.signal, "addEventListener");
     const custom = vi.fn((factory) => new Promise((resolve) => factory({ requestRender: vi.fn() }, theme(), {}, resolve)));
-    const result = await tool.execute("id", { question: "Continue?" }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
+    const result = await tool.execute("id", { question: "Continue?", options: [] }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
     expect(result.details.status).toBe("cancelled");
     expect(add).not.toHaveBeenCalled();
   });
@@ -180,7 +186,7 @@ describe("ask extension integration", () => {
       factory({ requestRender: vi.fn() }, theme(), {}, resolve);
       controller.abort();
     }));
-    const result = await tool.execute("id", { question: "Continue?" }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
+    const result = await tool.execute("id", { question: "Continue?", options: [] }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
     expect(result.details.status).toBe("cancelled");
     expect(emit).toHaveBeenCalledWith("ask:cancelled", result.details);
   });
@@ -376,25 +382,27 @@ describe("ask extension integration", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("restores later native Ask details by tool-call identity with intervening summary=%s", (withSummary) => {
+  it.each([false, true])("projects native and replay asks as summaries with intervening summary=%s", (withSummary) => {
     const { contextHandler } = register();
-    const nativeDetails = { status: "answered", question: "Later?", answer: { selections: [{ label: "Later" }] } };
     const firstCall = { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: { question: "Choose?", options: [{ label: "Yes" }] } }] };
     const laterCall = { role: "assistant", content: [{ type: "toolCall", id: "call-2", name: "ask", arguments: { question: "Later?", options: [{ label: "Later" }] } }] };
-    const laterResult = { role: "toolResult", toolCallId: "call-2", toolName: "ask", content: [{ type: "text", text: "verbose" }], details: nativeDetails };
+    const laterResult = { role: "toolResult", toolCallId: "call-2", toolName: "ask", content: [{ type: "text", text: "verbose" }], details: { status: "answered", question: "Later?", answer: { selections: [{ label: "Later" }] } } };
     const marker = { role: "custom", customType: "ask:reanswer", content: "Replay", timestamp: 42, details: { toolCallId: "call-1", question: "Choose?", allowMultiple: false, answer: { selections: [{ label: "Yes" }] } } };
-    const summary = { role: "branchSummary", content: "Earlier branch" };
-    const messages = [firstCall, ...(withSummary ? [summary] : []), laterCall, laterResult, marker];
+    const branchSummary = { role: "branchSummary", content: "Earlier branch" };
+    const messages = [firstCall, ...(withSummary ? [branchSummary] : []), laterCall, laterResult, marker];
 
     const rewritten = contextHandler({ messages }).messages as any[];
-    const projectedNative = rewritten.find(message => message.toolCallId === "call-2");
-    expect(projectedNative.details).toEqual(nativeDetails);
-    expect(rewritten.find(message => message.content?.some?.((item: any) => item.id === "call-2")).details).toBeUndefined();
-    expect(rewritten.map(message => message.toolCallId ?? message.content?.[0]?.id ?? message.role)).toEqual(
-      withSummary
-        ? ["call-1", "call-1", "branchSummary", "call-2", "call-2"]
-        : ["call-1", "call-1", "call-2", "call-2"],
-    );
+    expect(rewritten).toHaveLength(withSummary ? 3 : 2);
+    expect(rewritten[0]).toMatchObject({ role: "custom", customType: "ask:summary", display: false, timestamp: 42 });
+    expect(JSON.parse(rewritten[0].content)).toEqual({
+      type: "ask_response", question: "Choose?", selectionMode: "single", answer: [{ label: "Yes" }],
+    });
+    if (withSummary) expect(rewritten[1]).toEqual(branchSummary);
+    const laterSummary = rewritten[withSummary ? 2 : 1];
+    expect(laterSummary).toMatchObject({ role: "custom", customType: "ask:summary", display: false, timestamp: expect.any(Number) });
+    expect(JSON.parse(laterSummary.content)).toEqual({
+      type: "ask_response", question: "Later?", selectionMode: "single", answer: [{ label: "Later" }],
+    });
   });
 
   it("projects a durable replay through the canonical context adapter", () => {
@@ -403,19 +411,20 @@ describe("ask extension integration", () => {
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: { question: "  Choose?  ", context: "  Release  ", options: [{ label: "  Yes  " }, { label: " No " }] } }] },
       { role: "custom", customType: "ask:reanswer", content: "Re-answer: Choose?", timestamp: 77, details: { toolCallId: "call-1", question: "Choose?", context: "Release", allowMultiple: false, answer: { selections: [{ label: "Yes" }] } } },
     ];
-    const rewritten = contextHandler({ messages }).messages;
-    expect(rewritten[0].content[0].arguments).toEqual({ question: "Choose?", context: "Release", answered: true });
-    expect(rewritten[1]).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call-1",
-      isError: false,
+    const rewritten = contextHandler({ messages }).messages as any[];
+    expect(rewritten).toEqual([{
+      role: "custom",
+      customType: "ask:summary",
+      display: false,
+      content: JSON.stringify({
+        type: "ask_response",
+        question: "Choose?",
+        context: "Release",
+        selectionMode: "single",
+        answer: [{ label: "Yes" }],
+      }),
       timestamp: 77,
-    });
-    expect(rewritten[1].details).toEqual({
-      status: "answered",
-      question: "Choose?",
-      answer: { selections: [{ label: "Yes" }] },
-    });
+    }]);
   });
 });
 

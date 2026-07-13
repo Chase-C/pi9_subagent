@@ -48,9 +48,9 @@ RPC mode falls back to Pi's `select` and `input` dialogs. Multiple selection use
 
 ## Context behavior
 
-Before each model request, completed ask calls are copied with their original options replaced by the schema-valid `answered` marker. The selected labels, descriptions, comments, and freeform answer remain in the result. This reduces context use without mutating stored session entries. Cancelled and unavailable questionnaires are left intact.
+Before each model request, completed standalone Ask exchanges are projected non-destructively as hidden `ask:summary` custom messages. Each summary contains compact JSON with `type: "ask_response"`, `question`, optional `context`, `selectionMode`, and an `answer` array of selected objects followed by an optional freeform response. Stored entries and the visible tool row remain unchanged; revisions use the latest answer.
 
-Re-answers are not native tool reruns and do not create a second tool result in session history. They use a hidden `ask:reanswer` marker containing the revised answer, while the original tool row renders the latest revision. The context hook validates that marker against the original tool call and projects it as the revised tool result for the model, reusing the native result retained when navigating to the visible tool row. Malformed, ambiguous, or unmatched replay markers are left unchanged. Replay is available only in the TUI and only for a single standalone Ask tool call.
+Mixed-tool or multiple-Ask messages, invalid calls, and cancelled or unavailable results remain intact rather than being projected. Malformed, ambiguous, or unmatched entries are left unchanged. Replay is available only in the TUI and only for a single standalone Ask tool call.
 
 ## Development
 

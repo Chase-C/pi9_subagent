@@ -27,7 +27,7 @@ interface AskComponentOptions {
   theme: Theme;
   question: string;
   context?: string;
-  options?: readonly (AskOption & { id?: string })[];
+  options: readonly (AskOption & { id?: string })[];
   allowMultiple?: boolean;
   allowFreeform?: boolean;
   onSubmit?: (answer: AskAnswer) => void;
@@ -46,7 +46,7 @@ export class AskComponent implements Component, Focusable {
   constructor(private readonly config: AskComponentOptions) {
     if (!config.question.trim()) throw new Error("An ask question must be non-empty.");
 
-    this.sourceOptions = (config.options ?? []).map((option, index) => {
+    this.sourceOptions = config.options.map((option, index) => {
       const id = option.id || `option-${index + 1}`;
       const normalized = { ...option, id };
       this.optionsById.set(id, normalized);
@@ -242,7 +242,6 @@ export class AskComponent implements Component, Focusable {
   }
 
   private renderOptions(lines: string[], width: number): void {
-    const add = (line: string) => lines.push(fit(line, width));
     const addPrefixed = (prefix: string, text: string, color?: "text" | "muted" | "dim" | "accent") => {
       const styled = color ? this.config.theme.fg(color, text) : text;
       addWrappedWithPrefix(lines, prefix, styled, width);
