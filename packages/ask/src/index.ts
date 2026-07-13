@@ -26,7 +26,11 @@ type AskRendererState = {
 function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): string {
   const questionColor = state.answered === true ? "text" : "dim";
   const title = `${theme.fg("toolTitle", "ask")} ${theme.fg(questionColor, args.question)}`;
-  return state.settled === true ? title : `${title}\n${theme.fg("dim", args.allowMultiple === true ? "multi" : "single")}`;
+  if (state.settled === true) return title;
+
+  const optionCount = args.options?.length ?? 0;
+  const mode = args.allowMultiple === true ? "multi · " : "";
+  return `${title}\n${theme.fg("dim", `╰ ${mode}options:${optionCount}`)}`;
 }
 
 function renderAnsweredOptions(args: AskParams, answer: AskAnswer, theme: Theme): string {
@@ -34,9 +38,8 @@ function renderAnsweredOptions(args: AskParams, answer: AskAnswer, theme: Theme)
   const lines = (args.options ?? []).map(option => {
     const label = option.label.trim();
     const selection = selections.get(label);
-    const description = option.description?.trim();
     const comment = selection?.comment ? ` (${selection.comment})` : "";
-    const text = `${label}${description ? ` — ${description}` : ""}${comment}`;
+    const text = `${label}${comment}`;
     return selection
       ? `${theme.fg("success", CHECKED_CIRCLE)} ${theme.fg("text", text)}`
       : theme.fg("dim", `${EMPTY_CIRCLE} ${text}`);
@@ -48,6 +51,7 @@ function renderAnsweredOptions(args: AskParams, answer: AskAnswer, theme: Theme)
 export default function askExtension(pi: ExtensionAPI) {
   let replayInProgress = false;
   let replayTreeSelection = false;
+  let clearReplayEditorAfterSettlement = false;
   let pendingReplay: ReturnType<typeof buildAskReplayMessage>["details"] | undefined;
   const revisedAnswers = new Map<string, AskAnswer>();
   const rendererStates = new Map<string, AskRendererState>();
@@ -68,7 +72,11 @@ export default function askExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => restoreRevisions(ctx.sessionManager.getBranch()));
   pi.on("context", (event) => ({ messages: rewriteAskContext(event.messages) }));
-  pi.on("agent_settled", () => {
+  pi.on("agent_settled", (_event, ctx) => {
+    if (clearReplayEditorAfterSettlement) {
+      clearReplayEditorAfterSettlement = false;
+      setTimeout(() => ctx.ui.setEditorText(""), 0);
+    }
     if (!pendingReplay) return;
     pi.events.emit("ask:reanswered", pendingReplay);
     pendingReplay = undefined;
@@ -78,6 +86,7 @@ export default function askExtension(pi: ExtensionAPI) {
     pendingReplay = undefined;
     replayInProgress = false;
     replayTreeSelection = false;
+    clearReplayEditorAfterSettlement = false;
     revisedAnswers.clear();
     rendererStates.clear();
   });
@@ -110,7 +119,8 @@ export default function askExtension(pi: ExtensionAPI) {
     if (!call || call.type !== "toolCall") return;
 
     // Pi restores selected custom-message content after this hook returns. Keep
-    // the editor temporarily non-empty, then remove the guard on the next tick.
+    // the editor temporarily non-empty until the replay turn settles so the
+    // selected marker text cannot replace the guard.
     const guardEditor = suppressEditorRestore && !ctx.ui.getEditorText().trim();
     if (guardEditor) ctx.ui.setEditorText(TREE_EDITOR_GUARD);
 
@@ -127,9 +137,8 @@ export default function askExtension(pi: ExtensionAPI) {
     } finally {
       if (!dispatched) replayInProgress = false;
       if (guardEditor) {
-        setTimeout(() => {
-          if (ctx.ui.getEditorText() === TREE_EDITOR_GUARD) ctx.ui.setEditorText("");
-        }, 0);
+        if (dispatched) clearReplayEditorAfterSettlement = true;
+        else setTimeout(() => ctx.ui.setEditorText(""), 0);
       }
     }
   });

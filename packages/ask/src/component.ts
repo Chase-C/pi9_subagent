@@ -210,14 +210,14 @@ export class AskComponent implements Component, Focusable {
       // the option it belongs to, and so freeform editing does not feel like a
       // separate prompt.
       this.renderOptions(lines, renderWidth);
-      add("");
-      const option = this.editingOption();
-      const title = this.questionnaireState.mode === "comment"
-        ? `Comment for ${option?.label ?? "option"}`
-        : "Your response";
-      addPrefixed(" ", this.config.theme.bold(title), "accent");
-      for (const line of this.editor.render(renderWidth)) add(fit(line, renderWidth));
-      addPrefixed(" ", this.config.theme.fg("dim", this.editorHelpText()), "dim");
+      const inputPrefix = `    ${this.config.theme.fg("accent", "↳")} `;
+      const continuationPrefix = " ".repeat(visibleWidth(inputPrefix));
+      const inputWidth = Math.max(1, renderWidth - visibleWidth(inputPrefix));
+      const editorLines = this.editor.render(inputWidth).filter(line => visibleWidth(line) > 0);
+      for (const [index, line] of editorLines.entries()) {
+        add(`${index === 0 ? inputPrefix : continuationPrefix}${line}`);
+      }
+      addPrefixed(continuationPrefix, this.config.theme.fg("dim", this.editorHelpText()), "dim");
     }
 
     add(this.config.theme.fg("border", "─".repeat(renderWidth)));
@@ -294,11 +294,6 @@ export class AskComponent implements Component, Focusable {
       : "Enter save response · Esc discard";
   }
 
-  private editingOption(): NormalizedOption | undefined {
-    const id = this.questionnaireState.editingOptionId;
-    return id ? this.optionsById.get(id) : undefined;
-  }
-
   private isFreeformRow(): boolean {
     return this.questionnaireState.highlightedRow >= this.sourceOptions.length;
   }
@@ -371,7 +366,7 @@ export class AskComponent implements Component, Focusable {
 
 function editorTheme(theme: Theme): EditorTheme {
   return {
-    borderColor: (text) => theme.fg("accent", text),
+    borderColor: () => "",
     selectList: {
       selectedPrefix: (text) => theme.fg("accent", text),
       selectedText: (text) => theme.fg("accent", text),

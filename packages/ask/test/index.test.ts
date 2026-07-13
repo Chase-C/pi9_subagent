@@ -68,7 +68,7 @@ describe("ask extension integration", () => {
     const context = { state, args, lastComponent: undefined };
     const call = tool.renderCall(args, styledTheme, context);
 
-    expect(call.render(80).map((line: string) => line.trimEnd())).toEqual(["[toolTitle]ask [dim]Choose?", "[dim]single"]);
+    expect(call.render(80).map((line: string) => line.trimEnd())).toEqual(["[toolTitle]ask [dim]Choose?", "[dim]╰ options:2"]);
 
     const answered = tool.renderResult({
       content: [{ type: "text", text: "Selected: Beta" }],
@@ -80,8 +80,8 @@ describe("ask extension integration", () => {
     }, {}, styledTheme, context);
     expect(call.render(80).map((line: string) => line.trimEnd())).toEqual(["[toolTitle]ask [text]Choose?"]);
     expect(answered.render(80).map((line: string) => line.trimEnd())).toEqual([
-      "[dim]╰ [dim]󰄰 Alpha — First",
-      "  [success]󰄴 [text]Beta — Second (Best fit)",
+      "[dim]╰ [dim]󰄰 Alpha",
+      "  [success]󰄴 [text]Beta (Best fit)",
       "  [success]󰄴 [text]Something else",
     ]);
 
@@ -91,8 +91,8 @@ describe("ask extension integration", () => {
     }, {}, styledTheme, { state: {}, args, lastComponent: undefined });
     expect(withoutFreeform.render(80)).toHaveLength(2);
 
-    const multiArgs = { question: "Choose several", allowMultiple: true };
-    expect(tool.renderCall(multiArgs, styledTheme, { state: {}, args: multiArgs, lastComponent: undefined }).render(80)[1].trimEnd()).toBe("[dim]multi");
+    const multiArgs = { question: "Choose several", options: [{ label: "Only" }], allowMultiple: true };
+    expect(tool.renderCall(multiArgs, styledTheme, { state: {}, args: multiArgs, lastComponent: undefined }).render(80)[1].trimEnd()).toBe("[dim]╰ multi · options:1");
   });
 
   it("normalizes without mutating the questionnaire and uses custom TUI", async () => {
@@ -293,6 +293,9 @@ describe("ask extension integration", () => {
       );
 
       expect(editorText).not.toBe("");
+      await vi.runAllTimersAsync();
+      editorText = "Selected: Yes";
+      await handlers.get("agent_settled")({}, { ui: { setEditorText } });
       await vi.runAllTimersAsync();
       expect(editorText).toBe("");
       expect(setEditorText).toHaveBeenCalledTimes(2);

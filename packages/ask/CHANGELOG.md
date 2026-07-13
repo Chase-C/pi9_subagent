@@ -4,6 +4,16 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Render pending tool calls with a compact branch line showing multi-select mode when applicable and the option count.
+- Render freeform and comment inputs as borderless, indented continuations of their selected option.
+- Keep option descriptions in the questionnaire while omitting them from settled tool-row output.
+
+### Fixed
+
+- Keep hidden replay-marker text out of the editor after re-answering from `/tree`.
+
 ## [0.1.0] - 2026-07-12
 
 ### Added

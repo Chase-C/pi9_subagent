@@ -106,6 +106,12 @@ describe("AskComponent", () => {
     component.handleInput("\r");
     expect(component.state.mode).toBe("freeform");
 
+    const lines = component.render(80);
+    const optionLine = lines.findIndex(line => line.includes("Type a response"));
+    expect(lines[optionLine + 1]).toMatch(/^    ↳ /);
+    expect(lines.filter(line => /^─+$/.test(line))).toHaveLength(2);
+    expect(lines.join("\n")).not.toContain("Your response");
+
     component.handleInput("Use the fallback");
     component.handleInput("\r");
 
