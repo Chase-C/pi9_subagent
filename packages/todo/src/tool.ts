@@ -8,42 +8,36 @@ import {
   createReminderCadenceState,
   noteReminderTurn,
   noteTodoInteraction,
-  resetReminderCadence,
   type ReminderCadenceConfig,
 } from "./reminder-cadence.js";
 import { formatTodoReminder } from "./reminder.js";
 import { renderResult as renderTodoResult } from "./renderer.js";
 import { TodoToolFrame, type TodoToolFrameContent, type TodoToolFrameTheme } from "./tool-frame.js";
 import { TodoParamsSchema } from "./schema.js";
-import { DEFAULT_TODO_UI_SETTINGS, loadTodoUiSettings, type TodoUiSettings } from "./settings.js";
+import { DEFAULT_TODO_SETTINGS, loadTodoSettings, type TodoSettings } from "./settings.js";
 import { createTodoState, todoAddressKey, transitionTodoState } from "./state.js";
-import type { TodoAction, TodoAddress, TodoState, TodoToolDetails } from "./types.js";
+import type { TodoAddress, TodoState, TodoStatus, TodoToolDetails } from "./types.js";
 import { shouldRenderTodoAction } from "./visibility.js";
 import { updateTodoWidget } from "./widget.js";
 
-function taskStatuses(state: TodoState): Map<string, string> {
+function taskStatuses(state: TodoState): Map<string, TodoStatus> {
   return new Map(state.phases.flatMap((phase) => phase.tasks.map((task) => [todoAddressKey(phase.name, task.name), task.status])));
 }
 
-function taskAddresses(state: TodoState): Map<string, TodoAddress> {
-  return new Map(state.phases.flatMap((phase) => phase.tasks.map((task) => {
-    const address = { phase: phase.name, task: task.name };
-    return [todoAddressKey(address.phase, address.task), address];
+function taskAddresses(state: TodoState): TodoAddress[] {
+  return state.phases.flatMap((phase) => phase.tasks.map((task) => ({
+    phase: phase.name,
+    task: task.name,
   })));
 }
 
 function changedTasks(previous: TodoState, next: TodoState): TodoAddress[] {
   const before = taskStatuses(previous);
-  const after = taskStatuses(next);
-  const addresses = taskAddresses(next);
-  return [...after.keys()].filter((key) => before.get(key) !== after.get(key)).map((key) => addresses.get(key)!);
-}
-
-function completedTasks(previous: TodoState, next: TodoState): TodoAddress[] {
-  const before = taskStatuses(previous);
-  return next.phases.flatMap((phase) => phase.tasks
-    .filter((task) => task.status === "completed" && before.has(todoAddressKey(phase.name, task.name)) && before.get(todoAddressKey(phase.name, task.name)) !== "completed")
-    .map((task) => ({ phase: phase.name, task: task.name })));
+  return next.phases.flatMap((phase) => phase.tasks.flatMap((task) =>
+    before.get(todoAddressKey(phase.name, task.name)) === task.status
+      ? []
+      : [{ phase: phase.name, task: task.name }],
+  ));
 }
 
 function createTodoFrame(
@@ -68,21 +62,13 @@ type TodoRenderInput = {
 type TodoRenderTheme = Parameters<typeof renderTodoResult>[2];
 type TrackedSetRenderer = { toolCallId: string; invalidate?: () => void };
 
-function reminderConfig(settings: TodoUiSettings): ReminderCadenceConfig {
+function reminderConfig(settings: TodoSettings): ReminderCadenceConfig {
   return {
     minTurns: settings.reminderMinTurns,
     maxTurns: settings.reminderMaxTurns,
     outputTokens: settings.reminderOutputTokens,
     maxPerRun: settings.reminderMaxPerRun,
   };
-}
-
-function outputTokens(message: unknown): number {
-  if (!message || typeof message !== "object") return 0;
-  const usage = (message as { usage?: unknown }).usage;
-  if (!usage || typeof usage !== "object") return 0;
-  const output = (usage as { output?: unknown }).output;
-  return typeof output === "number" && Number.isFinite(output) && output >= 0 ? output : 0;
 }
 
 /** Expanded content for the one set result that is allowed to follow in-memory state. */
@@ -108,7 +94,7 @@ class LiveSetResult implements Component {
 
 export function registerTodoTool(pi: ExtensionAPI): void {
   let state = createTodoState();
-  let settings: TodoUiSettings = { ...DEFAULT_TODO_UI_SETTINGS };
+  let settings: TodoSettings = { ...DEFAULT_TODO_SETTINGS };
   let reminderCadence = createReminderCadenceState();
   let pendingCompactionContext: string | undefined;
   let interactedWithTodoThisTurn = false;
@@ -126,12 +112,12 @@ export function registerTodoTool(pi: ExtensionAPI): void {
   };
 
   const resetReminderTracking = (): void => {
-    reminderCadence = resetReminderCadence();
+    reminderCadence = createReminderCadenceState();
     interactedWithTodoThisTurn = false;
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    const loaded = await loadTodoUiSettings(ctx);
+    const loaded = await loadTodoSettings(ctx);
     settings = loaded.settings;
     if (loaded.warning) ctx.ui.notify(loaded.warning, "warning");
     restore(ctx);
@@ -153,7 +139,10 @@ export function registerTodoTool(pi: ExtensionAPI): void {
   pi.on("turn_end", (event) => {
     reminderCadence = interactedWithTodoThisTurn
       ? noteTodoInteraction(reminderCadence)
-      : noteReminderTurn(reminderCadence, outputTokens(event.message));
+      : noteReminderTurn(
+          reminderCadence,
+          event.message.role === "assistant" ? event.message.usage?.output ?? 0 : 0,
+        );
     interactedWithTodoThisTurn = false;
   });
   pi.on("context", (event) => {
@@ -204,16 +193,15 @@ export function registerTodoTool(pi: ExtensionAPI): void {
     execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const run = queue.then(() => {
         const previous = state;
-        const next = transitionTodoState(previous, params as TodoAction);
+        const next = transitionTodoState(previous, params);
         const details: TodoToolDetails = {
           action: params.action,
           state: next,
           changedTasks: params.action === "view"
             ? []
             : params.action === "set"
-              ? [...taskAddresses(next).values()]
+              ? taskAddresses(next)
               : changedTasks(previous, next),
-          completedTasks: params.action === "transition" ? completedTasks(previous, next) : [],
         };
         if (params.action !== "view") {
           state = next;

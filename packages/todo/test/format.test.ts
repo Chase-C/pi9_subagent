@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countTodos, formatTodoCompactionContext, formatTodoSummary, formatTodoTaskLines } from "../src/format.js";
+import { countTodos, formatTodoCompactionContext, formatTodoSummary, formatTodoTaskLines, todoTasks } from "../src/format.js";
 import type { TodoState } from "../src/types.js";
 
 const state: TodoState = {
@@ -27,7 +27,7 @@ describe("todo formatting", () => {
 
   it("handles empty state and counts non-terminal statuses as open", () => {
     expect(formatTodoTaskLines({ phases: [] })).toHaveLength(0);
-    expect(countTodos(state)).toEqual({ open: 2, completed: 1, cancelled: 1 });
+    expect(countTodos(todoTasks(state))).toEqual({ open: 2, completed: 1, cancelled: 1 });
   });
 
   it("formats an exact complete post-compaction context in phase and task order", () => {

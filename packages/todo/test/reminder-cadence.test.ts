@@ -5,7 +5,6 @@ import {
   createReminderCadenceState,
   noteReminderTurn,
   noteTodoInteraction,
-  resetReminderCadence,
   type ReminderCadenceConfig,
 } from "../src/reminder-cadence.js";
 
@@ -74,7 +73,7 @@ describe("reminder cadence", () => {
   });
 
   it("fully resets cadence state for a new session or branch", () => {
-    expect(resetReminderCadence()).toEqual({
+    expect(createReminderCadenceState()).toEqual({
       turns: 0,
       outputTokens: 0,
       remindersThisRun: 0,

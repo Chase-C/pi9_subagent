@@ -7,8 +7,8 @@ vi.mock("../src/settings.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/settings.js")>();
   return {
     ...original,
-    loadTodoUiSettings: vi.fn(async () => ({
-      settings: { ...original.DEFAULT_TODO_UI_SETTINGS, ...settingsControl.loaded },
+    loadTodoSettings: vi.fn(async () => ({
+      settings: { ...original.DEFAULT_TODO_SETTINGS, ...settingsControl.loaded },
     })),
   };
 });
@@ -315,7 +315,7 @@ describe("todoExtension", () => {
       type: "message",
       message: {
         role: "toolResult", toolName: "todo",
-        details: { action: "set", state: restoredState, changedTasks: [], completedTasks: [] },
+        details: { action: "set", state: restoredState, changedTasks: [] },
       },
     }]));
     expect(await handlers.get("context")?.({ messages: [] }, executionContext)).toBeUndefined();
@@ -351,7 +351,6 @@ describe("todoExtension", () => {
       transitions: [{ phase: "Build", task: "Implement feature", status: "completed" }],
     }, undefined, undefined, executionContext);
     expect(transition.details.changedTasks).toEqual([{ phase: "Build", task: "Implement feature" }]);
-    expect(transition.details.completedTasks).toEqual([{ phase: "Build", task: "Implement feature" }]);
 
     const filtered = await tool.execute("view", { action: "view", phase: "Build" }, undefined, undefined, executionContext);
     const full = await tool.execute("view", { action: "view" }, undefined, undefined, executionContext);
@@ -432,7 +431,7 @@ describe("todoExtension", () => {
         type: "message",
         message: {
           role: "toolResult", toolName: "todo",
-          details: { action: "set", state: restoredState, changedTasks: [], completedTasks: [] },
+          details: { action: "set", state: restoredState, changedTasks: [] },
         },
       }] },
     });

@@ -1,4 +1,4 @@
-import { wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import type { TodoState } from "./types.js";
@@ -29,7 +29,7 @@ export class TodoWidgetComponent implements Component {
     }
   }
 
-  invalidate(): void { }
+  invalidate(): void {}
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, Math.floor(width) || 1);
@@ -37,7 +37,7 @@ export class TodoWidgetComponent implements Component {
     const lines = renderTodoWidgetLines(this.state, this.theme, safeWidth, {
       ...layoutOptions,
       activeMarker: this.frames[this.frameIndex],
-    }).flatMap(line => wrapTextWithAnsi(line, safeWidth));
+    });
     if (blankLineBelow && lines.length > 0) lines.push("");
     return lines;
   }

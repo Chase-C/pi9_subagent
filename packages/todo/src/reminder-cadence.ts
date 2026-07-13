@@ -1,27 +1,18 @@
 export interface ReminderCadenceConfig {
-  minTurns: number;
-  maxTurns: number;
-  outputTokens: number;
-  maxPerRun: number;
+  readonly minTurns: number;
+  readonly maxTurns: number;
+  readonly outputTokens: number;
+  readonly maxPerRun: number;
 }
 
 export interface ReminderCadenceState {
-  turns: number;
-  outputTokens: number;
-  remindersThisRun: number;
-}
-
-export interface ConsumeReminderResult {
-  due: boolean;
-  state: ReminderCadenceState;
+  readonly turns: number;
+  readonly outputTokens: number;
+  readonly remindersThisRun: number;
 }
 
 export function createReminderCadenceState(): ReminderCadenceState {
   return { turns: 0, outputTokens: 0, remindersThisRun: 0 };
-}
-
-export function resetReminderCadence(): ReminderCadenceState {
-  return createReminderCadenceState();
 }
 
 export function beginReminderAgentRun(state: ReminderCadenceState): ReminderCadenceState {
@@ -35,7 +26,7 @@ export function noteReminderTurn(
   return {
     ...state,
     turns: state.turns + 1,
-    outputTokens: state.outputTokens + nonnegative(outputTokens),
+    outputTokens: state.outputTokens + validTokenCount(outputTokens),
   };
 }
 
@@ -46,11 +37,10 @@ export function noteTodoInteraction(state: ReminderCadenceState): ReminderCadenc
 export function consumeDueReminder(
   state: ReminderCadenceState,
   config: ReminderCadenceConfig,
-): ConsumeReminderResult {
-  const minimumMet = state.turns >= nonnegative(config.minTurns);
-  const triggerMet = state.turns >= nonnegative(config.maxTurns)
-    || state.outputTokens >= nonnegative(config.outputTokens);
-  const belowCap = state.remindersThisRun < nonnegative(config.maxPerRun);
+): { due: boolean; state: ReminderCadenceState } {
+  const minimumMet = state.turns >= config.minTurns;
+  const triggerMet = state.turns >= config.maxTurns || state.outputTokens >= config.outputTokens;
+  const belowCap = state.remindersThisRun < config.maxPerRun;
 
   if (!minimumMet || !triggerMet || !belowCap) return { due: false, state };
 
@@ -64,6 +54,6 @@ export function consumeDueReminder(
   };
 }
 
-function nonnegative(value: number): number {
+function validTokenCount(value: number): number {
   return Number.isFinite(value) && value >= 0 ? value : 0;
 }

@@ -5,16 +5,16 @@ import { join } from "node:path";
 import { test } from "vitest";
 
 import {
-  DEFAULT_TODO_UI_SETTINGS,
-  TodoUiSettingsStore,
-  normalizeTodoUiSettings,
+  DEFAULT_TODO_SETTINGS,
+  loadTodoSettings,
+  normalizeTodoSettings,
 } from "../src/settings.js";
 
 test("todo UI settings use defaults when no settings file exists", async () => {
   const root = await mkdtemp(join(tmpdir(), "todo-settings-default-"));
-  const result = await new TodoUiSettingsStore({ globalSettingsPath: join(root, "settings.json") }).load();
+  const result = await loadTodoSettings(undefined, { globalSettingsPath: join(root, "settings.json") });
 
-  assert.deepEqual(result.settings, DEFAULT_TODO_UI_SETTINGS);
+  assert.deepEqual(result.settings, DEFAULT_TODO_SETTINGS);
   assert.deepEqual(result.settings, {
     widgetPlacement: "aboveEditor",
     maxVisibleTasks: 5,
@@ -30,7 +30,7 @@ test("todo UI settings use defaults when no settings file exists", async () => {
 });
 
 test("todo UI settings validate each field independently", () => {
-  const result = normalizeTodoUiSettings({
+  const result = normalizeTodoSettings({
     widgetPlacement: "belowEditor",
     maxVisibleTasks: 0,
     fallbackGlyphs: true,
@@ -53,7 +53,7 @@ test("todo UI settings validate each field independently", () => {
 });
 
 test("todo reminder settings accept configured boolean and positive integers", () => {
-  const result = normalizeTodoUiSettings({
+  const result = normalizeTodoSettings({
     dynamicReminders: false,
     reminderMinTurns: 6,
     reminderMaxTurns: 12,
@@ -76,7 +76,7 @@ test("todo reminder settings accept configured boolean and positive integers", (
 });
 
 test("invalid reminder fields warn and default independently", () => {
-  const result = normalizeTodoUiSettings({
+  const result = normalizeTodoSettings({
     dynamicReminders: "false",
     reminderMinTurns: 0,
     reminderMaxTurns: 1.5,
@@ -104,7 +104,7 @@ test("invalid reminder fields warn and default independently", () => {
 });
 
 test("a reminder turn range with max below min falls back to the prior complete range", () => {
-  const result = normalizeTodoUiSettings({
+  const result = normalizeTodoSettings({
     dynamicReminders: false,
     reminderMinTurns: 10,
     reminderMaxTurns: 6,
@@ -145,11 +145,13 @@ test("trusted project settings override global todo settings", async () => {
     }),
   );
 
-  const store = new TodoUiSettingsStore({
-    globalSettingsPath: globalPath,
-    projectSettingsPath: cwd => join(cwd, ".pi", "todo", "settings.json"),
-  });
-  const result = await store.load({ cwd: join(root, "project"), isProjectTrusted: () => true });
+  const result = await loadTodoSettings(
+    { cwd: join(root, "project"), isProjectTrusted: () => true },
+    {
+      globalSettingsPath: globalPath,
+      projectSettingsPath: cwd => join(cwd, ".pi", "todo", "settings.json"),
+    },
+  );
 
   assert.deepEqual(result.settings, {
     widgetPlacement: "belowEditor",
@@ -173,11 +175,13 @@ test("an invalid project reminder range preserves the complete global range", as
   await writeFile(globalPath, JSON.stringify({ reminderMinTurns: 6, reminderMaxTurns: 10 }));
   await writeFile(projectPath, JSON.stringify({ reminderMinTurns: 12, reminderOutputTokens: 20000 }));
 
-  const store = new TodoUiSettingsStore({
-    globalSettingsPath: globalPath,
-    projectSettingsPath: cwd => join(cwd, ".pi", "todo", "settings.json"),
-  });
-  const result = await store.load({ cwd: join(root, "project"), isProjectTrusted: () => true });
+  const result = await loadTodoSettings(
+    { cwd: join(root, "project"), isProjectTrusted: () => true },
+    {
+      globalSettingsPath: globalPath,
+      projectSettingsPath: cwd => join(cwd, ".pi", "todo", "settings.json"),
+    },
+  );
 
   assert.equal(result.settings.reminderMinTurns, 6);
   assert.equal(result.settings.reminderMaxTurns, 10);
@@ -194,11 +198,13 @@ test("untrusted projects do not load project-local todo settings", async () => {
   await writeFile(globalPath, JSON.stringify({ maxVisibleTasks: 4, reminderMaxPerRun: 3 }));
   await writeFile(projectPath, JSON.stringify({ dynamicReminders: false, reminderMaxPerRun: 9 }));
 
-  const store = new TodoUiSettingsStore({
-    globalSettingsPath: globalPath,
-    projectSettingsPath: cwd => join(cwd, ".pi", "todo", "settings.json"),
-  });
-  const result = await store.load({ cwd: join(root, "project"), isProjectTrusted: () => false });
+  const result = await loadTodoSettings(
+    { cwd: join(root, "project"), isProjectTrusted: () => false },
+    {
+      globalSettingsPath: globalPath,
+      projectSettingsPath: cwd => join(cwd, ".pi", "todo", "settings.json"),
+    },
+  );
 
   assert.deepEqual(result.settings, {
     widgetPlacement: "aboveEditor",
@@ -223,11 +229,13 @@ test("invalid project tool visibility preserves the global value", async () => {
   await writeFile(globalPath, JSON.stringify({ toolVisibility: "all" }));
   await writeFile(projectPath, JSON.stringify({ toolVisibility: "invalid" }));
 
-  const store = new TodoUiSettingsStore({
-    globalSettingsPath: globalPath,
-    projectSettingsPath: cwd => join(cwd, ".pi", "todo", "settings.json"),
-  });
-  const result = await store.load({ cwd: join(root, "project"), isProjectTrusted: () => true });
+  const result = await loadTodoSettings(
+    { cwd: join(root, "project"), isProjectTrusted: () => true },
+    {
+      globalSettingsPath: globalPath,
+      projectSettingsPath: cwd => join(cwd, ".pi", "todo", "settings.json"),
+    },
+  );
 
   assert.equal(result.settings.toolVisibility, "all");
   assert.match(result.warning ?? "", /toolVisibility/);
