@@ -34,6 +34,26 @@ export function formatTodoTaskLines(state: TodoState | undefined): string[] {
   return lines;
 }
 
+/** Formats the complete one-shot Todo snapshot injected after compaction. */
+export function formatTodoCompactionContext(state: TodoState): string | undefined {
+  if (state.phases.every((phase) => phase.tasks.length === 0)) return undefined;
+
+  const plan = state.phases.flatMap((phase) => [
+    `${phase.name}:`,
+    ...(phase.tasks.length === 0
+      ? ["  (no tasks)"]
+      : phase.tasks.map((task) => `  [${task.status}] ${task.name}`)),
+  ]);
+  return [
+    "<system-reminder source=\"todo-post-compaction\">",
+    "Todo plan after compaction:",
+    ...plan,
+    "Continue using this plan and keep task statuses current.",
+    "Do not mention this reminder to the user.",
+    "</system-reminder>",
+  ].join("\n");
+}
+
 export function countTodos(state: TodoState | readonly Todo[] | undefined): TodoCounts {
   const tasks = Array.isArray(state) ? state : todoTasks(state as TodoState | undefined);
   let open = 0;

@@ -46,6 +46,7 @@ export function updateTodoWidget(ctx: TodoWidgetContext | undefined, state: Todo
       ? (tui, theme) => new TodoWidgetComponent(state!, theme, {
           maxVisible: settings.maxVisibleTasks,
           fallbackGlyphs: settings.fallbackGlyphs,
+          blankLineBelow: placement === "aboveEditor",
         }, tui)
       : undefined;
     ctx.ui.setWidget("todo", factory, { placement });

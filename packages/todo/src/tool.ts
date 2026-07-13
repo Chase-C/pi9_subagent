@@ -1,13 +1,23 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, type Component } from "@earendil-works/pi-tui";
-import { formatTodoSummary } from "./format.js";
+import { formatTodoCompactionContext, formatTodoSummary } from "./format.js";
 import { restoreTodoState } from "./persistence.js";
+import {
+  beginReminderAgentRun,
+  consumeDueReminder,
+  createReminderCadenceState,
+  noteReminderTurn,
+  noteTodoInteraction,
+  resetReminderCadence,
+  type ReminderCadenceConfig,
+} from "./reminder-cadence.js";
+import { formatTodoReminder } from "./reminder.js";
 import { renderResult as renderTodoResult } from "./renderer.js";
 import { TodoToolFrame, type TodoToolFrameContent, type TodoToolFrameTheme } from "./tool-frame.js";
 import { TodoParamsSchema } from "./schema.js";
 import { DEFAULT_TODO_UI_SETTINGS, loadTodoUiSettings, type TodoUiSettings } from "./settings.js";
 import { createTodoState, todoAddressKey, transitionTodoState } from "./state.js";
-import { TODO_STATUSES, type TodoAction, type TodoAddress, type TodoState, type TodoToolDetails } from "./types.js";
+import type { TodoAction, TodoAddress, TodoState, TodoToolDetails } from "./types.js";
 import { shouldRenderTodoAction } from "./visibility.js";
 import { updateTodoWidget } from "./widget.js";
 
@@ -58,6 +68,23 @@ type TodoRenderInput = {
 type TodoRenderTheme = Parameters<typeof renderTodoResult>[2];
 type TrackedSetRenderer = { toolCallId: string; invalidate?: () => void };
 
+function reminderConfig(settings: TodoUiSettings): ReminderCadenceConfig {
+  return {
+    minTurns: settings.reminderMinTurns,
+    maxTurns: settings.reminderMaxTurns,
+    outputTokens: settings.reminderOutputTokens,
+    maxPerRun: settings.reminderMaxPerRun,
+  };
+}
+
+function outputTokens(message: unknown): number {
+  if (!message || typeof message !== "object") return 0;
+  const usage = (message as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== "object") return 0;
+  const output = (usage as { output?: unknown }).output;
+  return typeof output === "number" && Number.isFinite(output) && output >= 0 ? output : 0;
+}
+
 /** Expanded content for the one set result that is allowed to follow in-memory state. */
 class LiveSetResult implements Component {
   constructor(
@@ -82,6 +109,9 @@ class LiveSetResult implements Component {
 export function registerTodoTool(pi: ExtensionAPI): void {
   let state = createTodoState();
   let settings: TodoUiSettings = { ...DEFAULT_TODO_UI_SETTINGS };
+  let reminderCadence = createReminderCadenceState();
+  let pendingCompactionContext: string | undefined;
+  let interactedWithTodoThisTurn = false;
   let queue: Promise<void> = Promise.resolve();
   let latestSetRenderer: TrackedSetRenderer | undefined;
 
@@ -95,30 +125,78 @@ export function registerTodoTool(pi: ExtensionAPI): void {
     updateTodoWidget(ctx, state, settings);
   };
 
+  const resetReminderTracking = (): void => {
+    reminderCadence = resetReminderCadence();
+    interactedWithTodoThisTurn = false;
+  };
+
   pi.on("session_start", async (_event, ctx) => {
     const loaded = await loadTodoUiSettings(ctx);
     settings = loaded.settings;
     if (loaded.warning) ctx.ui.notify(loaded.warning, "warning");
     restore(ctx);
+    pendingCompactionContext = undefined;
+    resetReminderTracking();
   });
-  pi.on("session_tree", (_event, ctx) => restore(ctx));
+  pi.on("session_tree", (_event, ctx) => {
+    restore(ctx);
+    pendingCompactionContext = undefined;
+    resetReminderTracking();
+  });
+  pi.on("session_compact", () => {
+    pendingCompactionContext = formatTodoCompactionContext(state);
+    if (pendingCompactionContext) reminderCadence = noteTodoInteraction(reminderCadence);
+  });
+  pi.on("before_agent_start", () => {
+    reminderCadence = beginReminderAgentRun(reminderCadence);
+  });
+  pi.on("turn_end", (event) => {
+    reminderCadence = interactedWithTodoThisTurn
+      ? noteTodoInteraction(reminderCadence)
+      : noteReminderTurn(reminderCadence, outputTokens(event.message));
+    interactedWithTodoThisTurn = false;
+  });
+  pi.on("context", (event) => {
+    if (pendingCompactionContext) {
+      const content = pendingCompactionContext;
+      pendingCompactionContext = undefined;
+      return {
+        messages: [...event.messages, { role: "user", content, timestamp: Date.now() }],
+      };
+    }
+
+    if (!settings.dynamicReminders) return;
+
+    const reminder = formatTodoReminder(state);
+    if (!reminder) return;
+
+    const consumed = consumeDueReminder(reminderCadence, reminderConfig(settings));
+    if (!consumed.due) return;
+
+    reminderCadence = consumed.state;
+    return {
+      messages: [...event.messages, { role: "user", content: reminder, timestamp: Date.now() }],
+    };
+  });
 
   pi.registerTool({
     name: "todo",
     label: "Todo",
     description: [
-      "Maintain a concise phased plan that reflects both intended work and current execution progress.",
+      "Maintain a phased task plan.",
       "Actions:",
-      "  set: Replace the entire plan. All tasks reset to pending. Use only for a new plan or full re-plan.",
-      "  add: Append tasks or phases without touching existing work.",
-      "  transition: Update task statuses (" + TODO_STATUSES.join(", ") + ") by exact phase and task name.",
-      "  view: Return the plan, optionally filtered to one phase.",
+      "  set(phases): Replace the plan; supplied tasks start pending.",
+      "  add(phases): Add phases or tasks; preserve existing tasks and statuses.",
+      "  transition(transitions): Set statuses by exact phase and task names.",
+      "  view(phase?): Return the full plan or one exact phase.",
     ].join("\n"),
-    promptSnippet: "Track multi-step work with the todo tool; keep statuses current as you go",
+    promptSnippet: "Track multi-step work in a phased task plan",
     promptGuidelines: [
-      "Use todo for non-trivial work with three or more distinct steps; skip todo for simple tasks.",
-      "Transition todo statuses immediately and honestly—mark tasks completed only when fully done, not merely attempted, and cancel abandoned tasks rather than leaving them pending.",
-      "Todo tasks in_progress must all belong to a single phase; finish or cancel a phase's active tasks before starting the next.",
+      "Use todo for work with 3+ distinct steps; skip it for 1–2 steps.",
+      "Transition todo tasks immediately when work starts or ends; do not defer updates until the end.",
+      "Complete todo tasks only after the work is done and verified; cancel abandoned or obsolete tasks.",
+      "Add material new work to todo as new tasks rather than expanding existing task scope.",
+      "Keep `in_progress` todo tasks in one phase; complete or cancel them before starting another phase.",
     ],
     parameters: TodoParamsSchema,
     renderShell: "self",
@@ -142,6 +220,7 @@ export function registerTodoTool(pi: ExtensionAPI): void {
           invalidateLatestSetRenderer();
         }
         updateTodoWidget(ctx, state, settings);
+        interactedWithTodoThisTurn = true;
         return {
           content: [{ type: "text" as const, text: formatTodoSummary(next) }],
           details,

@@ -9,6 +9,10 @@ const DROPLET_DURATIONS_MS = [220, 110, 80, 100, 420] as const;
 const PI_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const PI_SPINNER_INTERVAL_MS = 80;
 
+type TodoWidgetComponentOptions = TodoWidgetLayoutOptions & {
+  blankLineBelow?: boolean;
+};
+
 /** A width-aware component for Pi's persistent widget area. */
 export class TodoWidgetComponent implements Component {
   private frameIndex = 0;
@@ -17,7 +21,7 @@ export class TodoWidgetComponent implements Component {
   constructor(
     private readonly state: TodoState,
     private readonly theme: Theme | undefined,
-    private readonly options: TodoWidgetLayoutOptions = {},
+    private readonly options: TodoWidgetComponentOptions = {},
     private readonly tui?: Pick<TUI, "requestRender">,
   ) {
     if (tui && state.phases.some(phase => phase.tasks.some(task => task.status === "in_progress"))) {
@@ -29,10 +33,13 @@ export class TodoWidgetComponent implements Component {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, Math.floor(width) || 1);
-    return renderTodoWidgetLines(this.state, this.theme, safeWidth, {
-      ...this.options,
+    const { blankLineBelow, ...layoutOptions } = this.options;
+    const lines = renderTodoWidgetLines(this.state, this.theme, safeWidth, {
+      ...layoutOptions,
       activeMarker: this.frames[this.frameIndex],
     }).flatMap(line => wrapTextWithAnsi(line, safeWidth));
+    if (blankLineBelow && lines.length > 0) lines.push("");
+    return lines;
   }
 
   dispose(): void {

@@ -11,6 +11,11 @@ export interface TodoUiSettings {
   maxVisibleTasks: number;
   fallbackGlyphs: boolean;
   toolVisibility: TodoToolVisibility;
+  dynamicReminders: boolean;
+  reminderMinTurns: number;
+  reminderMaxTurns: number;
+  reminderOutputTokens: number;
+  reminderMaxPerRun: number;
 }
 
 /** The portion of Pi's session context needed to load project-specific settings. */
@@ -34,6 +39,11 @@ export const DEFAULT_TODO_UI_SETTINGS: TodoUiSettings = {
   maxVisibleTasks: 5,
   fallbackGlyphs: false,
   toolVisibility: "set-only",
+  dynamicReminders: true,
+  reminderMinTurns: 4,
+  reminderMaxTurns: 8,
+  reminderOutputTokens: 16000,
+  reminderMaxPerRun: 2,
 };
 
 const WIDGET_PLACEMENTS = new Set<TodoWidgetPlacement>(["aboveEditor", "belowEditor", "off"]);
@@ -140,6 +150,38 @@ function applySettings(value: unknown, settings: TodoUiSettings, warnings: strin
     } else {
       warnings.push("Invalid todo toolVisibility; ignoring value.");
     }
+  }
+  if (value.dynamicReminders !== undefined) {
+    if (typeof value.dynamicReminders === "boolean") {
+      settings.dynamicReminders = value.dynamicReminders;
+    } else {
+      warnings.push("Invalid todo dynamicReminders; ignoring value.");
+    }
+  }
+  const priorReminderMinTurns = settings.reminderMinTurns;
+  const priorReminderMaxTurns = settings.reminderMaxTurns;
+  applyPositiveInteger(value, settings, warnings, "reminderMinTurns");
+  applyPositiveInteger(value, settings, warnings, "reminderMaxTurns");
+  if (settings.reminderMaxTurns < settings.reminderMinTurns) {
+    settings.reminderMinTurns = priorReminderMinTurns;
+    settings.reminderMaxTurns = priorReminderMaxTurns;
+    warnings.push("Invalid todo reminderMaxTurns; must be at least reminderMinTurns; ignoring reminder turn range.");
+  }
+  applyPositiveInteger(value, settings, warnings, "reminderOutputTokens");
+  applyPositiveInteger(value, settings, warnings, "reminderMaxPerRun");
+}
+
+function applyPositiveInteger(
+  value: Record<string, unknown>,
+  settings: TodoUiSettings,
+  warnings: string[],
+  field: "reminderMinTurns" | "reminderMaxTurns" | "reminderOutputTokens" | "reminderMaxPerRun",
+): void {
+  if (value[field] === undefined) return;
+  if (Number.isInteger(value[field]) && (value[field] as number) > 0) {
+    settings[field] = value[field] as number;
+  } else {
+    warnings.push(`Invalid todo ${field}; ignoring value.`);
   }
 }
 
