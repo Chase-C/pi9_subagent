@@ -17,11 +17,12 @@ export async function launchQuestionnaire(
 
   let abortListener: (() => void) | undefined;
   try {
-    return await ctx.ui.custom<AskAnswer | null>((tui, theme, _keybindings, done) => {
+    return await ctx.ui.custom<AskAnswer | null>((tui, theme, keybindings, done) => {
       const component = new AskComponent({
+        ...params,
         tui,
         theme,
-        ...params,
+        keybindings,
         onSubmit: done,
         onCancel: () => done(null),
       });

@@ -24,6 +24,26 @@ const event = (newLeafId: string | null, summaryEntry?: SessionTreeEvent["summar
 const lookup = (entries: SessionEntry[]) => (id: string) => entries.find((entry) => entry.id === id);
 
 describe("replay records", () => {
+  it("retains preview in replay source params but never in replay answers", () => {
+    const previewSentinel = "REPLAY_PREVIEW_SENTINEL";
+    const storedArgs = {
+      question: "Choose?",
+      options: [{ label: "A", preview: previewSentinel }],
+    };
+    const storedParams = validateStoredArgs(storedArgs);
+    expect(storedParams?.options[0]?.preview).toBe(previewSentinel);
+
+    const source = assistant("ask-with-preview", [{ name: "ask", arguments: storedArgs }]);
+    const resolution = resolveAskReplayTarget(event("ask-with-preview"), lookup([source]));
+    expect(resolution.status).toBe("resolved");
+    if (resolution.status !== "resolved") return;
+    expect(resolution.params.options[0]?.preview).toBe(previewSentinel);
+
+    const message = buildAskReplayMessage("call-0", resolution.params, { selections: [{ label: "A" }] });
+    expect(JSON.stringify(message.details.answer)).not.toContain(previewSentinel);
+    expect(message.details.answer).toEqual({ selections: [{ label: "A" }] });
+  });
+
   it("builds canonical replay data with answer-oriented tree text", () => {
     expect(ASK_REPLAY_CUSTOM_TYPE).toBe("ask:reanswer");
     const message = buildAskReplayMessage("call-1", params, { selections: [{ label: "A" }] });

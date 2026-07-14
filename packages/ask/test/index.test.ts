@@ -1,22 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
 import askExtension from "../src/index.js";
 
-function register() {
+function register(initialActiveTools: string[] = []) {
   let tool: any;
+  let activeTools = [...initialActiveTools];
   const handlers = new Map<string, any>();
   const emit = vi.fn();
   const sendMessage = vi.fn();
   const registerMessageRenderer = vi.fn();
+  const getActiveTools = vi.fn(() => activeTools);
+  const setActiveTools = vi.fn((tools: string[]) => { activeTools = tools; });
   askExtension({
     registerTool: (definition: unknown) => { tool = definition; },
     registerMessageRenderer,
     sendMessage,
+    getActiveTools,
+    setActiveTools,
     on: (event: string, handler: unknown) => { handlers.set(event, handler); },
     events: { emit },
   } as never);
   const contextHandler = handlers.get("context");
   if (!tool || !contextHandler) throw new Error("ask integration was not registered");
-  return { tool, contextHandler, handlers, emit, sendMessage, registerMessageRenderer };
+  return { tool, contextHandler, handlers, emit, sendMessage, registerMessageRenderer, getActiveTools, setActiveTools };
 }
 
 const rpcUi = (answer = "1. Yes") => ({
@@ -24,7 +29,73 @@ const rpcUi = (answer = "1. Yes") => ({
   input: vi.fn().mockResolvedValue(""),
 });
 
+async function withTimeoutEnv<T>(value: string | undefined, action: () => Promise<T>): Promise<T> {
+  const previous = process.env.PI9_ASK_TIMEOUT_MS;
+  if (value === undefined) delete process.env.PI9_ASK_TIMEOUT_MS;
+  else process.env.PI9_ASK_TIMEOUT_MS = value;
+  try {
+    return await action();
+  } finally {
+    if (previous === undefined) delete process.env.PI9_ASK_TIMEOUT_MS;
+    else process.env.PI9_ASK_TIMEOUT_MS = previous;
+  }
+}
+
+function pendingTui() {
+  return vi.fn((factory: any) => new Promise(resolve => {
+    factory({ requestRender: vi.fn() }, theme(), {}, resolve);
+  }));
+}
+
 describe("ask extension integration", () => {
+  it("registers session-start and before-agent-start hooks", () => {
+    const { handlers } = register();
+    expect(handlers.get("session_start")).toBeTypeOf("function");
+    expect(handlers.get("before_agent_start")).toBeTypeOf("function");
+  });
+
+  it("deactivates ask at no-UI session start while preserving siblings", () => {
+    const { handlers, getActiveTools, setActiveTools } = register(["read", "ask", "bash"]);
+    const sessionStart = handlers.get("session_start");
+
+    sessionStart({}, { hasUI: false, sessionManager: { getBranch: () => [] } });
+    expect(getActiveTools).toHaveBeenCalledOnce();
+    expect(setActiveTools).toHaveBeenCalledWith(["read", "bash"]);
+
+    handlers.get("before_agent_start")({}, { hasUI: false });
+    expect(getActiveTools).toHaveBeenCalledTimes(2);
+    expect(setActiveTools).toHaveBeenCalledOnce();
+  });
+
+  it("does not mutate active tools again when ask is already absent", () => {
+    const { handlers, setActiveTools } = register(["read", "ask"]);
+    const beforeAgentStart = handlers.get("before_agent_start");
+
+    beforeAgentStart({}, { hasUI: false });
+    beforeAgentStart({}, { hasUI: false });
+
+    expect(setActiveTools).toHaveBeenCalledOnce();
+    expect(setActiveTools).toHaveBeenCalledWith(["read"]);
+  });
+
+  it.each(["tui", "rpc"])("leaves active tools untouched with UI in %s mode", (mode) => {
+    const { handlers, getActiveTools, setActiveTools } = register(["read", "ask"]);
+
+    handlers.get("session_start")({}, { mode, hasUI: true, sessionManager: { getBranch: () => [] } });
+
+    expect(getActiveTools).not.toHaveBeenCalled();
+    expect(setActiveTools).not.toHaveBeenCalled();
+  });
+
+  it("does not re-add an intentionally absent ask tool with UI", () => {
+    const { handlers, getActiveTools, setActiveTools } = register(["read"]);
+
+    handlers.get("session_start")({}, { hasUI: true, sessionManager: { getBranch: () => [] } });
+
+    expect(getActiveTools).not.toHaveBeenCalled();
+    expect(setActiveTools).not.toHaveBeenCalled();
+  });
+
   it("registers the strict sequential tool, guidance, renderers, and context pruning", () => {
     const { tool, contextHandler } = register();
     expect(tool.parameters.additionalProperties).toBe(false);
@@ -110,6 +181,20 @@ describe("ask extension integration", () => {
     ]);
   });
 
+  it("renders an explicitly supplied positive timeout in pending metadata", () => {
+    const { tool } = register();
+    const styledTheme = {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as any;
+    const timeoutContext = { state: {}, args: { question: "Choose?", options: [], timeout: 1500 }, lastComponent: undefined };
+    expect(tool.renderCall(timeoutContext.args, styledTheme, timeoutContext).render(80).join("\n")).toContain("timeout:1.5s");
+
+    const zeroContext = { state: {}, args: { question: "Choose?", options: [], timeout: 0 }, lastComponent: undefined };
+    expect(tool.renderCall(zeroContext.args, styledTheme, zeroContext).render(80).join("\\n")).not.toContain("timeout:");
+  });
+
   it("normalizes without mutating the questionnaire and uses custom TUI", async () => {
     const { tool, emit } = register();
     const params = { question: "  Choose?  ", options: [{ label: " Yes " }], allowFreeform: false };
@@ -127,6 +212,190 @@ describe("ask extension integration", () => {
     expect(emit).toHaveBeenCalledWith("ask:answered", result.details);
   });
 
+  it("cancels a TUI questionnaire when its complete-path timeout expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const { tool, emit } = register();
+      const custom = pendingTui();
+      const execution = tool.execute(
+        "id",
+        { question: "Continue?", options: [{ label: "Yes" }], allowFreeform: false, timeout: 25 },
+        undefined,
+        undefined,
+        { mode: "tui", hasUI: true, ui: { custom } },
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      const result = await execution;
+      expect(result.details).toEqual({ status: "cancelled", question: "Continue?" });
+      expect(emit).toHaveBeenCalledWith("ask:cancelled", result.details);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["answer", "cancel"])("disposes the complete-path timeout after %s", async action => {
+    vi.useFakeTimers();
+    try {
+      const { tool } = register();
+      const custom = vi.fn(async (factory: any) => {
+        let completed: unknown;
+        const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { completed = value; });
+        component.handleInput(action === "answer" ? "\r" : "\x1b");
+        return completed;
+      });
+      const result = await tool.execute(
+        "id",
+        { question: "Continue?", options: [{ label: "Yes" }], allowFreeform: false, timeout: 100 },
+        undefined,
+        undefined,
+        { mode: "tui", hasUI: true, ui: { custom } },
+      );
+      expect(result.details.status).toBe(action === "answer" ? "answered" : "cancelled");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the configured environment timeout for RPC dialogs", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTimeoutEnv("40", async () => {
+        const { tool } = register();
+        let inputCalls = 0;
+        const input = vi.fn().mockImplementation((_title: string, _placeholder: string | undefined, options?: { signal?: AbortSignal }) => {
+          inputCalls += 1;
+          return new Promise<string | undefined>(resolve => {
+            options?.signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+          });
+        });
+        const execution = tool.execute(
+          "id",
+          { question: "Continue?", options: [], allowMultiple: true },
+          undefined,
+          undefined,
+          { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+
+        await vi.advanceTimersByTimeAsync(39);
+        expect(inputCalls).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets an explicit timeout override the environment default", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTimeoutEnv("40", async () => {
+        const { tool } = register();
+        const input = vi.fn().mockImplementation((_title: string, _placeholder: string | undefined, options?: { signal?: AbortSignal }) =>
+          new Promise<string | undefined>(resolve => options?.signal?.addEventListener("abort", () => resolve(undefined), { once: true })));
+        const execution = tool.execute(
+          "id",
+          { question: "Continue?", options: [], allowMultiple: true, timeout: 100 },
+          undefined,
+          undefined,
+          { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        let settled = false;
+        void execution.then(() => { settled = true; });
+
+        await vi.advanceTimersByTimeAsync(40);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(60);
+        await expect(execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses explicit zero to disable the environment timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTimeoutEnv("10", async () => {
+        const { tool } = register();
+        let finish!: (value: string | undefined) => void;
+        const input = vi.fn().mockImplementation(() => new Promise<string | undefined>(resolve => { finish = resolve; }));
+        const execution = tool.execute(
+          "id",
+          { question: "Continue?", options: [], allowMultiple: true, timeout: 0 },
+          undefined,
+          undefined,
+          { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        let settled = false;
+        void execution.then(() => { settled = true; });
+
+        await vi.advanceTimersByTimeAsync(10);
+        expect(settled).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+        finish(undefined);
+        await expect(execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start a timeout for the no-UI early return", async () => {
+    vi.useFakeTimers();
+    try {
+      const { tool } = register();
+      await expect(tool.execute(
+        "id",
+        { question: "Continue?", options: [], timeout: 25 },
+        undefined,
+        undefined,
+        { mode: "print", hasUI: false, ui: {} },
+      )).resolves.toMatchObject({ details: { status: "ui_unavailable" } });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels RPC comment collection with one shared deadline signal", async () => {
+    vi.useFakeTimers();
+    try {
+      const { tool } = register();
+      const signals: AbortSignal[] = [];
+      let inputCalls = 0;
+      const input = vi.fn().mockImplementation((_title: string, _placeholder: string | undefined, options?: { signal?: AbortSignal }) => {
+        if (options?.signal) signals.push(options.signal);
+        inputCalls += 1;
+        if (inputCalls === 1) return Promise.resolve("1");
+        return new Promise<string | undefined>(resolve => options?.signal?.addEventListener("abort", () => resolve(undefined), { once: true }));
+      });
+      const execution = tool.execute(
+        "id",
+        { question: "Choose?", options: [{ label: "Yes" }], allowMultiple: true, allowFreeform: false, timeout: 30 },
+        undefined,
+        undefined,
+        { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
+      );
+
+      await vi.advanceTimersByTimeAsync(30);
+      await expect(execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+      expect(inputCalls).toBe(2);
+      expect(new Set(signals).size).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["rpc", "tui"])("uses RPC dialogs in %s mode when rich UI is unavailable", async (mode) => {
     const { tool } = register();
     const ui = rpcUi();
@@ -136,18 +405,28 @@ describe("ask extension integration", () => {
     expect(ui.select).toHaveBeenCalled();
   });
 
-  it("threads cancellation through RPC and returns a structured cancelled result", async () => {
-    const { tool } = register();
-    const controller = new AbortController();
-    const ui = rpcUi("1. Yes");
-    ui.select.mockImplementation(async (_title, _options, dialogOptions) => {
-      expect(dialogOptions).toEqual({ signal: controller.signal });
-      controller.abort();
-      return "1. Yes";
-    });
-    const result = await tool.execute("id", { question: "Continue?", options: [{ label: "Yes" }] }, controller.signal, undefined, { mode: "rpc", hasUI: true, ui });
-    expect(result.details.status).toBe("cancelled");
-    expect(ui.input).not.toHaveBeenCalled();
+  it("threads parent cancellation through RPC and clears the complete-path deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTimeoutEnv("100", async () => {
+        const { tool } = register();
+        const controller = new AbortController();
+        const ui = rpcUi("1. Yes");
+        ui.select.mockImplementation(async (_title, _options, dialogOptions) => {
+          expect(dialogOptions?.signal).toBeDefined();
+          expect(dialogOptions?.signal).not.toBe(controller.signal);
+          controller.abort();
+          expect(dialogOptions?.signal?.aborted).toBe(true);
+          return "1. Yes";
+        });
+        const result = await tool.execute("id", { question: "Continue?", options: [{ label: "Yes" }] }, controller.signal, undefined, { mode: "rpc", hasUI: true, ui });
+        expect(result.details.status).toBe("cancelled");
+        expect(ui.input).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns unavailable without throwing or emitting cancellation", async () => {
@@ -260,7 +539,7 @@ describe("ask extension integration", () => {
   it("restores hidden revisions into the original tool row", () => {
     const { tool, handlers } = register();
     const args = { question: "Choose?", options: [{ label: "Yes" }, { label: "No" }] };
-    handlers.get("session_start")({}, { sessionManager: { getBranch: () => [{
+    handlers.get("session_start")({}, { hasUI: true, sessionManager: { getBranch: () => [{
       type: "custom_message", id: "revision", parentId: null, timestamp: "now",
       customType: "ask:reanswer", content: "Selected: No", display: false,
       details: { toolCallId: "call-1", question: "Choose?", allowMultiple: false, answer: { selections: [{ label: "No" }] } },
@@ -369,6 +648,31 @@ describe("ask extension integration", () => {
     await handlers.get("session_tree")({ newLeafId: "ask-entry" }, replayContext([assistantEntry("ask-entry")], custom));
     expect(sendMessage).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["stored timeout", { question: "Choose?", options: [{ label: "Yes" }], allowFreeform: false, timeout: 25 }, "100"],
+    ["environment timeout", { question: "Choose?", options: [{ label: "Yes" }], allowFreeform: false }, "25"],
+  ] as const)("applies the %s when re-answering from /tree and disposes it", async (_label, arguments_, envTimeout) => {
+    vi.useFakeTimers();
+    try {
+      await withTimeoutEnv(envTimeout, async () => {
+        const { handlers, sendMessage } = register();
+        const custom = vi.fn((factory: any) => new Promise(resolve => {
+          factory({ requestRender: vi.fn() }, theme(), {}, resolve);
+        }));
+        const ctx = replayContext([assistantEntry("ask-entry", [{ name: "ask", arguments: arguments_ }])], custom);
+        const replay = handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(25);
+        await replay;
+        expect(sendMessage).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores unrelated leaves, notifies mixed asks, and guards duplicate events while active", async () => {

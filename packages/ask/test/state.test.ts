@@ -27,6 +27,22 @@ describe("questionnaire state", () => {
     expect(state.answer).toEqual({ selections: [{ label: "Rust" }] });
   });
 
+  it("omits presentation-only preview content from final selections", () => {
+    let state = createQuestionnaireState({
+      ...config,
+      options: [{ label: "TypeScript", description: "Typed", preview: "  type A = string;\n" }],
+      allowMultiple: false,
+    });
+    state = transitionQuestionnaire(state, { type: "openComment" });
+    state = transitionQuestionnaire(state, { type: "edit", value: "preferred" });
+    state = transitionQuestionnaire(state, { type: "saveEditor" });
+    state = transitionQuestionnaire(state, { type: "toggle" });
+    expect(state.answer).toEqual({
+      selections: [{ label: "TypeScript", description: "Typed", comment: "preferred" }],
+    });
+    expect(state.answer?.selections[0]).not.toHaveProperty("preview");
+  });
+
   it("opens a comment without selecting and saves trimmed comments", () => {
     let state = createQuestionnaireState(config);
     state = transitionQuestionnaire(state, { type: "openComment" });

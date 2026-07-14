@@ -6,6 +6,7 @@ import {
   buildUiUnavailableResponse,
   formatAskAnswer,
 } from "../src/response.js";
+import { MAX_TIMEOUT_MS } from "../src/config.js";
 import { AskParamsSchema } from "../src/schema.js";
 import type { AskAnswer } from "../src/types.js";
 import { validateAskParams } from "../src/validation.js";
@@ -15,13 +16,20 @@ describe("AskParamsSchema", () => {
     expect(Check(AskParamsSchema, {
       question: "Choose",
       context: "A little context",
-      options: [{ label: "A", description: "First" }],
+      options: [{ label: "A", description: "First", preview: "  const a = 1;\n" }],
       allowMultiple: true,
       allowFreeform: false,
+      timeout: 2500,
     })).toBe(true);
     expect(Check(AskParamsSchema, { question: "Choose" })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", answered: true })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", unknown: true })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: -1 })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: 1.5 })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: 0 })).toBe(true);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: MAX_TIMEOUT_MS })).toBe(true);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: MAX_TIMEOUT_MS + 1 })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A", unknown: true }] })).toBe(false);
   });
 });
 
@@ -37,6 +45,26 @@ describe("validateAskParams", () => {
       options: [{ label: "A", description: "First" }],
       allowMultiple: false,
       allowFreeform: true,
+    });
+  });
+
+  it("preserves non-whitespace preview content and removes whitespace-only previews", () => {
+    expect(validateAskParams({
+      question: "Preview?",
+      options: [
+        { label: "Keep", preview: "\n  indented text  \n" },
+        { label: "Drop", preview: " \n\t " },
+      ],
+      timeout: 0,
+    })).toEqual({
+      question: "Preview?",
+      options: [
+        { label: "Keep", preview: "\n  indented text  \n" },
+        { label: "Drop" },
+      ],
+      allowMultiple: false,
+      allowFreeform: true,
+      timeout: 0,
     });
   });
 

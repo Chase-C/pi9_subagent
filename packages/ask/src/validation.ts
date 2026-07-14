@@ -23,6 +23,7 @@ export function validateAskParams(params: AskParams): ValidatedAskParams {
     options,
     allowMultiple: params.allowMultiple ?? false,
     allowFreeform,
+    ...(params.timeout === undefined ? {} : { timeout: params.timeout }),
   };
 }
 
@@ -30,11 +31,20 @@ function normalizeOption(option: AskOption): AskOption {
   const label = option.label.trim();
   if (!label) throw new Error("Ask option label must not be empty.");
   const description = trimOptional(option.description);
-  return { label, ...(description === undefined ? {} : { description }) };
+  const preview = preserveOptional(option.preview);
+  return {
+    label,
+    ...(description === undefined ? {} : { description }),
+    ...(preview === undefined ? {} : { preview }),
+  };
 }
 
 function trimOptional(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function preserveOptional(value: string | undefined): string | undefined {
+  return value?.trim() ? value : undefined;
 }

@@ -2,6 +2,8 @@ import type { ExtensionAPI, SessionEntry, Theme } from "@earendil-works/pi-codin
 import { Text } from "@earendil-works/pi-tui";
 
 import { rewriteAskContext } from "./context.js";
+import { resolveTimeoutMs } from "./config.js";
+import { createDeadlineSignal } from "./deadline.js";
 import { CHECKED_BOX, CHECKED_CIRCLE, EMPTY_BOX, EMPTY_CIRCLE } from "./glyphs.js";
 import { launchQuestionnaire } from "./questionnaire.js";
 import { renderAskReanswerMessage } from "./replay-renderer.js";
@@ -36,7 +38,16 @@ function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): 
 
   const optionCount = args.options.length;
   const mode = args.allowMultiple === true ? "multi · " : "";
-  return `${title}\n${theme.fg("dim", `╰ ${mode}options:${optionCount}`)}`;
+  const timeout = args.timeout !== undefined && args.timeout > 0
+    ? ` · timeout:${formatTimeout(args.timeout)}`
+    : "";
+  return `${title}\n${theme.fg("dim", `╰ ${mode}options:${optionCount}${timeout}`)}`;
+}
+
+function formatTimeout(timeoutMs: number): string {
+  if (timeoutMs < 1000) return `${timeoutMs}ms`;
+  const seconds = timeoutMs / 1000;
+  return `${Number.isInteger(seconds) ? seconds : Number(seconds.toFixed(2))}s`;
 }
 
 function renderAnsweredOptions(args: AskParams, answer: AskAnswer, theme: Theme): string {
@@ -76,7 +87,18 @@ export default function askExtension(pi: ExtensionAPI) {
     for (const state of rendererStates.values()) state.invalidate?.();
   };
 
-  pi.on("session_start", (_event, ctx) => restoreRevisions(ctx.sessionManager.getBranch()));
+  const reconcileAskTool = (hasUI: boolean) => {
+    if (hasUI) return;
+    const activeTools = pi.getActiveTools();
+    if (!activeTools.includes("ask")) return;
+    pi.setActiveTools(activeTools.filter(name => name !== "ask"));
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    reconcileAskTool(ctx.hasUI);
+    restoreRevisions(ctx.sessionManager.getBranch());
+  });
+  pi.on("before_agent_start", (_event, ctx) => reconcileAskTool(ctx.hasUI));
   pi.on("context", (event) => ({ messages: rewriteAskContext(event.messages) }));
   pi.on("agent_settled", (_event, ctx) => {
     if (replayState.status !== "dispatched") return;
@@ -128,14 +150,19 @@ export default function askExtension(pi: ExtensionAPI) {
     if (guardEditor) ctx.ui.setEditorText(TREE_EDITOR_GUARD);
 
     replayState = { status: "prompting" };
+    const deadline = createDeadlineSignal(
+      undefined,
+      resolveTimeoutMs(resolution.params.timeout, process.env),
+    );
     try {
-      const answer = await launchQuestionnaire(ctx, resolution.params);
+      const answer = await launchQuestionnaire(ctx, resolution.params, deadline.signal);
       if (!answer) return;
       const message = buildAskReplayMessage(call.id, resolution.params, answer);
       pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
       applyRevision(message.details.toolCallId, message.details.answer);
       replayState = { status: "dispatched", details: message.details, clearEditor: guardEditor };
     } finally {
+      deadline.dispose();
       if (replayState.status !== "dispatched") {
         replayState = { status: "idle" };
         if (guardEditor) setTimeout(() => ctx.ui.setEditorText(""), 0);
@@ -161,17 +188,25 @@ export default function askExtension(pi: ExtensionAPI) {
       const params = validateAskParams(rawParams as AskParams);
       if (!ctx.hasUI) return buildUiUnavailableResponse(params.question);
 
-      let answer: AskAnswer | null | undefined = await launchQuestionnaire(ctx, params, signal);
-      if (answer === undefined) answer = await askWithRpc(ctx.ui, params, signal);
-      if (answer === null) {
-        const result = buildCancelledResponse(params.question);
-        pi.events.emit("ask:cancelled", result.details);
-        return result;
-      }
+      const deadline = createDeadlineSignal(
+        signal,
+        resolveTimeoutMs(params.timeout, process.env),
+      );
+      try {
+        let answer: AskAnswer | null | undefined = await launchQuestionnaire(ctx, params, deadline.signal);
+        if (answer === undefined) answer = await askWithRpc(ctx.ui, params, deadline.signal);
+        if (answer === null) {
+          const result = buildCancelledResponse(params.question);
+          pi.events.emit("ask:cancelled", result.details);
+          return result;
+        }
 
-      const result = buildAnsweredResponse(params.question, answer);
-      pi.events.emit("ask:answered", result.details);
-      return result;
+        const result = buildAnsweredResponse(params.question, answer);
+        pi.events.emit("ask:answered", result.details);
+        return result;
+      } finally {
+        deadline.dispose();
+      }
     },
 
     renderCall(args, theme, context) {

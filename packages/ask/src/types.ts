@@ -11,7 +11,7 @@ export type ValidatedAskParams = Omit<AskParams, "allowMultiple" | "allowFreefor
 };
 
 export type AskAnswer = {
-  selections: Array<AskOption & { comment?: string }>;
+  selections: Array<Omit<AskOption, "preview"> & { comment?: string }>;
   freeform?: string;
 };
 

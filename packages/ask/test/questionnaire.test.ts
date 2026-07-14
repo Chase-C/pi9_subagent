@@ -44,7 +44,7 @@ describe("launchQuestionnaire", () => {
     await launchQuestionnaire({ mode: "tui", ui: second.ui }, params);
 
     expect(components.at(-2)).not.toBe(components.at(-1));
-    expect(components.at(-1)?.options).toMatchObject({ tui: "tui", theme: "theme", ...params });
+    expect(components.at(-1)?.options).toMatchObject({ tui: "tui", theme: "theme", keybindings: "keys", ...params });
     expect(second.custom).toHaveBeenCalledWith(expect.any(Function));
   });
 

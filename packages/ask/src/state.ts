@@ -121,7 +121,11 @@ function finalAnswer(state: QuestionnaireState): AskAnswer {
     .filter((option) => state.checked.has(option.label))
     .map((option) => {
       const comment = state.comments.get(option.label);
-      return comment ? { ...option, comment } : { ...option };
+      return {
+        label: option.label,
+        ...(option.description === undefined ? {} : { description: option.description }),
+        ...(comment ? { comment } : {}),
+      };
     });
   const freeform = state.config.allowMultiple && !state.freeformChecked ? "" : state.freeformDraft.trim();
   return {

@@ -78,6 +78,21 @@ describe("rewriteAskContext", () => {
     expect(messages).toEqual(snapshot);
   });
 
+  it("never projects authored preview content into the compact context summary", () => {
+    const previewSentinel = "CONTEXT_PREVIEW_SENTINEL";
+    const rewritten = rewriteAskContext([
+      call({
+        question: "Choose",
+        options: [{ label: "A", preview: previewSentinel }],
+      }),
+      result(answered("Choose", { selections: [{ label: "A" }] })),
+    ]);
+
+    expect(JSON.stringify(rewritten)).not.toContain(previewSentinel);
+    const projectedPayload = JSON.parse((rewritten[0] as any).content);
+    expect(projectedPayload.answer).toEqual([{ label: "A" }]);
+  });
+
   it("uses single mode and omits absent optional payload fields", () => {
     const messages = [
       call({ question: "Choose", options: [{ label: "A" }, { label: "B" }] }),
