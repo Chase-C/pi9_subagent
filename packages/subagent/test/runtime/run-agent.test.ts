@@ -311,6 +311,7 @@ test("run-agent uses agent-frontmatter default skills when the task does not pro
   const prompt = loaderOptions.systemPromptOverride();
   assert.match(prompt, /^BASE PROMPT/);
   assert.match(prompt, /<name>foo<\/name>/);
+  assert.deepEqual(agent.snapshot().config.skills, ["foo"]);
 });
 
 test("run-agent per-task skills fully replace agent-frontmatter default skills", async () => {
@@ -337,6 +338,8 @@ test("run-agent per-task skills fully replace agent-frontmatter default skills",
 
   const prompt = loaderOptions.systemPromptOverride();
   assert.match(prompt, /<name>bar<\/name>/);
+  assert.deepEqual(agent.snapshot().effectiveConfig?.skills, ["bar"]);
+  assert.deepEqual(agent.snapshot().config.skills, ["bar"]);
   assert.doesNotMatch(prompt, /<name>foo<\/name>/);
   assert.doesNotMatch(prompt, /<name>baz<\/name>/);
 });
@@ -361,6 +364,7 @@ test("run-agent explicit empty per-task skills opts out of agent-frontmatter def
 
   assert.equal(loaderOptions.systemPromptOverride(), "BASE PROMPT");
   assert.equal(loadSkillsCalls, 0, "should not load skills when the task explicitly opted out");
+  assert.deepEqual(agent.snapshot().config.skills, []);
 });
 
 test("emits coarse async spans for an attempt but no per-step sync narration when timing is enabled", async () => {
@@ -391,16 +395,16 @@ test("emits coarse async spans for an attempt but no per-step sync narration whe
   await rm(logFile, { force: true });
 });
 
-test("inherited paths load through Pi's compatibility loader", async () => {
+test("inherited paths load through the native extension loader", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-native-loader-"));
   const agentDir = join(root, "agent");
   await mkdir(agentDir, { recursive: true });
-  const entry = join(root, "legacy-pi-ai.ts");
+  const entry = join(root, "pi-ai-extension.ts");
   await writeFile(entry, `
     import { streamSimpleOpenAICodexResponses } from "@earendil-works/pi-ai";
     export default () => {
       if (typeof streamSimpleOpenAICodexResponses !== "function") {
-        throw new Error("Pi compatibility alias was bypassed");
+        throw new Error("Expected exported helper was unavailable");
       }
     };
   `);

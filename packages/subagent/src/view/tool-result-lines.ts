@@ -25,11 +25,11 @@ import {
 } from "./format-helpers.js";
 import { formatRunSessionLine, formatSessionLine } from "./session-lines.js";
 import {
-  parseDetails,
   type AgentListingEntry,
   type BackgroundSpawnHandle,
   type InventoryFilter,
   type RemoveSummary,
+  type SubagentDetails,
 } from "./details.js";
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
@@ -61,7 +61,7 @@ function agentConfigMetadataLines(config: AgentListingEntry | AgentConfig): stri
 }
 
 export function formatSubagentToolLines(
-  details: unknown,
+  details: SubagentDetails,
   expanded = false,
   now = Date.now(),
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
@@ -81,7 +81,7 @@ export interface RunSummary {
 }
 
 /**
- * Derives a {@link RunSummary} from opaque `run` or `results` details, or `undefined` for any other
+ * Derives a {@link RunSummary} from `run` or `results` details, or `undefined` for any other
  * view. The shared count powers both the live run title and the completed/results header. A `run`
  * counts its `subtree` when present (so nested children are included), otherwise the flat
  * `sessions`; a `results` envelope counts each entry's snapshot, plus any bad-id entries (which are
@@ -89,19 +89,17 @@ export interface RunSummary {
  * finished. New live `run` details carry `runStartedAt`; otherwise elapsed runs from the earliest
  * row time.
  */
-export function runSummary(details: unknown, now = Date.now()): RunSummary | undefined {
-  const narrowed = parseDetails(details);
-  if (!narrowed) return undefined;
-  if (narrowed.view === "run") {
-    const sessions = narrowed.subtree && narrowed.subtree.length > 0 ? narrowed.subtree : narrowed.sessions;
-    return summarizeSnapshots(sessions, narrowed.runStartedAt, now);
+export function runSummary(details: SubagentDetails, now = Date.now()): RunSummary | undefined {
+  if (details.view === "run") {
+    const sessions = details.subtree && details.subtree.length > 0 ? details.subtree : details.sessions;
+    return summarizeSnapshots(sessions, details.runStartedAt, now);
   }
-  if (narrowed.view === "results") {
-    const snapshots = narrowed.results.flatMap(entry => ("snapshot" in entry ? [entry.snapshot] : []));
+  if (details.view === "results") {
+    const snapshots = details.results.flatMap(entry => ("snapshot" in entry ? [entry.snapshot] : []));
     // A settled run has no more "now" to measure against, so freeze the header elapsed at the last
     // completion; a background poll still carrying active entries keeps tracking wall-clock time.
     const summary = summarizeSnapshots(snapshots, undefined, resultsUpperBound(snapshots, now));
-    summary.finished += narrowed.results.length - snapshots.length;
+    summary.finished += details.results.length - snapshots.length;
     return summary;
   }
   return undefined;
@@ -135,7 +133,7 @@ function summarizeSnapshots(sessions: readonly AgentSnapshot[], runStartedAt: nu
 }
 
 export function createSubagentTextComponent(
-  details: unknown,
+  details: SubagentDetails,
   expanded: boolean,
   theme: Theme | undefined,
   now = Date.now(),
@@ -148,36 +146,35 @@ export function createSubagentTextComponent(
 }
 
 function formatSubagentToolDisplayLines(
-  details: unknown,
+  details: SubagentDetails,
   expanded = false,
   now = Date.now(),
   bold: Bold | undefined,
   display: SubagentDisplaySettings,
 ): DisplayLine[] | undefined {
-  const narrowed = parseDetails(details);
-  if (!narrowed) return undefined;
+  if (details.view === "error") return undefined;
 
-  switch (narrowed.view) {
+  switch (details.view) {
     case "agents":
-      return formatAgentListLines(narrowed.agents, expanded, bold, display).map(text => ({ text }));
+      return formatAgentListLines(details.agents, expanded, bold, display).map(text => ({ text }));
     case "results":
-      return formatResultsLines(narrowed.results, expanded, now, bold, display);
+      return formatResultsLines(details.results, expanded, now, bold, display);
     case "run": {
-      const ordered = narrowed.subtree && narrowed.subtree.length > 0
-        ? orderAsTree(narrowed.subtree)
-        : narrowed.sessions.map(agent => ({ agent, depth: 0 }));
+      const ordered = details.subtree && details.subtree.length > 0
+        ? orderAsTree(details.subtree)
+        : details.sessions.map(agent => ({ agent, depth: 0 }));
       return expandRows(ordered, expanded, now, bold, display, runRow, true, true);
     }
     case "inventory": {
-      const { sessions, filter } = narrowed;
+      const { sessions, filter } = details;
       if (sessions.length === 0) return [{ text: "No subagent sessions." }];
       if (!expanded && sessions.length > 1) return formatViewGroupLine(serializeGroup(sessions), filter);
       return expandRows(orderAsTree(sessions), expanded, now, bold, display, inventoryRow, false);
     }
     case "remove-summary":
-      return formatRemoveSummaryLines(narrowed.summary, expanded);
+      return formatRemoveSummaryLines(details.summary, expanded);
     case "background-started":
-      return formatBackgroundStartedLines(narrowed.handles, narrowed.count, expanded, bold);
+      return formatBackgroundStartedLines(details.handles, details.count, expanded, bold);
   }
 }
 

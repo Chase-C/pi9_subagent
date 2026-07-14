@@ -1,7 +1,7 @@
 import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 
 import type { AgentSource } from "./agent-config.js";
-import type { AgentRunStatus } from "./agent-result.js";
+import type { AgentRunStatus } from "./agent-lifecycle.js";
 
 export interface AgentToolUse {
   readonly id: string;
@@ -82,6 +82,7 @@ export interface AgentSnapshot {
   readonly inputIndex?: number;
   readonly parentSessionId?: string;
   readonly label?: string;
+  /** Whether the current (or most recent terminal) attempt was a resume. */
   readonly resumed?: boolean;
   readonly prompt?: string;
   readonly createdAt: number;
@@ -101,9 +102,4 @@ export interface AgentGroupView {
   statusCounts: Record<string, number>;
   sessions: AgentSnapshot[];
   isError: boolean;
-}
-
-export interface SubagentBatchUpdate {
-  sessions: AgentSnapshot[];
-  active: boolean;
 }

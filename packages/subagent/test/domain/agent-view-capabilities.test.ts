@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { completedRun, errorRun } from "../../src/domain/agent-finalize.js";
 import { preflightFailure } from "../../src/domain/preflight-failure.js";
+import { resolveTask } from "../../src/runtime/task-resolution.js";
 
 const noop: AgentUpdateListener = () => {};
 const view = (agent: Agent) => agent.snapshot();
@@ -22,12 +23,12 @@ function fakeSession() {
   return { messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} } as any;
 }
 
-/** Drives a resume through Agent.resolve so the test mirrors the production code path. */
+/** Drives a resume through the runtime resolver so the test mirrors the production code path. */
 function resumeAgent(agent: Agent, prompt: string): void {
   const registry = { agents: new Map([[agent.agentName, agent.config]]) } as any;
-  const result = Agent.resolve({
+  const result = resolveTask({
     task: { kind: "resume", sessionId: agent.id, prompt },
-    background: false, groupId: "g", inputIndex: 0, createdAt: Date.now(),
+    background: false, groupId: "g", inputIndex: 0,
     registry, findAgent: id => (id === agent.id ? agent : undefined), listener: noop,
   });
   if (result.kind !== "resume") throw new Error(`expected resume, got ${result.kind}`);
@@ -88,7 +89,7 @@ test("projectAgentView capabilities: resume attempt in flight cannot resume or c
 test("preflight failure views report capabilities false for both spawn and resume", () => {
   const spawn = preflightFailure(
     {
-      groupId: "g", inputIndex: 0, createdAt: Date.now(),
+      groupId: "g", inputIndex: 0,
       task: { kind: "spawn", agent: "missing", prompt: "p" },
       background: false,
     },
@@ -98,7 +99,7 @@ test("preflight failure views report capabilities false for both spawn and resum
 
   const resume = preflightFailure(
     {
-      groupId: "g", inputIndex: 0, createdAt: Date.now(),
+      groupId: "g", inputIndex: 0,
       task: { kind: "resume", sessionId: "unknown", prompt: "p" },
       background: false,
     },

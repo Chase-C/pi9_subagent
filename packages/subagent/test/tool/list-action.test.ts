@@ -16,27 +16,6 @@ function registerExtension(dependencies: any = {}) {
   return registeredTool;
 }
 
-test("tool list action with legacy type=agents or type=sessions returns the migration error pointing at the new action", async () => {
-  for (const [type, expectedAction] of [["agents", "agents"], ["sessions", "list"]] as const) {
-    const root = await mkdtemp(join(tmpdir(), `subagent-list-type-${type}-`));
-    const tool = registerExtension();
-    const result = await tool.execute("tool-call", { action: "list", type }, undefined, undefined, { cwd: root });
-
-    assert.equal(result.isError, true, `type=${type}: expected error`);
-    assert.match(result.content[0].text, /'type' parameter has been removed/);
-    assert.match(result.content[0].text, new RegExp(`action: '${expectedAction}'`));
-  }
-});
-
-test("tool list action with legacy type=skills returns the migration error noting skills are no longer exposed", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-list-type-skills-"));
-  const tool = registerExtension();
-  const result = await tool.execute("tool-call", { action: "list", type: "skills" }, undefined, undefined, { cwd: root });
-
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /Skills listing is no longer exposed/);
-});
-
 test("subagent tool action=list with status filter [completed, error] returns terminal-success and terminal-failed sessions but excludes others", async () => {
   let nextRunner: ((agent: any) => any) | null = null;
   const runner = async (_ctx: any, agent: any, _attempt: any) => {

@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import subagentExtension from "../../src/index.js";
+import { createSubagentResumeMessage } from "../../src/view/resume-message.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 
 function registerExtension() {
@@ -51,6 +52,22 @@ test("background completion message renderer shows compact themed status summary
   assert.match(rendered, /critic · <error>error<\/error> · 1m05s/);
   assert.doesNotMatch(rendered, /s-complete|s-error|hidden-session/);
   assert.doesNotMatch(rendered, /Call subagent results/);
+});
+
+test("resume message renderer uses current details", () => {
+  const renderers = registerExtensionWithMessageRenderers();
+  const renderer = renderers.get("subagent-resume");
+  assert.equal(typeof renderer, "function");
+
+  const message = createSubagentResumeMessage({
+    agent: "helper",
+    prompt: "try another approach",
+    status: "completed",
+    output: "done",
+    sessionId: "s1",
+  });
+  const current = renderer(message, { expanded: false }, passthroughTheme);
+  assert.match(current.render(160).join("\n"), /Subagent resume completed · helper/);
 });
 
 test("background completion message renderer expands to full session details and results hint", () => {
@@ -104,37 +121,19 @@ test("subagent tool result renderer falls back to simple text when themed render
   assert.match(component.render(120).join("\n"), /plain fallback helper output/);
 });
 
-test("subagent tool result renderer falls back to content text for unknown view shapes", () => {
+test("subagent tool result renderer keeps plain text for a current error envelope", () => {
   const tool = registerExtension();
   const passthroughTheme = { fg: (_color: string, text: string) => text };
-  const details = { errors: ["task[0]: bad"] };
-
   const component = tool.renderResult(
-    { content: [{ type: "text", text: JSON.stringify(details) }], details },
+    {
+      content: [{ type: "text", text: "task[0]: bad" }],
+      details: { view: "error", errors: ["task[0]: bad"] },
+    },
     { expanded: false },
     passthroughTheme,
   );
-  const rendered = component.render(120).join("\n");
 
-  assert.doesNotMatch(rendered, /No subagent sessions\./);
-  assert.match(rendered, /task\[0\]: bad/);
-});
-
-test("subagent tool result renderer falls back to content text for a partial persisted payload", () => {
-  const tool = registerExtension();
-  const passthroughTheme = { fg: (_color: string, text: string) => text };
-  // A stale/older-shape "results" envelope: right view tag, but the `results` array is absent.
-  const details = { view: "results", outcomes: [{ agent: "helper", status: "completed" }] };
-
-  const component = tool.renderResult(
-    { content: [{ type: "text", text: "STALE_PAYLOAD_FALLBACK" }], details },
-    { expanded: false },
-    passthroughTheme,
-  );
-  const rendered = component.render(120).join("\n");
-
-  assert.match(rendered, /STALE_PAYLOAD_FALLBACK/);
-  assert.doesNotMatch(rendered, /completed/);
+  assert.equal(component.render(120).join("\n").trim(), "task[0]: bad");
 });
 
 test("subagent tool result renderer keeps the empty-sessions message for an explicit empty sessions shape", () => {

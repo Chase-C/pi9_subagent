@@ -61,8 +61,8 @@ test("queued session elapsed uses queuedAt instead of session createdAt", () => 
 });
 
 test("the dispatch:background segment surfaces in both inspect summary and inventory line formatters", () => {
-  const retained = fakeAgent({ config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
-  const background = fakeAgent({ id: "s2", dispatch: "background", config: { name: "helper", resumable: true }, status: { kind: "running", startedAt: 1 } });
+  const retained = fakeAgent({ retention: "persistent", config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+  const background = fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "helper", resumable: true }, status: { kind: "running", startedAt: 1 } });
 
   // formatSubagentSessionSummary (inspect view)
   assert.doesNotMatch(formatSubagentSessionSummary(retained), /dispatch:/);
@@ -75,9 +75,9 @@ test("the dispatch:background segment surfaces in both inspect summary and inven
 
 test("background-started view always shows spawned session handles when collapsed", () => {
   const sessions = [
-    fakeAgent({ id: "s1", dispatch: "background", config: { name: "scout" }, status: { kind: "queued" } }),
-    fakeAgent({ id: "s2", dispatch: "background", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
-    fakeAgent({ id: "s3", dispatch: "background", config: { name: "reviewer" }, status: { kind: "queued" } }),
+    fakeAgent({ id: "s1", dispatch: "background", retention: "persistent", config: { name: "scout" }, status: { kind: "queued" } }),
+    fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ id: "s3", dispatch: "background", retention: "persistent", config: { name: "reviewer" }, status: { kind: "queued" } }),
   ];
 
   const collapsed = formatSubagentToolLines(backgroundStartedDetails(sessions), false, 0);
@@ -91,8 +91,8 @@ test("background-started view always shows spawned session handles when collapse
 
 test("background-started view expanded shows one line per session with session id and label when present", () => {
   const sessions = [
-    fakeAgent({ id: "scout-1", dispatch: "background", config: { name: "scout" }, label: "frontend auth", status: { kind: "queued" } }),
-    fakeAgent({ id: "rev-1", dispatch: "background", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ id: "scout-1", dispatch: "background", retention: "persistent", config: { name: "scout" }, label: "frontend auth", status: { kind: "queued" } }),
+    fakeAgent({ id: "rev-1", dispatch: "background", retention: "persistent", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
   ];
 
   const expanded = formatSubagentToolLines(backgroundStartedDetails(sessions), true, 0).join("\n");
@@ -142,9 +142,9 @@ test("results view expanded renders each entry as a run-style block with its res
 
 test("background-started details project collectable handles with sessionId and optional label", () => {
   const sessions = [
-    fakeAgent({ id: "a", dispatch: "background", config: { name: "scout" }, inputIndex: 0, label: "alpha", status: { kind: "queued" } }),
+    fakeAgent({ id: "a", dispatch: "background", retention: "persistent", config: { name: "scout" }, inputIndex: 0, label: "alpha", status: { kind: "queued" } }),
     fakeAgent({ id: "preflight", dispatch: "background", retention: "transient", config: { name: "missing" }, inputIndex: 1, status: { kind: "error", error: "Unknown agent" } }),
-    fakeAgent({ id: "b", dispatch: "background", config: { name: "reviewer" }, inputIndex: 2, status: { kind: "queued" } }),
+    fakeAgent({ id: "b", dispatch: "background", retention: "persistent", config: { name: "reviewer" }, inputIndex: 2, status: { kind: "queued" } }),
   ];
 
   const details = backgroundStartedDetails(sessions);
@@ -577,6 +577,8 @@ test("results expanded mirrors the running view for a resumed snapshot, includin
 
 test("subagent session inspect output uses remove terminology", () => {
   const retainedSession = fakeAgent({
+    retention: "persistent",
+    capabilities: { canResume: true, canClear: true },
     config: { resumable: true },
     status: { kind: "completed", startedAt: 2_000, completedAt: 5_000, response: "done" },
   });

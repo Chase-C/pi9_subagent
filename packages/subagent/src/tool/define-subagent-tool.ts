@@ -3,16 +3,16 @@ import { Text } from "@earendil-works/pi-tui";
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
-import { SubagentParams } from "../schema.js";
+import { parseSubagentInvocation, SubagentParams } from "../schema.js";
 import type { SubagentSettings } from "../config/settings.js";
 import { createSubagentTextComponent, runSummary, type RunSummary, type SubagentDetails } from "../view/format.js";
 import {
   agentsAction,
-  errorResult,
   listAction,
   removeAction,
   resultsAction,
   runAction,
+  invocationErrorResult,
   type ActionDeps,
 } from "./actions.js";
 
@@ -100,18 +100,15 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const settings = await prepareInvocation(ctx);
 
-      if (!params.action) {
-        return errorResult(`Provide an action: "agents", "list", "run", "results", or "remove".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
-      }
+      const invocation = parseSubagentInvocation(params, { maxTasks: settings.runtime.maxTasksPerRun });
+      if ("error" in invocation) return invocationErrorResult(actionDeps, invocation);
 
-      switch (params.action) {
-        case "agents": return agentsAction(actionDeps);
-        case "list": return listAction(actionDeps, params);
-        case "results": return resultsAction(actionDeps, params, ctx);
-        case "remove": return removeAction(actionDeps, params, ctx);
-        case "run": return runAction(actionDeps, params, signal, onUpdate, ctx, settings);
-        default:
-          return errorResult(`Unknown action: ${String(params.action)}. Use "agents", "list", "run", "results", or "remove".`);
+      switch (invocation.action) {
+        case "agents": return agentsAction(actionDeps, invocation);
+        case "list": return listAction(actionDeps, invocation);
+        case "results": return resultsAction(actionDeps, invocation, ctx);
+        case "remove": return removeAction(actionDeps, invocation, ctx);
+        case "run": return runAction(actionDeps, invocation, signal, onUpdate, ctx);
       }
     },
   });

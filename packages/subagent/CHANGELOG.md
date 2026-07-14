@@ -4,6 +4,23 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Drop compatibility with persisted tool details and custom-message payloads from earlier releases; old subagent rows and notifications are no longer re-rendered.
+- Remove deprecated deep-module APIs, legacy lifecycle shapes, direct action-handler call signatures, and migration handling for removed tool fields.
+
+### Changed
+
+- Make attempt kind, requested configuration, and catalog retention the canonical owners of resume state, task overrides, and session persistence.
+- Move task resolution out of `Agent`, model preflight failures directly, centralize tool invocation parsing, and eliminate source import cycles.
+- Report task-level skill overrides consistently in session and preflight snapshots, including explicit empty skill lists.
+- Consolidate settings updates and background-completion message projection while keeping current tool, event, and message shapes unchanged.
+- Reject non-boolean `run.background` and `results.remove` values at the runtime parsing boundary.
+
+### Tests
+
+- Add lifecycle, retention, task-resolution, parser, settings, notification, and recursive orchestration characterization coverage.
+
 ## [0.3.1] - 2026-07-11
 
 ### Fixed
