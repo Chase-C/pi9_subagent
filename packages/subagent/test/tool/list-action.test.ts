@@ -47,6 +47,7 @@ test("subagent tool action=list with status filter [completed, error] returns te
   assert.equal(result.details.sessions.length, 2);
   const outcomes = result.details.sessions.map((s: any) => s.status.outcome).sort();
   assert.deepEqual(outcomes, ["completed", "error"]);
+  assert.deepEqual(JSON.parse(result.content[0].text).filter, { status: ["completed", "error"] });
 });
 
 test("subagent tool action=list with empty status filter returns no sessions distinct from no filter", async () => {
@@ -70,6 +71,7 @@ test("subagent tool action=list with empty status filter returns no sessions dis
   const emptyFilter = await tool.execute("tool-call", { action: "list", status: [] }, undefined, undefined, baseCtx());
   assert.equal(emptyFilter.isError, false);
   assert.deepEqual(emptyFilter.details.sessions, []);
+  assert.deepEqual(JSON.parse(emptyFilter.content[0].text).filter, { status: [] });
 });
 
 test("subagent tool action=list with an unknown status value returns the unknown-status error", async () => {
@@ -82,7 +84,7 @@ test("subagent tool action=list with an unknown status value returns the unknown
   assert.match(result.content[0].text, /queued, running, completed, error, aborted, interrupted, skipped/);
 });
 
-test("subagent tool action=list with no filter returns retained sessions tagged kind: retained", async () => {
+test("subagent tool action=list with no filter returns retained sessions with normalized completed status", async () => {
   const runner = async (_ctx: any, agent: any, _attempt: any) => {
     agent.setEffectiveConfig({
       model: "test/model",
@@ -125,19 +127,19 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   assert.equal(retained.retention, "persistent");
 
   const modelSession = JSON.parse(result.content[0].text).sessions[0];
-  assert.equal(modelSession.status.kind, "completed");
-  assert.equal(Object.prototype.hasOwnProperty.call(modelSession.status, "outcome"), false);
-  assert.equal(modelSession.status.output, "The final answer from the child.");
-  assert.deepEqual(modelSession.config.skills, ["requested-skill"]);
-  assert.deepEqual(modelSession.effectiveConfig, {
-    model: "test/model",
-    thinking: "high",
-    cwd: "/work/project",
-    skills: ["requested-skill"],
-    tools: ["read"],
-    resumable: true,
-  });
+  assert.equal(modelSession.sessionId, retained.id);
+  assert.equal(modelSession.agent, "chatty");
+  assert.equal(modelSession.status, "completed");
+  assert.equal(modelSession.dispatch, "foreground");
+  assert.equal("elapsedMs" in modelSession, false);
   assert.deepEqual(modelSession.capabilities, { canResume: true, canRemove: true });
+  assert.deepEqual(Object.keys(modelSession).sort(), [
+    "agent",
+    "capabilities",
+    "dispatch",
+    "sessionId",
+    "status",
+  ]);
 });
 
 test("model-facing inventory reports background sessions as removable without leaking canClear", async () => {

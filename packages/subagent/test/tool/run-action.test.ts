@@ -541,7 +541,8 @@ test("subagent action=run background:true returns view:background-started immedi
   assert.equal(result.details.handles.length, 1);
   const handle = result.details.handles[0];
   assert.equal(typeof handle.sessionId, "string");
-  assert.deepEqual(Object.keys(handle).sort(), ["sessionId"]);
+  assert.equal(handle.agent, "helper");
+  assert.deepEqual(Object.keys(handle).sort(), ["agent", "sessionId"]);
   const liveStatus = manager.listSessions()[0].status.kind;
   assert.ok(liveStatus === "queued" || liveStatus === "running", `expected non-terminal status, got ${liveStatus}`);
 

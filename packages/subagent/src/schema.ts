@@ -38,7 +38,7 @@ export const REMOVAL_SCOPES = ["background", "retained", "non-running"] as const
 
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS, {
-    description: "agents=definitions; list=sessions; run=spawn/resume; results=fetch; remove=delete or abort.",
+    description: "agents=definitions; list=lightweight inventory; run=spawn/resume; results=full output/error retrieval; remove=delete or abort.",
   }),
   tasks: Type.Optional(Type.Array(TaskSchema, {
     minItems: 1,
@@ -48,7 +48,7 @@ export const SubagentParams = Type.Object({
     description: "For run. false (default) waits for all tasks and returns results; true returns handles immediately. Background results remain retrievable until removed, regardless of resumable.",
   })),
   status: Type.Optional(Type.Array(StringEnum(SESSION_STATUSES), {
-    description: "For list. Session statuses to include.",
+    description: "For list. Normalized session statuses to include in the lightweight inventory.",
   })),
   sessionIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
     minItems: 1,
@@ -58,7 +58,7 @@ export const SubagentParams = Type.Object({
     description: "For remove. background=all background sessions; retained=non-running resumable foreground sessions; non-running=all queued or terminal sessions. Mutually exclusive with sessionIds.",
   })),
   remove: Type.Optional(Type.Boolean({
-    description: "For results. Remove terminal sessions after returning them.",
+    description: "For results. Remove terminal sessions after returning their full output/error.",
   })),
 });
 

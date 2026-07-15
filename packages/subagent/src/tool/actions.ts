@@ -42,8 +42,8 @@ export interface ActionResult {
 
 /**
  * Builds a tool result. The model-facing `content` text is `json` when provided, else the
- * serialized `details`. They diverge only for the `results` envelope, whose `details` carries
- * snapshots for rendering while `content` carries the projected model-facing JSON.
+ * serialized `details`. Inventory and results keep rich snapshots in `details` for rendering
+ * while `content` carries their narrower model-facing projections.
  */
 export function toolResult(details: SubagentDetails, opts: { isError?: boolean; json?: unknown } = {}): ActionResult {
   return {

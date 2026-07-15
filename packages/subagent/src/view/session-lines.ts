@@ -362,12 +362,26 @@ export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, 
   return parts.join(" · ");
 }
 
-export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold, staticRunning = false): DisplayLine {
+export function formatSessionIdentityLine(row: AgentSnapshot, now: number, bold?: Bold, staticRunning = false): DisplayLine {
   const { glyph, color } = staticRunning && effectiveStatus(row.status) === "running"
     ? { glyph: "●", color: "accent" as const }
     : statusPresentation(row.status, now);
   const name = applyBold(bold, row.config.name);
   const label = row.label ? `  ${row.label}` : "";
+  return {
+    text: `  ${glyph} ${name}${label}`,
+    segments: [
+      { text: "  " },
+      { text: glyph, color },
+      { text: " " },
+      { text: name, color: "text" },
+      ...(label ? [{ text: label, color: "text" as const }] : []),
+    ],
+  };
+}
+
+export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold, staticRunning = false): DisplayLine {
+  const line = formatSessionIdentityLine(row, now, bold, staticRunning);
   const metadata = [
     ...(row.resumed ? ["resumed"] : []),
     plural(getToolUseCount(row), "tool call"),
@@ -375,15 +389,9 @@ export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bol
     rowElapsed(row, now),
   ].join(" · ");
   return {
-    text: `  ${glyph} ${name}${label}  ${metadata}`,
-    segments: [
-      { text: "  " },
-      { text: glyph, color },
-      { text: " " },
-      { text: name, color: "text" },
-      ...(label ? [{ text: label, color: "text" as const }] : []),
-      { text: `  ${metadata}`, color: "dim" },
-    ],
+    ...line,
+    text: `${line.text}  ${metadata}`,
+    segments: [...(line.segments ?? []), { text: `  ${metadata}`, color: "dim" }],
   };
 }
 

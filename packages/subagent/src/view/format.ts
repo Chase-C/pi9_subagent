@@ -21,6 +21,7 @@ export {
   buildWidgetModel,
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
+  formatSessionIdentityLine,
   formatSessionLine,
   formatRunSessionLine,
   formatWidgetLines,

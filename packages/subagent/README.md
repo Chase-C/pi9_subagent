@@ -9,7 +9,7 @@ A Pi package that adds subagent delegation: a single `subagent` tool the main ag
 - **Resumable sessions** let the parent send follow-ups to the same child, which keeps its accumulated context across resumes instead of starting cold.
 - **Background dispatch** runs a batch without blocking, so the parent keeps working and, by default, is notified when children finish.
 - **Recursive subagents** spawn their own children, and the parent sees the whole tree as one run under a single shared concurrency limit.
-- A **single tool** lists, spawns, resumes, collects, and cleans up, and its deliberately compact prompt won't bloat the parent's context.
+- A **single tool** exposes distinct discovery, inventory, dispatch, retrieval, and cleanup actions, and its deliberately compact prompt won't bloat the parent's context.
 - **Live, observable runs** show per-child status, tokens, and tool activity in the tool row, with background and resumable sessions also tracked in a configurable widget.
 - **Zero-code configuration** puts concurrency, notifications, discovery, and layout in settings, with sensible defaults.
 
@@ -183,7 +183,7 @@ Beyond runtime, the settings file also has an `agentDiscovery` section (toggles 
 
 ## `/subagents` command
 
-Run `/subagents` to inspect and manage subagents from the UI.
+Run `/subagents` to inspect and manage subagents from the UI. This is a separate interactive surface; its inspection view may show richer diagnostic details than the model-facing `list` action.
 
 When active or retained sessions exist, it opens the Sessions view, where you can:
 
@@ -202,19 +202,40 @@ The package emits `subagent:updated`, `subagent:queued`, `subagent:started`, and
 
 ## The `subagent` tool
 
-The tool takes one required `action`. Its parameter shapes live in `src/schema.ts` and are surfaced to the agent through the tool schema; this is just the map of what each action does:
+The tool takes one required `action`. Actions are deliberately separate; their parameter shapes live in `src/schema.ts` and are surfaced through the tool schema:
 
 | Action | What it does |
 | --- | --- |
-| `agents` | List configured agent definitions, including tools, default skills, and `defaultResumable`. |
-| `list` | List active and retained sessions; filter with `status`. |
-| `run` | Spawn (via `agent`) and/or resume (via `sessionId`) a `tasks` array. `background: true` dispatches non-blocking. |
-| `results` | Fetch results by `sessionIds` without blocking; `remove: true` sweeps terminal entries. |
-| `remove` | Remove sessions by `sessionIds` or `scope`; running ones are aborted. |
+| `agents` | Discover available agent definitions. |
+| `list` | Return a lightweight runtime inventory. An optional `status` filter selects normalized statuses. |
+| `run` | Start new sessions via `agent` and/or resume retained sessions via `sessionId`. `background: true` dispatches without blocking. |
+| `results` | Retrieve full, untruncated output or error by `sessionIds`; pending sessions are reported without blocking. |
+| `remove` | Abort running sessions and discard queued or retained session state by `sessionIds` or `scope`. |
 
-Spawn tasks accept `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable` overrides. Resume tasks accept only `label` and `resumable` overrides; `model`, `thinking`, `cwd`, and `skills` are fixed when the child session is created. Selected skills are resolved by name and their full instruction bodies are injected into the child system prompt; an unknown or unreadable skill fails the run before the child session starts. Agent discovery calls the configured default `defaultResumable` because a task can override it. Session `config` reports the resolved requested values, so task-level skills replace definition defaults and `skills: []` remains visible. Successful results and session inventory expose the runtime-observed `effectiveConfig` (`model`, `thinking`, `cwd`, `skills`, `tools`, and `resumable`) for debugging overrides. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`). A synchronous `run` result includes `sessionId` only when it remains actionable for a follow-up; background handles and `results` entries include an ID for retrieval or removal even when conversation context is not resumable.
+### List summaries
+
+Each `list` session summary has exactly these fields:
+
+- `sessionId`
+- `agent`
+- optional `label` and `parentSessionId`
+- normalized `status`: `queued`, `running`, `completed`, `error`, `aborted`, `interrupted`, or `skipped`
+- `dispatch`: `foreground` or `background`
+- `capabilities`: `canResume` and `canRemove`
+
+`list` no longer returns prompts, output/error, activity/tool history, tool-call or token counts, elapsed time, usage, previous runs, `config`/`effectiveConfig`, timestamps, or retention. Its collapsed view uses the same status icons and agent/label rows as `results`; expansion adds inventory metadata. `results` is the only way to retrieve full, untruncated output/error by handle; it is nonblocking even for pending sessions.
+
+### Background flow
+
+The canonical background flow is: `agents` (optional if known) → `run(background)` → `list` (optional if handles known) → `results` → `remove`.
+
+`run(background: true)` returns session handles immediately. Its collapsed result shows only the started count; expand it to see each agent, task label, and handle. Use `list` only when a lightweight status check or status filter is useful; if handles are already known, call `results` directly. `results` remains nonblocking for pending sessions and returns their current status until they settle. `results.remove` remains an atomic terminal collect-and-clean convenience: it returns the requested entries and removes terminal sessions in the same operation, while pending sessions remain available. Use `remove` when sessions should be aborted or discarded without collecting their full result.
+
+Spawn tasks accept `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable` overrides. Resume tasks accept only `label` and `resumable` overrides; `model`, `thinking`, `cwd`, and `skills` are fixed when the child session is created. Selected skills are resolved by name and their full instruction bodies are injected into the child system prompt; an unknown or unreadable skill fails the run before the child session starts. Agent discovery applies the configured default `defaultResumable` because a task can override it. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. A foreground `run` returns settled results directly; background handles and `results` entries include a session ID for retrieval or removal even when conversation context is not resumable.
 
 Inventory advertises `canRemove` only for terminal sessions that remain cataloged; queued and running sessions report `false`. This is the safe interactive capability, not authorization: an explicit `remove` call can still remove a queued session or abort a running one. Removal scopes select: `background` for all background-dispatched sessions, `retained` for non-running resumable foreground sessions, and `non-running` for every queued or terminal session.
+
+This action separation is a clean breaking change. There are no legacy `list` fields or compatibility aliases; callers must use the separated actions and current inventory fields.
 
 ## Architecture
 

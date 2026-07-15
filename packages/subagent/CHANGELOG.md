@@ -6,6 +6,7 @@ This changelog starts with version `v0.2.1`.
 
 ### Breaking
 
+- Separate the subagent actions: `agents` discovers definitions, `list` returns a lightweight status-filterable runtime inventory without elapsed/tool/token data, `run` starts or resumes, `results` retrieves full untruncated output/error by handle without blocking pending sessions, and `remove` aborts or discards. `list` now shares the icon-bearing agent rows used by `results`. Background `run` results collapse to a count and expand to agent, task label, and handle rows. This is a clean break with no legacy `list` fields or compatibility aliases.
 - Change public session IDs from UUIDs to adjective-noun handles such as `quiet-otter`. Handles are unique within the current subagent runtime and must be passed unchanged to resume, results, and remove; existing UUID IDs are not migrated or supported.
 
 ## [0.4.0] - 2026-07-15

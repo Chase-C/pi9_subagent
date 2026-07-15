@@ -15,6 +15,7 @@ export type InventoryFilter = { status?: string[] };
 
 export type BackgroundSpawnHandle = {
   sessionId: string;
+  agent: string;
   label?: string;
 };
 
@@ -55,6 +56,7 @@ export function backgroundStartedDetails(sessions: AgentSnapshot[]): BackgroundS
     if (session.retention !== "persistent") return [];
     return [{
       sessionId: session.id,
+      agent: session.config.name,
       ...(session.label !== undefined ? { label: session.label } : {}),
     }];
   });

@@ -205,6 +205,21 @@ test("SubagentParams rejects results action when remove is not a boolean", () =>
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: "yes" }), false);
 });
 
+test("schema describes definitions, lightweight inventory, and full results", () => {
+  assert.equal(
+    (SubagentParams.properties.action as any).description,
+    "agents=definitions; list=lightweight inventory; run=spawn/resume; results=full output/error retrieval; remove=delete or abort.",
+  );
+  assert.equal(
+    (SubagentParams.properties.status as any).description,
+    "For list. Normalized session statuses to include in the lightweight inventory.",
+  );
+  assert.equal(
+    (SubagentParams.properties.remove as any).description,
+    "For results. Remove terminal sessions after returning their full output/error.",
+  );
+});
+
 test("schema distinguishes result retention from conversation resumability", () => {
   assert.equal(
     (TaskSchema.properties.resumable as any).description,
