@@ -92,13 +92,13 @@ Each file is registered by its frontmatter `name`, not by filename. Project agen
 
 ## Resumable sessions
 
-Mark an agent `resumable: true` (or override per task) and its session is retained after it settles. The parent can then send a follow-up to the same `sessionId`, and the child continues with its accumulated context instead of starting cold. Spawns and resumes can be mixed in one batch:
+Mark an agent `resumable: true` (or override per task) and its session is retained after it settles. The parent can then send a follow-up to the same `sessionId`, and the child continues with its accumulated context instead of starting cold. Session IDs are adjective-noun handles such as `quiet-otter`, unique within the current subagent runtime; pass them unchanged to resume, results, and remove. Spawns and resumes can be mixed in one batch:
 
 ```ts
 subagent({
   action: "run",
   tasks: [
-    { sessionId: "...", prompt: "Use your earlier findings to propose the smallest implementation plan." },
+    { sessionId: "quiet-otter", prompt: "Use your earlier findings to propose the smallest implementation plan." },
     { agent: "reviewer", prompt: "Independently review the new plan once it lands." }
   ]
 })

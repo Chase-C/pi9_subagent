@@ -5,12 +5,35 @@ import { Agent } from "../../src/domain/agent.js";
 import { resolveTask } from "../../src/runtime/task-resolution.js";
 
 const noop = () => {};
+const allocateSessionId = () => "test-session";
 
 function assertCurrentSnapshotFields(snapshot: Record<string, unknown>): void {
   assert.equal(Object.prototype.hasOwnProperty.call(snapshot, "resumed"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(snapshot, "previousRuns"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(snapshot, "effectiveConfig"), false);
 }
+
+test("task resolution reports session ID exhaustion without creating an Agent", () => {
+  const config = { name: "known", description: "", systemPrompt: "", source: "project", resumable: true };
+  const result = resolveTask({
+    task: { kind: "spawn", agent: "known", prompt: "work" },
+    background: false,
+    groupId: "group",
+    inputIndex: 0,
+    registry: { agents: new Map([["known", config]]) } as any,
+    findAgent: () => undefined,
+    allocateSessionId: () => undefined,
+    listener: noop,
+  });
+
+  assert.equal(result.kind, "failure");
+  if (result.kind !== "failure") return;
+  assert.equal("agent" in result, false);
+  assert.equal(result.failure.status.kind, "done");
+  if (result.failure.status.kind === "done") {
+    assert.equal(result.failure.status.error, "Subagent session ID space exhausted.");
+  }
+});
 
 test("preflight failures project current snapshot fields for unknown tasks", () => {
   const realNow = Date.now;
@@ -24,6 +47,7 @@ test("preflight failures project current snapshot fields for unknown tasks", () 
       inputIndex: 3,
       registry,
       findAgent: () => undefined,
+      allocateSessionId,
       listener: noop,
     });
     const unknownResume = resolveTask({
@@ -33,6 +57,7 @@ test("preflight failures project current snapshot fields for unknown tasks", () 
       inputIndex: 4,
       registry,
       findAgent: () => undefined,
+      allocateSessionId,
       listener: noop,
     });
 
@@ -134,6 +159,7 @@ test("blocked known resumes project target config and preserve synthetic row fie
       inputIndex: 5,
       registry: { agents: new Map([["known", config]]) } as any,
       findAgent: id => id === target.id ? target : undefined,
+      allocateSessionId,
       listener: noop,
     });
 

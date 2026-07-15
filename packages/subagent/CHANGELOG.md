@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Change public session IDs from UUIDs to adjective-noun handles such as `quiet-otter`. Handles are unique within the current subagent runtime and must be passed unchanged to resume, results, and remove; existing UUID IDs are not migrated or supported.
+
 ## [0.4.0] - 2026-07-15
 
 ### Breaking

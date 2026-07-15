@@ -91,6 +91,43 @@ test("catalog retention matrix preserves list, cleanup eligibility, and retained
   }
 });
 
+test("AgentManager allocates readable unique IDs and does not reuse removed IDs", async () => {
+  const config = { name: "worker", description: "", systemPrompt: "", source: "project", resumable: true };
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    return completedRun(agent, "done");
+  };
+  const manager = makeManager({ agents: new Map([["worker", config]]) } as any, 3, runner);
+
+  const firstBatch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "worker", prompt: "one" },
+    { kind: "spawn", agent: "worker", prompt: "two" },
+    { kind: "spawn", agent: "worker", prompt: "three" },
+  ], undefined, { background: false });
+  const firstIds = firstBatch.sessions.map(session => session.id);
+  await firstBatch.resultsPromise;
+
+  assert.equal(new Set(firstIds).size, firstIds.length);
+  for (const id of firstIds) assert.match(id, /^[a-z]+-[a-z]+$/);
+
+  const removedId = firstIds[0];
+  assert.deepEqual(await manager.remove({ sessionIds: [removedId] }), {
+    removed: 1,
+    aborted: 0,
+    sessionIds: [removedId],
+    errors: [],
+  });
+
+  const replacementBatch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "worker", prompt: "replacement" },
+  ], undefined, { background: false });
+  const replacementId = replacementBatch.sessions[0].id;
+  await replacementBatch.resultsPromise;
+
+  assert.match(replacementId, /^[a-z]+-[a-z]+$/);
+  assert.equal(firstIds.includes(replacementId), false);
+});
+
 test("manager inventory and raw results omit top-level resumed while retaining terminal status.resumed", async () => {
   const config = { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true };
   const runner = async (_ctx: any, agent: any, attempt: any) => {

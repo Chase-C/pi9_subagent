@@ -67,6 +67,7 @@ test("direct snapshots omit top-level resumed while terminal status derives it f
     inputIndex: 0,
     registry: { agents: new Map([["helper", config]]) } as any,
     findAgent: id => id === agent.id ? agent : undefined,
+    allocateSessionId: () => "test-session",
     listener: noop,
   });
   if (resolved.kind !== "resume") throw new Error("expected resume");

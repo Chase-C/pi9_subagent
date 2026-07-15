@@ -11,6 +11,7 @@ import { AgentRegistry } from "../domain/agent-registry.js";
 import type { SessionStatus, TaskRequest } from "../schema.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
 import { RunGroup, type RunUpdateListener } from "./run-group.js";
+import { SessionIdAllocator } from "./session-id-allocator.js";
 import { resolveTask } from "./task-resolution.js";
 import { timingStart } from "./timing.js";
 
@@ -36,6 +37,7 @@ export class AgentManager {
   private _agents = new Array<Agent>();
   private _updateListeners = new Set<AgentUpdateListener>();
   private readonly _runner: AttemptRunner;
+  private readonly _sessionIdAllocator = new SessionIdAllocator();
   private readonly _groups = new Map<string, RunGroup>();
   private readonly _removingSessionIds = new Set<string>();
   private readonly _acknowledgedResultIds = new Set<string>();
@@ -186,6 +188,7 @@ export class AgentManager {
       const result = resolveTask({
         task, background, groupId, inputIndex, parentId, registry: this.registry,
         findAgent: id => this._agents.find(a => a.id === id),
+        allocateSessionId: () => this._sessionIdAllocator.allocate(),
         listener: (agent, update) => this._agentUpdate(agent, update),
       });
 

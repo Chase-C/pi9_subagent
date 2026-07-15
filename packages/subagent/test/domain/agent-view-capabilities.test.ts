@@ -29,7 +29,8 @@ function resumeAgent(agent: Agent, prompt: string): void {
   const result = resolveTask({
     task: { kind: "resume", sessionId: agent.id, prompt },
     background: false, groupId: "g", inputIndex: 0,
-    registry, findAgent: id => (id === agent.id ? agent : undefined), listener: noop,
+    registry, findAgent: id => (id === agent.id ? agent : undefined),
+    allocateSessionId: () => "test-session", listener: noop,
   });
   if (result.kind !== "resume") throw new Error(`expected resume, got ${result.kind}`);
 }
