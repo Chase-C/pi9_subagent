@@ -82,5 +82,16 @@ jobs:
             exit 1
           fi
 
+      - name: Check whether version is already published
+        id: registry
+        env:
+          PACKAGE: ${{ steps.package.outputs.workspace }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish
+        if: steps.registry.outputs.published != 'true'
         run: npm publish --workspace "${{ steps.package.outputs.workspace }}"
