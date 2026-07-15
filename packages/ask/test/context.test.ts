@@ -291,6 +291,7 @@ describe("rewriteAskContext", () => {
   });
 
   it.each([
+    ["unanswered", result({ status: "unanswered", question: "Choose" })],
     ["cancelled", result({ status: "cancelled", question: "Choose" })],
     ["UI unavailable", result({ status: "ui_unavailable", question: "Choose" })],
     ["errored", { ...result(answered("Choose", { selections: [{ label: "A" }] })), isError: true }],

@@ -34,9 +34,9 @@ pi -e packages/ask/src/index.ts
 }
 ```
 
-Input is trimmed and validated. `options[].preview` is presentation-only Markdown for the highlighted authored option. At 88 or more columns it renders in a wide split beside the options; on narrower terminals it is stacked below them. Previews work in single- and multi-select and are hidden while editing comments or freeform responses. They are not included in the submitted `AskAnswer` or the compact hidden `ask_response`/`answer` summary.
+Input is trimmed and validated, and at least one selectable option is required. `options[].preview` is presentation-only Markdown for the highlighted authored option. At 88 or more columns it renders in a wide split beside the options; on narrower terminals it is stacked below them. Previews work in single- and multi-select and are hidden while editing comments or freeform responses. They are not included in the submitted `AskAnswer` or the compact hidden `ask_response`/`answer` summary.
 
-`timeout` is an integer number of milliseconds; `0` disables it. The effective timeout is selected in this order: explicit `timeout` (including `0`), `PI9_ASK_TIMEOUT_MS`, then no timeout. A timeout follows the normal cancellation path, and one deadline covers the whole interaction, including all TUI or RPC dialogs.
+`timeout` is an integer number of milliseconds; `0` disables it. The effective timeout is selected in this order: explicit `timeout` (including `0`), `PI9_ASK_TIMEOUT_MS`, then no timeout. Expiry returns a structured `unanswered` result, distinct from user cancellation, and one deadline covers the whole interaction, including all TUI or RPC dialogs.
 
 ## TUI controls
 

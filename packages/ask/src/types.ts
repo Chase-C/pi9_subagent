@@ -17,6 +17,7 @@ export type AskAnswer = {
 
 export type AskToolDetails =
   | { status: "answered"; question: string; answer: AskAnswer }
+  | { status: "unanswered"; question: string }
   | { status: "cancelled"; question: string }
   | { status: "ui_unavailable"; question: string };
 

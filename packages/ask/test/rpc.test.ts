@@ -29,12 +29,12 @@ describe("ask RPC fallback", () => {
   });
 
   it("uses input for the default freeform choice", async () => {
-    const select = vi.fn().mockResolvedValue("1. Type a response…");
+    const select = vi.fn().mockResolvedValue("2. Type a response…");
     const input = vi.fn().mockResolvedValue("   ");
 
-    const result = await askWithRpc(ui(select, input), { question: "What next?", options: [] });
+    const result = await askWithRpc(ui(select, input), { question: "What next?", options: [{ label: "Wait" }] });
 
-    expect(select).toHaveBeenCalledWith("What next?", ["1. Type a response…"]);
+    expect(select).toHaveBeenCalledWith("What next?", ["1. Wait", "2. Type a response…"]);
     expect(input).toHaveBeenCalledWith("What next?");
     expect(result).toEqual({ selections: [] });
   });
@@ -47,8 +47,8 @@ describe("ask RPC fallback", () => {
     expect(cancelledSelect).toBeNull();
 
     const cancelledInput = await askWithRpc(
-      ui(vi.fn().mockResolvedValue("1. Type a response…"), vi.fn().mockResolvedValue(undefined)),
-      { question: "Continue?", options: [] },
+      ui(vi.fn().mockResolvedValue("2. Type a response…"), vi.fn().mockResolvedValue(undefined)),
+      { question: "Continue?", options: [{ label: "Yes" }] },
     );
     expect(cancelledInput).toBeNull();
   });
@@ -179,7 +179,7 @@ describe("ask RPC fallback", () => {
     const controller = new AbortController();
     controller.abort();
     const dialog = ui(vi.fn(), vi.fn());
-    await expect(askWithRpc(dialog, { question: "Choose", options: [] }, controller.signal)).resolves.toBeNull();
+    await expect(askWithRpc(dialog, { question: "Choose", options: [{ label: "Yes" }] }, controller.signal)).resolves.toBeNull();
     expect(dialog.select).not.toHaveBeenCalled();
   });
 });

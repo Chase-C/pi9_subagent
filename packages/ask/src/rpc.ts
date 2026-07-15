@@ -55,11 +55,6 @@ async function runMultiSelect(
   allowFreeform: boolean,
   signal?: AbortSignal,
 ): Promise<AskAnswer | null> {
-  if (options.length === 0) {
-    const freeform = await readInput(ui, prompt, signal);
-    return freeform === null ? null : makeAnswer([], freeform);
-  }
-
   const numberedOptions = options
     .map((option, index) => `${index + 1}. ${formatOption(option)}`)
     .join("\n");

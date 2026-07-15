@@ -4,6 +4,7 @@ import {
   buildAnsweredResponse,
   buildCancelledResponse,
   buildUiUnavailableResponse,
+  buildUnansweredResponse,
   formatAskAnswer,
 } from "../src/response.js";
 import { MAX_TIMEOUT_MS } from "../src/config.js";
@@ -24,11 +25,12 @@ describe("AskParamsSchema", () => {
     expect(Check(AskParamsSchema, { question: "Choose" })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", answered: true })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", unknown: true })).toBe(false);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: -1 })).toBe(false);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: 1.5 })).toBe(false);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: 0 })).toBe(true);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: MAX_TIMEOUT_MS })).toBe(true);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: MAX_TIMEOUT_MS + 1 })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: 0 })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: -1 })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: 1.5 })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: 0 })).toBe(true);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: MAX_TIMEOUT_MS })).toBe(true);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: MAX_TIMEOUT_MS + 1 })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A", unknown: true }] })).toBe(false);
   });
 });
@@ -72,7 +74,7 @@ describe("validateAskParams", () => {
     [{ question: " " }, "question"],
     [{ question: "Choose", options: [{ label: " ", description: "No" }] }, "label"],
     [{ question: "Choose", options: [{ label: "A", description: "1" }, { label: " A ", description: "2" }] }, "duplicate"],
-    [{ question: "Choose", options: [], allowFreeform: false }, "option"],
+    [{ question: "Choose", options: [] }, "option"],
   ])("rejects invalid parameters %#", (params, message) => {
     expect(() => validateAskParams(params as never)).toThrow(message as string);
   });
@@ -92,7 +94,11 @@ describe("ask responses", () => {
     });
   });
 
-  it("builds distinct cancellation and UI-unavailable results", () => {
+  it("builds distinct unanswered, cancellation, and UI-unavailable results", () => {
+    expect(buildUnansweredResponse("Continue?")).toMatchObject({
+      content: [{ type: "text", text: "The question timed out without an answer." }],
+      details: { status: "unanswered", question: "Continue?" },
+    });
     expect(buildCancelledResponse("Continue?")).toMatchObject({
       content: [{ type: "text", text: "User cancelled the question." }],
       details: { status: "cancelled", question: "Continue?" },

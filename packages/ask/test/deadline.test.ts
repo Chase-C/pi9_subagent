@@ -11,6 +11,7 @@ describe("createDeadlineSignal", () => {
     const deadline = createDeadlineSignal(undefined, undefined);
 
     expect(deadline.signal).toBeUndefined();
+    expect(deadline.timedOut).toBe(false);
     expect(() => deadline.dispose()).not.toThrow();
   });
 
@@ -24,6 +25,7 @@ describe("createDeadlineSignal", () => {
 
     expect(deadline.signal?.aborted).toBe(true);
     expect(deadline.signal?.reason).toBe(reason);
+    expect(deadline.timedOut).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
     deadline.dispose();
   });
@@ -40,6 +42,7 @@ describe("createDeadlineSignal", () => {
 
     expect(deadline.signal?.aborted).toBe(true);
     expect(deadline.signal?.reason).toBe(reason);
+    expect(deadline.timedOut).toBe(false);
     expect(onAbort).toHaveBeenCalledTimes(1);
   });
 
@@ -51,11 +54,13 @@ describe("createDeadlineSignal", () => {
 
     vi.advanceTimersByTime(49);
     expect(deadline.signal?.aborted).toBe(false);
+    expect(deadline.timedOut).toBe(false);
 
     vi.advanceTimersByTime(1);
     vi.advanceTimersByTime(100);
 
     expect(deadline.signal?.aborted).toBe(true);
+    expect(deadline.timedOut).toBe(true);
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -84,6 +89,7 @@ describe("createDeadlineSignal", () => {
     vi.advanceTimersByTime(100);
 
     expect(deadline.signal?.aborted).toBe(false);
+    expect(deadline.timedOut).toBe(false);
     expect(onAbort).not.toHaveBeenCalled();
 
     deadline.dispose();

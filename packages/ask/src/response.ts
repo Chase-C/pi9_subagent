@@ -14,6 +14,10 @@ export function buildAnsweredResponse(question: string, answer: AskAnswer): AskR
   return buildResponse(formatAskAnswer(answer), { status: "answered", question, answer });
 }
 
+export function buildUnansweredResponse(question: string): AskResponse {
+  return buildResponse("The question timed out without an answer.", { status: "unanswered", question });
+}
+
 export function buildCancelledResponse(question: string): AskResponse {
   return buildResponse("User cancelled the question.", { status: "cancelled", question });
 }

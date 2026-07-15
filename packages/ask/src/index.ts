@@ -8,7 +8,7 @@ import { CHECKED_BOX, CHECKED_CIRCLE, EMPTY_BOX, EMPTY_CIRCLE } from "./glyphs.j
 import { launchQuestionnaire } from "./questionnaire.js";
 import { renderAskReanswerMessage } from "./replay-renderer.js";
 import { ASK_REPLAY_CUSTOM_TYPE, buildAskReplayMessage, parseAskReplayDetails, resolveAskReplayTarget } from "./replay.js";
-import { buildAnsweredResponse, buildCancelledResponse, buildUiUnavailableResponse } from "./response.js";
+import { buildAnsweredResponse, buildCancelledResponse, buildUiUnavailableResponse, buildUnansweredResponse } from "./response.js";
 import { askWithRpc } from "./rpc.js";
 import { AskParamsSchema } from "./schema.js";
 import type { AskAnswer, AskParams, AskToolDetails } from "./types.js";
@@ -173,13 +173,11 @@ export default function askExtension(pi: ExtensionAPI) {
   pi.registerTool<typeof AskParamsSchema, AskToolDetails, AskRendererState>({
     name: "ask",
     label: "Ask",
-    description:
-      "Ask the user one focused question using selectable options, multiple selection, comments, and freeform input.",
+    description: "Ask the user one focused question with selectable options. Blocks until answered, cancelled, or timed out.",
     promptSnippet: "Ask the user a focused question with selectable options when input is required",
     promptGuidelines: [
-      "Use ask only when you can offer a short list of useful options; ask open-ended questions normally.",
-      "Keep options concise and distinct, and enable freeform when other answers may be valid.",
-      "An `ask_response` contains the user's answer; use it instead of re-asking.",
+      "Use ask only when you can offer a short list of useful options; put open-ended questions in your normal response instead.",
+      "An ask_response is a completed ask whose tool call was removed from the context; treat its answer as final and do not re-ask.",
     ],
     parameters: AskParamsSchema,
     executionMode: "sequential",
@@ -196,6 +194,11 @@ export default function askExtension(pi: ExtensionAPI) {
         let answer: AskAnswer | null | undefined = await launchQuestionnaire(ctx, params, deadline.signal);
         if (answer === undefined) answer = await askWithRpc(ctx.ui, params, deadline.signal);
         if (answer === null) {
+          if (deadline.timedOut) {
+            const result = buildUnansweredResponse(params.question);
+            pi.events.emit("ask:unanswered", result.details);
+            return result;
+          }
           const result = buildCancelledResponse(params.question);
           pi.events.emit("ask:cancelled", result.details);
           return result;
@@ -224,7 +227,10 @@ export default function askExtension(pi: ExtensionAPI) {
       context.state.callComponent?.setText(renderAskCall(context.args, theme, context.state));
       if (answer) return new Text(renderAnsweredOptions(context.args, answer, theme), 0, 0);
       const text = result.content.find((item) => item.type === "text")?.text ?? "Ask completed.";
-      return new Text(theme.fg(result.details?.status === "cancelled" ? "muted" : "text", text), 0, 0);
+      const color = result.details?.status === "cancelled" || result.details?.status === "unanswered"
+        ? "muted"
+        : "text";
+      return new Text(theme.fg(color, text), 0, 0);
     },
   });
 }

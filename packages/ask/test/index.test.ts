@@ -48,6 +48,17 @@ function pendingTui() {
 }
 
 describe("ask extension integration", () => {
+  it("describes the focused-question contract to the model", () => {
+    const { tool } = register();
+    const guidance = tool.promptGuidelines.join("\n");
+
+    expect(tool.description).toContain("selectable options");
+    expect(tool.description).toContain("answered, cancelled, or timed out");
+    expect(guidance).toContain("open-ended questions");
+    expect(guidance).toContain("ask_response");
+    expect(guidance).toContain("do not re-ask");
+  });
+
   it("registers session-start and before-agent-start hooks", () => {
     const { handlers } = register();
     expect(handlers.get("session_start")).toBeTypeOf("function");
@@ -212,7 +223,7 @@ describe("ask extension integration", () => {
     expect(emit).toHaveBeenCalledWith("ask:answered", result.details);
   });
 
-  it("cancels a TUI questionnaire when its complete-path timeout expires", async () => {
+  it("returns unanswered when a TUI questionnaire timeout expires", async () => {
     vi.useFakeTimers();
     try {
       const { tool, emit } = register();
@@ -227,8 +238,9 @@ describe("ask extension integration", () => {
 
       await vi.advanceTimersByTimeAsync(25);
       const result = await execution;
-      expect(result.details).toEqual({ status: "cancelled", question: "Continue?" });
-      expect(emit).toHaveBeenCalledWith("ask:cancelled", result.details);
+      expect(result.details).toEqual({ status: "unanswered", question: "Continue?" });
+      expect(emit).toHaveBeenCalledWith("ask:unanswered", result.details);
+      expect(emit).not.toHaveBeenCalledWith("ask:cancelled", expect.anything());
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -273,7 +285,7 @@ describe("ask extension integration", () => {
         });
         const execution = tool.execute(
           "id",
-          { question: "Continue?", options: [], allowMultiple: true },
+          { question: "Continue?", options: [{ label: "Yes" }], allowMultiple: true },
           undefined,
           undefined,
           { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
@@ -283,7 +295,7 @@ describe("ask extension integration", () => {
         await vi.advanceTimersByTimeAsync(39);
         expect(inputCalls).toBe(1);
         await vi.advanceTimersByTimeAsync(1);
-        await expect(execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+        await expect(execution).resolves.toMatchObject({ details: { status: "unanswered" } });
         expect(vi.getTimerCount()).toBe(0);
       });
     } finally {
@@ -300,7 +312,7 @@ describe("ask extension integration", () => {
           new Promise<string | undefined>(resolve => options?.signal?.addEventListener("abort", () => resolve(undefined), { once: true })));
         const execution = tool.execute(
           "id",
-          { question: "Continue?", options: [], allowMultiple: true, timeout: 100 },
+          { question: "Continue?", options: [{ label: "Yes" }], allowMultiple: true, timeout: 100 },
           undefined,
           undefined,
           { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
@@ -312,7 +324,7 @@ describe("ask extension integration", () => {
         await vi.advanceTimersByTimeAsync(40);
         expect(settled).toBe(false);
         await vi.advanceTimersByTimeAsync(60);
-        await expect(execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+        await expect(execution).resolves.toMatchObject({ details: { status: "unanswered" } });
         expect(vi.getTimerCount()).toBe(0);
       });
     } finally {
@@ -329,7 +341,7 @@ describe("ask extension integration", () => {
         const input = vi.fn().mockImplementation(() => new Promise<string | undefined>(resolve => { finish = resolve; }));
         const execution = tool.execute(
           "id",
-          { question: "Continue?", options: [], allowMultiple: true, timeout: 0 },
+          { question: "Continue?", options: [{ label: "Yes" }], allowMultiple: true, timeout: 0 },
           undefined,
           undefined,
           { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
@@ -355,7 +367,7 @@ describe("ask extension integration", () => {
       const { tool } = register();
       await expect(tool.execute(
         "id",
-        { question: "Continue?", options: [], timeout: 25 },
+        { question: "Continue?", options: [{ label: "Yes" }], timeout: 25 },
         undefined,
         undefined,
         { mode: "print", hasUI: false, ui: {} },
@@ -366,7 +378,7 @@ describe("ask extension integration", () => {
     }
   });
 
-  it("cancels RPC comment collection with one shared deadline signal", async () => {
+  it("times out RPC comment collection with one shared deadline signal", async () => {
     vi.useFakeTimers();
     try {
       const { tool } = register();
@@ -387,7 +399,7 @@ describe("ask extension integration", () => {
       );
 
       await vi.advanceTimersByTimeAsync(30);
-      await expect(execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+      await expect(execution).resolves.toMatchObject({ details: { status: "unanswered" } });
       expect(inputCalls).toBe(2);
       expect(new Set(signals).size).toBe(1);
       expect(vi.getTimerCount()).toBe(0);
@@ -431,7 +443,7 @@ describe("ask extension integration", () => {
 
   it("returns unavailable without throwing or emitting cancellation", async () => {
     const { tool, emit } = register();
-    const result = await tool.execute("id", { question: "Continue?", options: [] }, undefined, undefined, { mode: "print", hasUI: false, ui: {} });
+    const result = await tool.execute("id", { question: "Continue?", options: [{ label: "Yes" }] }, undefined, undefined, { mode: "print", hasUI: false, ui: {} });
     expect(result.details).toEqual({ status: "ui_unavailable", question: "Continue?" });
     expect(emit).not.toHaveBeenCalledWith("ask:cancelled", expect.anything());
   });
@@ -462,7 +474,7 @@ describe("ask extension integration", () => {
     controller.abort();
     const add = vi.spyOn(controller.signal, "addEventListener");
     const custom = vi.fn((factory) => new Promise((resolve) => factory({ requestRender: vi.fn() }, theme(), {}, resolve)));
-    const result = await tool.execute("id", { question: "Continue?", options: [] }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
+    const result = await tool.execute("id", { question: "Continue?", options: [{ label: "Yes" }] }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
     expect(result.details.status).toBe("cancelled");
     expect(add).not.toHaveBeenCalled();
   });
@@ -474,7 +486,7 @@ describe("ask extension integration", () => {
       factory({ requestRender: vi.fn() }, theme(), {}, resolve);
       controller.abort();
     }));
-    const result = await tool.execute("id", { question: "Continue?", options: [] }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
+    const result = await tool.execute("id", { question: "Continue?", options: [{ label: "Yes" }] }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
     expect(result.details.status).toBe("cancelled");
     expect(emit).toHaveBeenCalledWith("ask:cancelled", result.details);
   });

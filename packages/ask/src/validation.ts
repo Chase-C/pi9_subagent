@@ -13,9 +13,7 @@ export function validateAskParams(params: AskParams): ValidatedAskParams {
   }
 
   const allowFreeform = params.allowFreeform ?? true;
-  if (!allowFreeform && options.length === 0) {
-    throw new Error("Ask needs at least one option when freeform responses are disabled.");
-  }
+  if (options.length === 0) throw new Error("Ask needs at least one option.");
 
   return {
     question,
