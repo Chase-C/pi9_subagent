@@ -125,7 +125,6 @@ export async function RunAttempt(
     resourceLoader,
     model: selectedModel,
     thinkingLevel: requestedThinking,
-    modelRegistry: ctx.modelRegistry,
     tools: requestedConfig.tools ? [...requestedConfig.tools] : undefined,
     customTools: childTool ? [childTool] : [],
     sessionManager,

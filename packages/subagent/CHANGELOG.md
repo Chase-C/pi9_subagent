@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore compatibility with Pi 0.80.8 and later by removing the retired `CreateAgentSessionOptions.modelRegistry` option from child-session creation.
+
 ## [0.5.0] - 2026-07-16
 
 ### Breaking
