@@ -49,7 +49,7 @@ export function renderTodoWidgetLines(
       const terminalSummary = terminalTaskSummary(phase.tasks);
       if (terminalSummary) {
         const line = `    + ${terminalSummary}`;
-        lines.push(fit(theme?.fg ? theme.fg("dim", line) : line, safeWidth));
+        lines.push(fit(theme?.fg ? theme.fg("muted", line) : line, safeWidth));
       }
     }
   }
@@ -82,10 +82,10 @@ function phaseTitle(phase: TodoPhase, phaseIndex: number, selected: boolean, the
   const progress = `${TODO_SEPARATOR_GLYPH} ${terminal}/${phase.tasks.length}`;
   if (!selected) {
     const line = `${title} ${progress}`;
-    return theme?.fg ? theme.fg("dim", line) : line;
+    return theme?.fg ? theme.fg("muted", line) : line;
   }
-  const dimProgress = theme?.fg ? theme.fg("dim", progress) : progress;
-  return `${toolTitle(title, theme)} ${dimProgress}`;
+  const mutedProgress = theme?.fg ? theme.fg("muted", progress) : progress;
+  return `${toolTitle(title, theme)} ${mutedProgress}`;
 }
 
 function toolTitle(text: string, theme: ThemeLike | undefined): string {
@@ -104,14 +104,14 @@ function visibleTasks(tasks: readonly Todo[], maxVisible: number): DisplayTask[]
 
 function taskLine(task: Todo, theme: ThemeLike | undefined, fallbackGlyphs = false): string {
   const marker = todoGlyph(task.status, fallbackGlyphs);
-  const color = task.status === "in_progress" ? "text" : task.status === "completed" ? "success" : "dim";
+  const color = task.status === "in_progress" ? "text" : task.status === "completed" ? "success" : "muted";
   const name = isTerminalTodo(task) && theme?.strikethrough
     ? theme.strikethrough(task.name)
     : task.name;
   const line = `    ${marker} ${name}`;
   if (!theme?.fg) return line;
   if (task.status === "in_progress") {
-    return `${theme.fg("dim", `    ${marker}`)} ${theme.fg("text", name)}`;
+    return `${theme.fg("muted", `    ${marker}`)} ${theme.fg("text", name)}`;
   }
   return theme.fg(color, line);
 }
