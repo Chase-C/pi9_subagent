@@ -34,6 +34,7 @@ type RandomIndex = (max: number) => number;
 /** Allocates unique, readable session handles for one AgentManager lifetime. */
 export class SessionIdAllocator {
   private readonly _allocated = new Set<string>();
+  private _fallbackIndex = 0;
 
   constructor(private readonly _randomIndex: RandomIndex = randomInt) { }
 
@@ -45,15 +46,17 @@ export class SessionIdAllocator {
       return candidate;
     }
 
-    // Scan the finite base space deterministically after random retries so a collision-heavy
-    // source cannot spin forever.
-    for (const adjective of ADJECTIVES) {
-      for (const noun of NOUNS) {
-        const candidate = `${adjective}-${noun}`;
-        if (this._allocated.has(candidate)) continue;
-        this._allocated.add(candidate);
-        return candidate;
-      }
+    // Continue through the finite base space after random retries so a collision-heavy source
+    // cannot spin forever or repeatedly rescan previously allocated candidates.
+    while (this._fallbackIndex < ADJECTIVES.length * NOUNS.length) {
+      const adjective = ADJECTIVES[Math.floor(this._fallbackIndex / NOUNS.length)];
+      const noun = NOUNS[this._fallbackIndex % NOUNS.length];
+      this._fallbackIndex += 1;
+
+      const candidate = `${adjective}-${noun}`;
+      if (this._allocated.has(candidate)) continue;
+      this._allocated.add(candidate);
+      return candidate;
     }
 
     return undefined;
