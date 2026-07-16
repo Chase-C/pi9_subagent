@@ -6,6 +6,7 @@ export {
   runDetails,
   type AgentListingEntry,
   type AgentsDetails,
+  type BackgroundPreflightError,
   type BackgroundSpawnHandle,
   type BackgroundStartedDetails,
   type InventoryDetails,

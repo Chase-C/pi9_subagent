@@ -552,6 +552,47 @@ test("subagent action=run background:true returns view:background-started immedi
   await new Promise(resolve => setImmediate(resolve));
 });
 
+test("background run reports preflight failures without hiding successful handles", async () => {
+  const runner = async (_ctx: any, agent: any, attempt: any) => {
+    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    return completedRun(agent, `done:${attempt.prompt}`);
+  };
+  const fakeRegistry = {
+    agents: new Map([["helper", { name: "helper", description: "Helps", systemPrompt: "s", source: "project" }]]),
+    async reload() {},
+    summarizeAgent() { return "helper (project)"; },
+  };
+  const manager = new AgentManager(fakeRegistry as any, 2, runner);
+  const allocator = (manager as any)._sessionIdAllocator;
+  for (let i = 0; i < 100 * 100 - 1; i++) assert.ok(allocator.allocate());
+  const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
+
+  const result = await tool.execute("tool-call", {
+    action: "run",
+    background: true,
+    tasks: [
+      { agent: "helper", prompt: "successful task", label: "success" },
+      { agent: "helper", prompt: "exhausted task", label: "exhausted" },
+    ],
+  }, undefined, undefined, baseCtx());
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.view, "background-started");
+  assert.equal(result.details.count, 1);
+  assert.equal(result.details.handles.length, 1);
+  assert.equal(result.details.handles[0].label, "success");
+  assert.deepEqual(result.details.errors, [{
+    agent: "helper",
+    label: "exhausted",
+    error: "Subagent session ID space exhausted.",
+  }]);
+
+  const json = JSON.parse(result.content[0].text);
+  assert.equal(json.count, 1);
+  assert.equal(json.handles[0].label, "success");
+  assert.deepEqual(json.errors, result.details.errors);
+});
+
 test("subagent action=run background:true never invokes the parent onUpdate channel", async () => {
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });

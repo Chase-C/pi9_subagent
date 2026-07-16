@@ -119,7 +119,8 @@ export async function runAction(
     }, startOptions);
     handle.resultsPromise.catch(() => {});
     updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
-    return toolResult(backgroundStartedDetails(handle.sessions));
+    const details = backgroundStartedDetails(handle.sessions);
+    return toolResult(details, { isError: (details.errors?.length ?? 0) > 0 });
   }
 
   const runStartedAt = Date.now();

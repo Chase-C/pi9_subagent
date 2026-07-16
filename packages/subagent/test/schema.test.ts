@@ -197,6 +197,10 @@ test("parseSubagentInvocation centralizes action field validation", () => {
   assert.ok("error" in list);
   assert.match(list.error, /Unknown status 'stale'/);
 
+  const emptyStatus = parseSubagentInvocation({ action: "list", status: [] });
+  assert.ok("error" in emptyStatus);
+  assert.match(emptyStatus.error, /at least one status/);
+
   const results = parseSubagentInvocation({ action: "results", sessionIds: [""] });
   assert.ok("error" in results);
   assert.match(results.error, /non-empty strings/);
@@ -271,6 +275,7 @@ test("schema exposes explicit-ID removal without a scope field", () => {
 test("SubagentParams constrains action and status values", () => {
   assert.equal(Check(SubagentParams, { action: "bogus" }), false);
   assert.equal(Check(SubagentParams, { action: "list", status: ["running", "completed"] }), true);
+  assert.equal(Check(SubagentParams, { action: "list", status: [] }), false);
   assert.equal(Check(SubagentParams, { action: "list", status: ["stale"] }), false);
 });
 

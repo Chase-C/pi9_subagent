@@ -17,6 +17,11 @@ This changelog starts with version `v0.2.1`.
 - Collapse background `run` results to a started count, with agent names, labels, and session handles shown when expanded.
 - Clarify tool metadata and schema descriptions for agent discovery, context isolation, concurrent tasks, background dispatch, result retrieval, and cleanup.
 
+### Fixed
+
+- Report background preflight failures alongside any successfully started session handles instead of silently omitting them.
+- Reject empty `list` status filters consistently in both the provider schema and runtime validation.
+
 ### Documentation
 
 - Update the README introduction, examples, and tool reference for readable handles, required labels, lightweight inventory, and explicit cleanup.

@@ -123,6 +123,9 @@ export function parseSubagentInvocation(
         return { error: "list status must be an array of status strings.", action };
       }
       if (Array.isArray(status)) {
+        if (status.length === 0) {
+          return { error: "list status must contain at least one status.", action };
+        }
         const invalidStatus = status.find(value => !isSessionStatus(value));
         if (invalidStatus !== undefined) {
           return { error: `Unknown status '${String(invalidStatus)}'. Valid: ${SESSION_STATUSES.join(", ")}.`, action };

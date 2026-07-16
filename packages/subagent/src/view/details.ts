@@ -19,13 +19,19 @@ export type BackgroundSpawnHandle = {
   label?: string;
 };
 
+export type BackgroundPreflightError = {
+  agent: string;
+  label?: string;
+  error: string;
+};
+
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
   | { view: "run"; sessions: AgentSnapshot[]; subtree?: AgentSnapshot[]; runStartedAt?: number }
   | { view: "results"; results: ResultEntry[] }
   | { view: "inventory"; sessions: AgentSnapshot[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
-  | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number }
+  | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number; errors?: BackgroundPreflightError[] }
   | { view: "error"; errors?: string[] };
 
 export type AgentsDetails = Extract<SubagentDetails, { view: "agents" }>;
@@ -60,5 +66,19 @@ export function backgroundStartedDetails(sessions: AgentSnapshot[]): BackgroundS
       ...(session.label !== undefined ? { label: session.label } : {}),
     }];
   });
-  return { view: "background-started", handles, count: handles.length };
+  const errors = sessions.flatMap(session => {
+    const status = session.status;
+    if (session.retention !== "transient" || status.kind !== "done" || status.outcome === "completed" || status.startedAt !== undefined) return [];
+    return [{
+      agent: session.config.name,
+      ...(session.label !== undefined ? { label: session.label } : {}),
+      error: status.error ?? `Subagent ${status.outcome}.`,
+    }];
+  });
+  return {
+    view: "background-started",
+    handles,
+    count: handles.length,
+    ...(errors.length > 0 ? { errors } : {}),
+  };
 }

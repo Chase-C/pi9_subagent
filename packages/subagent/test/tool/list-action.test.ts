@@ -50,7 +50,7 @@ test("subagent tool action=list with status filter [completed, error] returns te
   assert.deepEqual(JSON.parse(result.content[0].text).filter, { status: ["completed", "error"] });
 });
 
-test("subagent tool action=list with empty status filter returns no sessions distinct from no filter", async () => {
+test("subagent tool action=list rejects an empty status filter", async () => {
   const runner = async (_ctx: any, agent: any, _attempt: any) => {
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "ok");
@@ -69,9 +69,8 @@ test("subagent tool action=list with empty status filter returns no sessions dis
   assert.equal(noFilter.details.sessions.length, 1);
 
   const emptyFilter = await tool.execute("tool-call", { action: "list", status: [] }, undefined, undefined, baseCtx());
-  assert.equal(emptyFilter.isError, false);
-  assert.deepEqual(emptyFilter.details.sessions, []);
-  assert.deepEqual(JSON.parse(emptyFilter.content[0].text).filter, { status: [] });
+  assert.equal(emptyFilter.isError, true);
+  assert.match(emptyFilter.content[0].text, /at least one status/);
 });
 
 test("subagent tool action=list with an unknown status value returns the unknown-status error", async () => {
