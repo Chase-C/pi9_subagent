@@ -42,11 +42,14 @@ test("todo widget summarizes terminal tasks beneath the selected phase", () => {
     fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
   } as never, 80, { maxVisible: 10, fallbackGlyphs: true }).join("\n");
   assert.match(themed, /<toolTitle><bold>Todos<\/bold><\/toolTitle>\n/);
-  assert.match(themed, /<toolTitle><bold>  1\. Plan<\/bold><\/toolTitle> <dim>· 2\/4<\/dim>/);
-  assert.match(themed, /<dim>    ▶<\/dim> <text>Active task<\/text>/);
+  assert.match(themed, /<toolTitle><bold>  1\. Plan<\/bold><\/toolTitle> <muted>· 2\/4<\/muted>/);
+  assert.match(themed, /<muted>    ▶<\/muted> <text>Active task<\/text>/);
+  assert.match(themed, /<muted>    ○ First pending task<\/muted>/);
   assert.doesNotMatch(themed, /<text>    ▶<\/text>|<bold>    ▶ Active task<\/bold>/);
-  assert.match(themed, /<dim>    \+ 1 complete task · 1 cancelled task<\/dim>/);
+  assert.match(themed, /<muted>    \+ 1 complete task · 1 cancelled task<\/muted>/);
+  assert.match(themed, /<muted>  2\. Build · 0\/1<\/muted>/);
   assert.match(themed, /  <muted>󰅂 Updating the todo widget<\/muted>/);
+  assert.doesNotMatch(themed, /<dim>/);
   assert.doesNotMatch(themed, /Finished task|Cancelled task|\[3\]|\[4\]|Working on:/);
 });
 
