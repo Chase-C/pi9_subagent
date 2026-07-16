@@ -1,6 +1,6 @@
 {
   "name": "@pi9/todo",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Phased, session-aware todo planning for Pi agents.",
   "license": "MIT",
   "author": "Chase Cummings <chaseecummings@gmail.com>",
