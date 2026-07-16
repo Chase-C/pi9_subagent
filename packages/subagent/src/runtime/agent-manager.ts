@@ -11,6 +11,7 @@ import { AgentRegistry } from "../domain/agent-registry.js";
 import type { SessionStatus, TaskRequest } from "../schema.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
 import { RunGroup, type RunUpdateListener } from "./run-group.js";
+import { SessionIdAllocator } from "./session-id-allocator.js";
 import { resolveTask } from "./task-resolution.js";
 import { timingStart } from "./timing.js";
 
@@ -36,6 +37,7 @@ export class AgentManager {
   private _agents = new Array<Agent>();
   private _updateListeners = new Set<AgentUpdateListener>();
   private readonly _runner: AttemptRunner;
+  private readonly _sessionIdAllocator = new SessionIdAllocator();
   private readonly _groups = new Map<string, RunGroup>();
   private readonly _removingSessionIds = new Set<string>();
   private readonly _acknowledgedResultIds = new Set<string>();
@@ -120,11 +122,9 @@ export class AgentManager {
   }
 
   async remove(
-    args: { sessionIds: string[] } | { scope: "background" | "retained" | "non-running" },
+    args: { sessionIds: string[] },
   ): Promise<{ removed: number; aborted: number; sessionIds: string[]; errors: Array<{ sessionId: string; error: string }> }> {
-    const targets = ("sessionIds" in args)
-      ? args.sessionIds.map(id => this._resolveSession(id))
-      : this._matchScope(args.scope).map(agent => ({ agent }));
+    const targets = args.sessionIds.map(id => this._resolveSession(id));
 
     const agents = targets.filter(t => "agent" in t).map(({ agent }) => agent);
     const errors = targets.filter(t => "error" in t);
@@ -186,6 +186,7 @@ export class AgentManager {
       const result = resolveTask({
         task, background, groupId, inputIndex, parentId, registry: this.registry,
         findAgent: id => this._agents.find(a => a.id === id),
+        allocateSessionId: () => this._sessionIdAllocator.allocate(),
         listener: (agent, update) => this._agentUpdate(agent, update),
       });
 
@@ -231,16 +232,6 @@ export class AgentManager {
     const agent = this._agents.find(a => a.id === id && !this._removingSessionIds.has(a.id));
     if (agent) return { agent };
     return { sessionId: id, error: `Unknown subagent session: ${id}` };
-  }
-
-  private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
-    const available = this._agents.filter(agent => !this._removingSessionIds.has(agent.id));
-    if (scope === "background") return available.filter(a => a.background);
-    if (scope === "retained") {
-      return available.filter(a => !a.background && a.status.kind !== "running" && a.catalogRetention.retention === "persistent");
-    }
-    if (scope === "non-running") return available.filter(a => a.status.kind !== "running");
-    throw new Error(`Unknown remove scope: ${String(scope)}`);
   }
 
   /**

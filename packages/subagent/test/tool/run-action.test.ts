@@ -62,7 +62,7 @@ test("tool run action does not expose transient foreground ids as collectable re
 
   const result = await tool.execute("tool-call", {
     action: "run",
-    tasks: [{ agent: "helper", prompt: "work" }],
+    tasks: [{ agent: "helper", prompt: "work", label: "helper work" }],
   }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
   const rendered = tool.renderResult(result, { expanded: true }, { fg: (_color: string, text: string) => text }).render(120).join("\n");
 
@@ -109,7 +109,7 @@ test("tool execution returns structured failed run for unknown agents", async ()
 
   const result = await tool.execute("tool-call", {
     action: "run",
-    tasks: [{ agent: "missing", prompt: "do work" }],
+    tasks: [{ agent: "missing", prompt: "do work", label: "missing agent work" }],
   }, undefined, undefined, { cwd: root });
 
   assert.equal(result.isError, true);
@@ -140,9 +140,9 @@ test("subagent tool returns one ordered final group for mixed success, unknown, 
   const result = await tool.execute("tool-call", {
     action: "run",
     tasks: [
-      { agent: "helper", prompt: "first" },
-      { agent: "missing", prompt: "second" },
-      { agent: "flaky", prompt: "third" },
+      { agent: "helper", prompt: "first", label: "first task" },
+      { agent: "missing", prompt: "second", label: "second task" },
+      { agent: "flaky", prompt: "third", label: "third task" },
     ],
   }, undefined, undefined, baseCtx());
 
@@ -179,7 +179,7 @@ test("subagent tool notifies invalid settings fallback without breaking executio
   const widgets: any[] = [];
   const result = await tool.execute("tool-call", {
     action: "run",
-    tasks: [{ agent: "helper", prompt: "work" }],
+    tasks: [{ agent: "helper", prompt: "work", label: "helper work" }],
   }, undefined, undefined, {
     cwd: process.cwd(),
     hasUI: true,
@@ -219,7 +219,7 @@ test("subagent tool falls back to default UI settings when settings load rejects
   const widgets: any[] = [];
   const result = await tool.execute("tool-call", {
     action: "run",
-    tasks: [{ agent: "helper", prompt: "work" }],
+    tasks: [{ agent: "helper", prompt: "work", label: "helper work" }],
   }, undefined, undefined, {
     cwd: process.cwd(),
     hasUI: true,
@@ -259,7 +259,7 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
   const widgets: any[] = [];
   const result = await tool.execute("tool-call", {
     action: "run",
-    tasks: [{ agent: "helper", prompt: "work" }],
+    tasks: [{ agent: "helper", prompt: "work", label: "helper work" }],
   }, undefined, undefined, {
     cwd: process.cwd(),
     hasUI: true,
@@ -322,7 +322,7 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
   const widgets: any[] = [];
   const result = await tool.execute("tool-call", {
     action: "run",
-    tasks: [{ agent: "helper", prompt: "work" }],
+    tasks: [{ agent: "helper", prompt: "work", label: "helper work" }],
   }, undefined, (partial: any) => partials.push(partial), {
     cwd: process.cwd(),
     hasUI: true,
@@ -391,7 +391,7 @@ test("background run widget updates render the full manager inventory, not only 
   const result = await tool.execute("tool-call", {
     action: "run",
     background: true,
-    tasks: [{ agent: "helper", prompt: "background work" }],
+    tasks: [{ agent: "helper", prompt: "background work", label: "background work" }],
   }, undefined, undefined, {
     cwd: process.cwd(),
     hasUI: true,
@@ -452,7 +452,7 @@ test("foreground run widget updates also preserve background and retained sectio
   const widgets: any[] = [];
   const execute = tool.execute("tool-call", {
     action: "run",
-    tasks: [{ agent: "helper", prompt: "work" }],
+    tasks: [{ agent: "helper", prompt: "work", label: "foreground work" }],
   }, undefined, undefined, {
     cwd: process.cwd(),
     hasUI: true,
@@ -501,7 +501,7 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   const result = await tool.execute("tool-call", {
     action: "run",
     tasks: [
-      { agent: "helper", prompt: "one" },
+      { agent: "helper", prompt: "one", label: "new helper" },
       { sessionId: "s-1", prompt: "two" },
     ],
   }, undefined, undefined, baseCtx());
@@ -532,7 +532,7 @@ test("subagent action=run background:true returns view:background-started immedi
   const result = await tool.execute("tool-call", {
     action: "run",
     background: true,
-    tasks: [{ agent: "helper", prompt: "background work" }],
+    tasks: [{ agent: "helper", prompt: "background work", label: "background work" }],
   }, undefined, undefined, baseCtx());
 
   assert.equal(result.isError, false);
@@ -541,13 +541,56 @@ test("subagent action=run background:true returns view:background-started immedi
   assert.equal(result.details.handles.length, 1);
   const handle = result.details.handles[0];
   assert.equal(typeof handle.sessionId, "string");
-  assert.deepEqual(Object.keys(handle).sort(), ["sessionId"]);
+  assert.equal(handle.agent, "helper");
+  assert.equal(handle.label, "background work");
+  assert.deepEqual(Object.keys(handle).sort(), ["agent", "label", "sessionId"]);
   const liveStatus = manager.listSessions()[0].status.kind;
   assert.ok(liveStatus === "queued" || liveStatus === "running", `expected non-terminal status, got ${liveStatus}`);
 
   releaseRun!();
   await new Promise(resolve => setImmediate(resolve));
   await new Promise(resolve => setImmediate(resolve));
+});
+
+test("background run reports preflight failures without hiding successful handles", async () => {
+  const runner = async (_ctx: any, agent: any, attempt: any) => {
+    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    return completedRun(agent, `done:${attempt.prompt}`);
+  };
+  const fakeRegistry = {
+    agents: new Map([["helper", { name: "helper", description: "Helps", systemPrompt: "s", source: "project" }]]),
+    async reload() {},
+    summarizeAgent() { return "helper (project)"; },
+  };
+  const manager = new AgentManager(fakeRegistry as any, 2, runner);
+  const allocator = (manager as any)._sessionIdAllocator;
+  for (let i = 0; i < 100 * 100 - 1; i++) assert.ok(allocator.allocate());
+  const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
+
+  const result = await tool.execute("tool-call", {
+    action: "run",
+    background: true,
+    tasks: [
+      { agent: "helper", prompt: "successful task", label: "success" },
+      { agent: "helper", prompt: "exhausted task", label: "exhausted" },
+    ],
+  }, undefined, undefined, baseCtx());
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.view, "background-started");
+  assert.equal(result.details.count, 1);
+  assert.equal(result.details.handles.length, 1);
+  assert.equal(result.details.handles[0].label, "success");
+  assert.deepEqual(result.details.errors, [{
+    agent: "helper",
+    label: "exhausted",
+    error: "Subagent session ID space exhausted.",
+  }]);
+
+  const json = JSON.parse(result.content[0].text);
+  assert.equal(json.count, 1);
+  assert.equal(json.handles[0].label, "success");
+  assert.deepEqual(json.errors, result.details.errors);
 });
 
 test("subagent action=run background:true never invokes the parent onUpdate channel", async () => {
@@ -572,7 +615,7 @@ test("subagent action=run background:true never invokes the parent onUpdate chan
   await tool.execute("tool-call", {
     action: "run",
     background: true,
-    tasks: [{ agent: "helper", prompt: "background work" }],
+    tasks: [{ agent: "helper", prompt: "background work", label: "background work" }],
   }, undefined, onUpdate, baseCtx());
 
   await new Promise(resolve => setTimeout(resolve, 250));
@@ -687,7 +730,7 @@ test("a late-arriving descendant status change triggers a partial re-emit with t
 
   const executePromise = tool.execute(
     "tool-call",
-    { action: "run", tasks: [{ agent: "root", prompt: "go" }] },
+    { action: "run", tasks: [{ agent: "root", prompt: "go", label: "root work" }] },
     undefined,
     (partial: any) => partials.push(partial),
     baseCtx(),
@@ -735,7 +778,7 @@ test("partial tool results carry the full descendant subtree; final tool result 
 
   const final = await tool.execute(
     "tool-call",
-    { action: "run", tasks: [{ agent: "root", prompt: "go" }] },
+    { action: "run", tasks: [{ agent: "root", prompt: "go", label: "root work" }] },
     undefined,
     (partial: any) => partials.push(partial),
     baseCtx(),

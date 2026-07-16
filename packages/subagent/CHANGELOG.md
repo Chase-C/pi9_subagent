@@ -4,6 +4,28 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Replace UUID session IDs with process-local adjective-noun handles such as `quiet-otter`; existing UUIDs cannot be resumed, queried, or removed.
+- Limit `list` entries to session identity, normalized status, dispatch mode, and resume/remove capabilities; use `results` for full output and errors.
+- Require every new-session task to include a non-empty `label`; labels remain optional when resuming a session.
+- Remove scope-based cleanup; `remove` now requires explicit `sessionIds` for every session to abort or discard.
+
+### Changed
+
+- Render `list` as concise status-and-identity rows, with session metadata shown when expanded.
+- Collapse background `run` results to a started count, with agent names, labels, and session handles shown when expanded.
+- Clarify tool metadata and schema descriptions for agent discovery, context isolation, concurrent tasks, background dispatch, result retrieval, and cleanup.
+
+### Fixed
+
+- Report background preflight failures alongside any successfully started session handles instead of silently omitting them.
+- Reject empty `list` status filters consistently in both the provider schema and runtime validation.
+
+### Documentation
+
+- Update the README introduction, examples, and tool reference for readable handles, required labels, lightweight inventory, and explicit cleanup.
+
 ## [0.4.0] - 2026-07-15
 
 ### Breaking

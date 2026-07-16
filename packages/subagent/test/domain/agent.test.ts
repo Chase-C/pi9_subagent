@@ -34,11 +34,13 @@ function resolveScenario(opts: { config?: any } = {}) {
     agents: new Map([[ (opts.config ?? baseConfig).name, opts.config ?? baseConfig ]]),
   } as any;
   const tracked: Agent[] = [];
+  let nextSessionId = 0;
+  const allocateSessionId = () => `test-session-${++nextSessionId}`;
   const findAgent = (id: string) => tracked.find(a => a.id === id);
   function resolve(task: any, listener: AgentUpdateListener = noop, background = false) {
     const result = resolveTask({
       task, background, groupId: "g", inputIndex: 0,
-      registry, findAgent, listener,
+      registry, findAgent, allocateSessionId, listener,
     });
     if (result.kind === "spawn") tracked.push(result.agent);
     return result;
@@ -461,6 +463,7 @@ test("task resolution for an unknown agent returns a preflight failure with a he
     inputIndex: 0,
     registry,
     findAgent: () => undefined,
+    allocateSessionId: () => "test-session",
     listener: noop,
   });
 

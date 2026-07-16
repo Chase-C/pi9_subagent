@@ -608,7 +608,7 @@ test("/subagents sessions menu closes on a terminal escape sequence", async () =
   assert.equal(closed, true);
 });
 
-test("/subagents sessions command uses configured display lengths for notification and inspect views", async () => {
+test("/subagents sessions command keeps notifications metadata-only and uses configured display lengths for inspect", async () => {
   const session = fakeAgent({
     retention: "transient",
     config: { resumable: false },
@@ -638,9 +638,9 @@ test("/subagents sessions command uses configured display lengths for notificati
     ui: { notify: (...args: any[]) => notifications.push(args) },
   });
 
-  assert.match(notifications.at(-1)[0], /"0123…"/);
-  assert.match(notifications.at(-1)[0], /outcome:error:abcde…/);
-  assert.doesNotMatch(notifications.at(-1)[0], /abcdefghijklmnopqrstuvwxyz/);
+  assert.match(notifications.at(-1)[0], /✗ helper/);
+  assert.match(notifications.at(-1)[0], /session:s1/);
+  assert.doesNotMatch(notifications.at(-1)[0], /0123456789|abcdefghijklmnopqrstuvwxyz/);
 
   let inspectText = "";
   await commands.get("subagents").handler("", {

@@ -36,71 +36,53 @@ test("subagent run display animates only the running status glyph", () => {
   assert.match(second[3], /^  ✗ failed/);
 });
 
-test("collapsed inventory group line surfaces a filter:<statuses> segment when a status filter is active", () => {
-  const a = fakeAgent({ id: "s1", config: { name: "a" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
-  const b = fakeAgent({ id: "s2", config: { name: "b" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+test("collapsed inventory renders one results-style identity row per session", () => {
+  const sessions = [
+    fakeAgent({ id: "s1", config: { name: "done" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } }),
+    fakeAgent({ id: "s2", config: { name: "active" }, label: "phase two", status: { kind: "running", startedAt: 1 }, turns: 3, usage: { ...fakeAgent().usage!, totalTokens: 42 } }),
+    fakeAgent({ id: "s3", config: { name: "failed" }, messageSnippet: "private", status: { kind: "error", startedAt: 1, completedAt: 2, error: "boom" } }),
+  ];
 
-  const noFilter = formatSubagentToolLines(inventoryDetails([a, b]), false, 0);
-  assert.doesNotMatch(noFilter.join("\n"), /filter:/);
+  const lines = formatSubagentToolLines(inventoryDetails(sessions, { status: ["completed", "running", "error"] }), false, 10_000);
 
-  const filtered = formatSubagentToolLines(inventoryDetails([a, b], { status: ["completed", "error"] }), false, 0);
-  assert.match(filtered.join("\n"), /· filter:completed,error/);
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /^  ✓ done$/);
+  assert.match(lines[1], /^  ● active  phase two$/);
+  assert.match(lines[2], /^  ✗ failed$/);
+  assert.doesNotMatch(lines.join("\n"), /filter:|tool|token|\d+s|private|boom|outcome:/);
 });
 
-test("queued session elapsed uses queuedAt instead of session createdAt", () => {
-  const session = fakeAgent({
-    createdAt: 1_000,
-    config: { name: "helper" },
-    status: { kind: "queued", queuedAt: 10_000 },
-  });
-
-  const lines = formatSubagentToolLines(inventoryDetails([session]), false, 11_250);
-
-  assert.match(lines.join("\n"), /1s/);
-  assert.doesNotMatch(lines.join("\n"), /10s/);
-});
-
-test("the dispatch:background segment surfaces in both inspect summary and inventory line formatters", () => {
+test("background dispatch stays out of collapsed inventory and appears in expanded metadata", () => {
   const retained = fakeAgent({ retention: "persistent", config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
   const background = fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "helper", resumable: true }, status: { kind: "running", startedAt: 1 } });
 
-  // formatSubagentSessionSummary (inspect view)
   assert.doesNotMatch(formatSubagentSessionSummary(retained), /dispatch:/);
   assert.match(formatSubagentSessionSummary(background), /dispatch:background/);
-
-  // formatSubagentToolLines (inventory view)
-  assert.doesNotMatch(formatSubagentToolLines(inventoryDetails([retained]), false, 0).join("\n"), /dispatch:/);
-  assert.match(formatSubagentToolLines(inventoryDetails([background]), false, 0).join("\n"), /dispatch:background/);
+  assert.doesNotMatch(formatSubagentToolLines(inventoryDetails([background]), false, 0).join("\n"), /dispatch:/);
+  assert.match(formatSubagentToolLines(inventoryDetails([background]), true, 0).join("\n"), /dispatch:background/);
 });
 
-test("background-started view always shows spawned session handles when collapsed", () => {
+test("background-started view collapses to only the started count", () => {
   const sessions = [
     fakeAgent({ id: "s1", dispatch: "background", retention: "persistent", config: { name: "scout" }, status: { kind: "queued" } }),
-    fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
-    fakeAgent({ id: "s3", dispatch: "background", retention: "persistent", config: { name: "reviewer" }, status: { kind: "queued" } }),
+    fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
   ];
 
-  const collapsed = formatSubagentToolLines(backgroundStartedDetails(sessions), false, 0);
-  assert.deepEqual(collapsed, [
-    "3 background subagents started",
-    "  s1",
-    "  s2",
-    "  s3",
+  assert.deepEqual(formatSubagentToolLines(backgroundStartedDetails(sessions), false, 0), [
+    "2 background subagents started",
   ]);
 });
 
-test("background-started view expanded shows one line per session with session id and label when present", () => {
+test("background-started view expanded shows agent, task label, and session id", () => {
   const sessions = [
     fakeAgent({ id: "scout-1", dispatch: "background", retention: "persistent", config: { name: "scout" }, label: "frontend auth", status: { kind: "queued" } }),
     fakeAgent({ id: "rev-1", dispatch: "background", retention: "persistent", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
   ];
 
   const expanded = formatSubagentToolLines(backgroundStartedDetails(sessions), true, 0).join("\n");
-  assert.match(expanded, /frontend auth · scout-1/);
-  assert.match(expanded, /rev-1/);
-  assert.doesNotMatch(expanded, /reviewer/);
-  assert.doesNotMatch(expanded, /queued/);
-  assert.doesNotMatch(expanded, /running/);
+  assert.match(expanded, /scout  frontend auth · scout-1/);
+  assert.match(expanded, /reviewer · rev-1/);
+  assert.doesNotMatch(expanded, /queued|running/);
 });
 
 test("results view collapsed renders one run-style row per entry, status by glyph, with no count header", () => {
@@ -151,23 +133,18 @@ test("background-started details project collectable handles with sessionId and 
   assert.equal(details.view, "background-started");
   assert.equal(details.count, 2);
   assert.deepEqual(details.handles, [
-    { sessionId: "a", label: "alpha" },
-    { sessionId: "b" },
+    { sessionId: "a", agent: "scout", label: "alpha" },
+    { sessionId: "b", agent: "reviewer" },
   ]);
 });
 
-test("flat sessions (no parentSessionId) render in caller order with no indentation in inventory", () => {
+test("flat inventory sessions render in caller order with results-style row indentation", () => {
   const a = fakeAgent({ id: "a", config: { name: "alpha" }, createdAt: 30, status: { kind: "running", startedAt: 1 } });
   const b = fakeAgent({ id: "b", config: { name: "beta" }, createdAt: 10, status: { kind: "running", startedAt: 1 } });
   const orphan = fakeAgent({ id: "c", parentSessionId: "missing-parent", config: { name: "orphan" }, createdAt: 20, status: { kind: "running", startedAt: 1 } });
 
-  const inventoryLines = formatSubagentToolLines(inventoryDetails([a, b, orphan]), true, 1_000);
-  const headLines = inventoryLines.filter(line => line.includes(" · running "));
-  assert.equal(headLines.length, 3);
-  assert.match(headLines[0], /^alpha /);
-  assert.match(headLines[1], /^beta /);
-  assert.match(headLines[2], /^orphan /);
-  for (const line of headLines) assert.doesNotMatch(line, /^ /);
+  const headLines = formatSubagentToolLines(inventoryDetails([a, b, orphan]), false, 1_000);
+  assert.deepEqual(headLines, ["  ● alpha", "  ● beta", "  ● orphan"]);
 });
 
 test("inventory expanded output orders descendants DFS under their parents with depth indent", () => {
@@ -177,13 +154,52 @@ test("inventory expanded output orders descendants DFS under their parents with 
   const grandchild = fakeAgent({ id: "g1", parentSessionId: "c1", config: { name: "gamma" }, createdAt: 4, status: { kind: "running", startedAt: 1 } });
 
   const lines = formatSubagentToolLines(inventoryDetails([child, root, grandchild, root2]), true, 1_000);
-  const headLines = lines.filter(line => line.includes(" · running "));
+  const headLines = lines.filter(line => line.includes("●"));
 
-  assert.equal(headLines.length, 4);
-  assert.match(headLines[0], /^alpha /);
-  assert.match(headLines[1], /^  beta /);
-  assert.match(headLines[2], /^    gamma /);
-  assert.match(headLines[3], /^delta /);
+  assert.deepEqual(headLines, [
+    "  ● alpha",
+    "    ● beta",
+    "      ● gamma",
+    "  ● delta",
+  ]);
+});
+
+test("expanded inventory renders lifecycle metadata without run or result narrative", () => {
+  const root = fakeAgent({
+    id: "root-session",
+    config: { name: "planner", resumable: true },
+    prompt: "PROMPT_MUST_NOT_RENDER",
+    messageSnippet: "MESSAGE_MUST_NOT_RENDER",
+    activity: { toolHistory: [{ id: "tool-1", name: "read", inputSummary: "TOOL_MUST_NOT_RENDER", startedAt: 2, completedAt: 3 }] },
+    status: { kind: "completed", startedAt: 1, completedAt: 4, response: "OUTPUT_MUST_NOT_RENDER" },
+  });
+  const child = fakeAgent({
+    id: "child-session",
+    parentSessionId: "root-session",
+    config: { name: "reviewer", resumable: false },
+    prompt: "CHILD_PROMPT_MUST_NOT_RENDER",
+    messageSnippet: "CHILD_MESSAGE_MUST_NOT_RENDER",
+    activity: { toolHistory: [{ id: "tool-2", name: "bash", inputSummary: "CHILD_TOOL_MUST_NOT_RENDER", startedAt: 2 }] },
+    status: { kind: "error", startedAt: 1, completedAt: 4, error: "ERROR_MUST_NOT_RENDER" },
+  });
+
+  const lines = formatSubagentToolLines(inventoryDetails([child, root]), true, 5);
+  const rendered = lines.join("\n");
+
+  assert.match(rendered, /^  ✓ planner$/m);
+  assert.match(rendered, /^    ✗ reviewer$/m);
+  assert.match(rendered, /session:root-session/);
+  assert.match(rendered, /dispatch:foreground/);
+  assert.match(rendered, /resumable:true/);
+  assert.match(rendered, /parent:root-session/);
+  assert.match(rendered, /resumable:false/);
+  assert.doesNotMatch(rendered, /PROMPT_MUST_NOT_RENDER|MESSAGE_MUST_NOT_RENDER|TOOL_MUST_NOT_RENDER|OUTPUT_MUST_NOT_RENDER|ERROR_MUST_NOT_RENDER|tool call|token|\d+s/);
+
+  const rootRow = lines.findIndex(line => line === "  ✓ planner");
+  const rootMetadata = lines.findIndex(line => line === "    session:root-session");
+  const childRow = lines.findIndex(line => line === "    ✗ reviewer");
+  const childMetadata = lines.findIndex(line => line === "      session:child-session");
+  assert.ok(rootRow >= 0 && rootMetadata > rootRow && childRow > rootMetadata && childMetadata > childRow);
 });
 
 test("formatWidgetLines flattens nested background agents into the Background section without tree indentation", () => {

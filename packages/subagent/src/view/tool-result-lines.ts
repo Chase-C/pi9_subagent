@@ -1,12 +1,17 @@
 import type { Component } from "@earendil-works/pi-tui";
 
 import type { AgentConfig } from "../domain/agent-config.js";
-import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
+import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { ResultEntry } from "../domain/agent-result.js";
-import { effectiveStatus, getCompletedAt, getQueuedAt, getStartedAt, isActiveStatusKind } from "../domain/agent-decisions.js";
+import {
+  effectiveStatus,
+  getCompletedAt,
+  getQueuedAt,
+  getStartedAt,
+  isActiveStatusKind,
+} from "../domain/agent-decisions.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
 import { compact } from "./view-helpers.js";
-import { serializeGroup } from "./serialize.js";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
   applyBold,
@@ -20,14 +25,11 @@ import {
   formatToolUseLine,
   orderAsTree,
   plural,
-  statusColorForOutcome,
-  statusPresentation,
 } from "./format-helpers.js";
-import { formatRunSessionLine, formatSessionLine } from "./session-lines.js";
+import { formatRunSessionLine, formatSessionIdentityLine } from "./session-lines.js";
 import {
   type AgentListingEntry,
   type BackgroundSpawnHandle,
-  type InventoryFilter,
   type RemoveSummary,
   type SubagentDetails,
 } from "./details.js";
@@ -166,10 +168,9 @@ function formatSubagentToolDisplayLines(
       return expandRows(ordered, expanded, now, bold, display, runRow, true, true);
     }
     case "inventory": {
-      const { sessions, filter } = details;
+      const { sessions } = details;
       if (sessions.length === 0) return [{ text: "No subagent sessions." }];
-      if (!expanded && sessions.length > 1) return formatViewGroupLine(serializeGroup(sessions), filter);
-      return expandRows(orderAsTree(sessions), expanded, now, bold, display, inventoryRow, false);
+      return formatInventoryLines(orderAsTree(sessions), expanded, now, bold);
     }
     case "remove-summary":
       return formatRemoveSummaryLines(details.summary, expanded);
@@ -212,34 +213,50 @@ function renderCountSummary<T>(spec: CountSummarySpec<T>): DisplayLine[] {
   return lines;
 }
 
-/** Ordered `${n} ${key}` segments: known keys first in `order`, then any extras alphabetically. */
-function orderedCountSegments(counts: Map<string, number>, order: readonly string[]): string[] {
-  const known = new Set(order);
-  const segments: string[] = [];
-  for (const key of order) {
-    const count = counts.get(key);
-    if (count) segments.push(`${count} ${key}`);
-  }
-  for (const key of [...counts.keys()].filter(k => !known.has(k)).sort()) {
-    const count = counts.get(key);
-    if (count) segments.push(`${count} ${key}`);
-  }
-  return segments;
-}
-
 type RowRenderer = (row: AgentSnapshot, now: number, bold: Bold | undefined, display: SubagentDisplaySettings) => DisplayLine;
 
 const runRow: RowRenderer = (row, now, bold) => formatRunSessionLine(row, now, bold);
-const inventoryRow: RowRenderer = (row, now, bold, display) => ({
-  text: formatSessionLine(row, now, bold, display),
-  color: statusPresentation(row.status).color,
-});
+
+/** Inventory and results share the same icon-bearing identity row; expansion adds metadata only. */
+function formatInventoryLines(
+  ordered: Array<{ agent: AgentSnapshot; depth: number }>,
+  expanded: boolean,
+  now: number,
+  bold: Bold | undefined,
+): DisplayLine[] {
+  return ordered.flatMap((entry, index) => {
+    const indent = "  ".repeat(entry.depth);
+    const head = formatSessionIdentityLine(entry.agent, now, bold, true);
+    const row: DisplayLine = entry.depth === 0
+      ? head
+      : {
+          ...head,
+          text: `${indent}${head.text}`,
+          ...(head.segments ? { segments: [{ text: indent }, ...head.segments] } : {}),
+        };
+    if (!expanded) return [row];
+
+    const metadataIndent = "  ".repeat(entry.depth + 2);
+    const lines: DisplayLine[] = [
+      row,
+      { text: `${metadataIndent}session:${entry.agent.id}`, color: "muted", hangingIndent: metadataIndent.length },
+      { text: `${metadataIndent}dispatch:${entry.agent.dispatch}`, color: "muted", hangingIndent: metadataIndent.length },
+      ...(entry.agent.parentSessionId
+        ? [{ text: `${metadataIndent}parent:${entry.agent.parentSessionId}`, color: "muted" as const, hangingIndent: metadataIndent.length }]
+        : []),
+      { text: `${metadataIndent}resumable:${entry.agent.config.resumable}`, color: "muted", hangingIndent: metadataIndent.length },
+    ];
+    if (index < ordered.length - 1) lines.push({ text: "" });
+    return lines;
+  });
+}
 
 /**
- * The single per-row tree-expansion path shared by the `run` and `inventory` views. Each row is
- * rendered by {@link RowRenderer}, depth-indented, and — when expanded — followed by its prompt,
- * tool history, and optional snippet via {@link expandedLines}. With `richToolHistory`, rows carry
- * per-tool lines (recent ones collapsed, the full chronology expanded) instead of aggregate counts.
+ * The tree-expansion path used by the `run` view and collapsed `inventory` rows. Run rows are
+ * rendered by {@link RowRenderer}, depth-indented, and — when expanded — followed by their
+ * prompt, tool history, and optional snippet via {@link expandedLines}. With `richToolHistory`,
+ * rows carry per-tool lines (recent ones collapsed, the full chronology expanded) instead of
+ * aggregate counts.
  */
 function expandRows(
   ordered: Array<{ agent: AgentSnapshot; depth: number }>,
@@ -383,16 +400,14 @@ function resultExpanded(entry: ResultEntry, trailingBlank: boolean, now: number,
   return expandedLines(row, entry.snapshot, true, trailingBlank, display, now, true);
 }
 
-function formatBackgroundStartedLines(handles: BackgroundSpawnHandle[], count: number, _expanded: boolean, bold?: Bold): DisplayLine[] {
+function formatBackgroundStartedLines(handles: BackgroundSpawnHandle[], count: number, expanded: boolean, bold?: Bold): DisplayLine[] {
   return renderCountSummary({
     total: `${plural(count, "background subagent")} started`,
     counts: [],
-    expanded: true,
+    expanded,
     entries: handles,
     renderEntry: handle => [{
-      text: handle.label
-        ? `  ${applyBold(bold, handle.label)} · ${handle.sessionId}`
-        : `  ${applyBold(bold, handle.sessionId)}`,
+      text: `  ${applyBold(bold, handle.agent)}${handle.label ? `  ${handle.label}` : ""} · ${handle.sessionId}`,
     }],
     blankBetween: false,
   });
@@ -414,30 +429,6 @@ function formatRemoveSummaryLines(summary: RemoveSummary, expanded: boolean): Di
       ? [{ text: "" }, { text: "Errors:" }, ...errors.map(entry => ({ text: `  ${entry.sessionId}: ${entry.error}`, color: "error" as const }))]
       : undefined,
   });
-}
-
-const ORDERED_GROUP_STATUSES = ["queued", "running", "completed", "error", "interrupted", "skipped", "aborted"];
-
-function formatViewGroupLine(group: AgentGroupView, filter?: InventoryFilter): DisplayLine[] {
-  const outcome = groupOutcome(group);
-  const outcomeLabel = outcome === "queued" ? "running" : outcome;
-  return renderCountSummary({
-    total: `${group.sessions.length} subagents`,
-    counts: orderedCountSegments(new Map(Object.entries(group.statusCounts)), ORDERED_GROUP_STATUSES),
-    trailing: [
-      `outcome:${outcomeLabel}`,
-      ...(filter?.status && filter.status.length > 0 ? [`filter:${filter.status.join(",")}`] : []),
-    ],
-    headColor: statusColorForOutcome(outcome),
-    expanded: false,
-  });
-}
-
-function groupOutcome(group: AgentGroupView): string {
-  if (group.isError) return "error";
-  if (group.sessions.some(s => effectiveStatus(s.status) === "running")) return "running";
-  if (group.sessions.some(s => effectiveStatus(s.status) === "queued")) return "queued";
-  return "completed";
 }
 
 function formatAgentListLines(agents: AgentListingEntry[], expanded: boolean, bold: Bold | undefined, display: SubagentDisplaySettings = DEFAULT_DISPLAY): string[] {

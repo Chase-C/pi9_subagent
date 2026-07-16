@@ -42,8 +42,8 @@ export interface ActionResult {
 
 /**
  * Builds a tool result. The model-facing `content` text is `json` when provided, else the
- * serialized `details`. They diverge only for the `results` envelope, whose `details` carries
- * snapshots for rendering while `content` carries the projected model-facing JSON.
+ * serialized `details`. Inventory and results keep rich snapshots in `details` for rendering
+ * while `content` carries their narrower model-facing projections.
  */
 export function toolResult(details: SubagentDetails, opts: { isError?: boolean; json?: unknown } = {}): ActionResult {
   return {
@@ -96,9 +96,7 @@ export async function resultsAction(deps: ActionDeps, invocation: InvocationFor<
 }
 
 export async function removeAction(deps: ActionDeps, invocation: InvocationFor<"remove">, ctx?: ExtensionContext): Promise<ActionResult> {
-  const summary = "sessionIds" in invocation
-    ? await deps.agentManager.remove({ sessionIds: invocation.sessionIds })
-    : await deps.agentManager.remove({ scope: invocation.scope });
+  const summary = await deps.agentManager.remove({ sessionIds: invocation.sessionIds });
   if (ctx) updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
   return toolResult({ view: "remove-summary", summary });
 }
@@ -121,7 +119,8 @@ export async function runAction(
     }, startOptions);
     handle.resultsPromise.catch(() => {});
     updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
-    return toolResult(backgroundStartedDetails(handle.sessions));
+    const details = backgroundStartedDetails(handle.sessions);
+    return toolResult(details, { isError: (details.errors?.length ?? 0) > 0 });
   }
 
   const runStartedAt = Date.now();

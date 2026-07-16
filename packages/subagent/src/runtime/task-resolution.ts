@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { Agent, type AgentUpdateListener } from "../domain/agent.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import { preflightFailure } from "../domain/preflight-failure.js";
@@ -12,6 +10,7 @@ export interface ResolveTaskArgs {
   inputIndex: number;
   registry: AgentRegistry;
   findAgent: (id: string) => Agent | undefined;
+  allocateSessionId: () => string | undefined;
   listener: AgentUpdateListener;
   parentId?: string;
 }
@@ -22,9 +21,20 @@ export function resolveTask(args: ResolveTaskArgs) {
   if (task.kind === "spawn") {
     const config = registry.agents.get(task.agent);
     if (config) {
+      const id = args.allocateSessionId();
+      if (id !== undefined) {
+        return {
+          kind: "spawn" as const,
+          agent: new Agent(id, config, task, listener, { background, parentId }),
+        };
+      }
+
       return {
-        kind: "spawn" as const,
-        agent: new Agent(randomUUID(), config, task, listener, { background, parentId }),
+        kind: "failure" as const,
+        failure: preflightFailure(
+          { groupId: args.groupId, inputIndex: args.inputIndex, task, background },
+          { error: "Subagent session ID space exhausted." },
+        ),
       };
     }
 

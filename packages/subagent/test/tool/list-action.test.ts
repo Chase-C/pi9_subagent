@@ -35,11 +35,11 @@ test("subagent tool action=list with status filter [completed, error] returns te
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
   nextRunner = (agent) => completedRun(agent, "ok");
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "good task" }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "good task", label: "good task" }] }, undefined, undefined, baseCtx());
   nextRunner = (agent) => errorRun(agent, "failed");
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "bad", prompt: "bad task" }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "bad", prompt: "bad task", label: "bad task" }] }, undefined, undefined, baseCtx());
   nextRunner = (agent) => interruptedRun(agent, "cancelled");
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "cut", prompt: "cut task" }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "cut", prompt: "cut task", label: "cut task" }] }, undefined, undefined, baseCtx());
 
   const result = await tool.execute("tool-call", { action: "list", status: ["completed", "error"] }, undefined, undefined, baseCtx());
 
@@ -47,9 +47,10 @@ test("subagent tool action=list with status filter [completed, error] returns te
   assert.equal(result.details.sessions.length, 2);
   const outcomes = result.details.sessions.map((s: any) => s.status.outcome).sort();
   assert.deepEqual(outcomes, ["completed", "error"]);
+  assert.deepEqual(JSON.parse(result.content[0].text).filter, { status: ["completed", "error"] });
 });
 
-test("subagent tool action=list with empty status filter returns no sessions distinct from no filter", async () => {
+test("subagent tool action=list rejects an empty status filter", async () => {
   const runner = async (_ctx: any, agent: any, _attempt: any) => {
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "ok");
@@ -62,14 +63,14 @@ test("subagent tool action=list with empty status filter returns no sessions dis
   const manager = new AgentManager(fakeRegistry as any, 1, runner);
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "go" }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "go", label: "good task" }] }, undefined, undefined, baseCtx());
 
   const noFilter = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
   assert.equal(noFilter.details.sessions.length, 1);
 
   const emptyFilter = await tool.execute("tool-call", { action: "list", status: [] }, undefined, undefined, baseCtx());
-  assert.equal(emptyFilter.isError, false);
-  assert.deepEqual(emptyFilter.details.sessions, []);
+  assert.equal(emptyFilter.isError, true);
+  assert.match(emptyFilter.content[0].text, /at least one status/);
 });
 
 test("subagent tool action=list with an unknown status value returns the unknown-status error", async () => {
@@ -82,7 +83,7 @@ test("subagent tool action=list with an unknown status value returns the unknown
   assert.match(result.content[0].text, /queued, running, completed, error, aborted, interrupted, skipped/);
 });
 
-test("subagent tool action=list with no filter returns retained sessions tagged kind: retained", async () => {
+test("subagent tool action=list with no filter returns retained sessions with normalized completed status", async () => {
   const runner = async (_ctx: any, agent: any, _attempt: any) => {
     agent.setEffectiveConfig({
       model: "test/model",
@@ -105,7 +106,7 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   const manager = new AgentManager(fakeRegistry as any, 1, runner);
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "chatty", prompt: "Remember this work.", skills: ["requested-skill"] }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "chatty", prompt: "Remember this work.", label: "remember work", skills: ["requested-skill"] }] }, undefined, undefined, baseCtx());
 
   const result = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
 
@@ -125,19 +126,21 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   assert.equal(retained.retention, "persistent");
 
   const modelSession = JSON.parse(result.content[0].text).sessions[0];
-  assert.equal(modelSession.status.kind, "completed");
-  assert.equal(Object.prototype.hasOwnProperty.call(modelSession.status, "outcome"), false);
-  assert.equal(modelSession.status.output, "The final answer from the child.");
-  assert.deepEqual(modelSession.config.skills, ["requested-skill"]);
-  assert.deepEqual(modelSession.effectiveConfig, {
-    model: "test/model",
-    thinking: "high",
-    cwd: "/work/project",
-    skills: ["requested-skill"],
-    tools: ["read"],
-    resumable: true,
-  });
+  assert.equal(modelSession.sessionId, retained.id);
+  assert.equal(modelSession.agent, "chatty");
+  assert.equal(modelSession.status, "completed");
+  assert.equal(modelSession.dispatch, "foreground");
+  assert.equal(modelSession.label, "remember work");
+  assert.equal("elapsedMs" in modelSession, false);
   assert.deepEqual(modelSession.capabilities, { canResume: true, canRemove: true });
+  assert.deepEqual(Object.keys(modelSession).sort(), [
+    "agent",
+    "capabilities",
+    "dispatch",
+    "label",
+    "sessionId",
+    "status",
+  ]);
 });
 
 test("model-facing inventory reports background sessions as removable without leaking canClear", async () => {
