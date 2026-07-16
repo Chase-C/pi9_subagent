@@ -91,6 +91,7 @@ test("run-agent resolves relative task cwd against context cwd", async () => {
   assert.equal(createOptions.cwd, expectedCwd);
   assert.equal(createOptions.sessionManager.cwd, expectedCwd);
   assert.equal(createOptions.settingsManager.cwd, expectedCwd);
+  assert.equal("modelRegistry" in createOptions, false);
 });
 
 test("run-agent uses frontmatter thinking when task does not override it", async () => {
