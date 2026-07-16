@@ -121,7 +121,7 @@ export class AgentManager {
     const runtime = lookup.agent.retainedSession();
     return {
       session: lookup.agent.snapshot(),
-      messages: projectAttachedMessages(runtime?.messages ?? []),
+      messages: projectAttachedMessages((runtime?.messages ?? []).slice(-60)),
       pending: {
         steering: runtime?.getSteeringMessages?.() ?? [],
         followUp: runtime?.getFollowUpMessages?.() ?? [],
@@ -415,11 +415,7 @@ function projectAttachedMessages(messages: readonly unknown[]): AttachedSessionM
     const role = message.role;
     const content = Array.isArray(message.content) ? message.content : [];
     if (role === "user" || role === "assistant") {
-      const text = content
-        .filter(part => part && typeof part === "object" && (part as Record<string, unknown>).type === "text")
-        .map(part => String((part as Record<string, unknown>).text ?? ""))
-        .filter(Boolean)
-        .join("\n");
+      const text = projectTextContent(content, 1_200);
       if (text) projected.push({ role, text });
       if (role === "assistant") {
         for (const part of content) {
@@ -435,11 +431,7 @@ function projectAttachedMessages(messages: readonly unknown[]): AttachedSessionM
         }
       }
     } else if (role === "toolResult") {
-      const text = content
-        .filter(part => part && typeof part === "object" && (part as Record<string, unknown>).type === "text")
-        .map(part => String((part as Record<string, unknown>).text ?? ""))
-        .filter(Boolean)
-        .join("\n");
+      const text = projectTextContent(content, 400);
       const toolName = typeof message.toolName === "string" ? message.toolName : undefined;
       projected.push({
         role: "toolResult",
@@ -450,6 +442,28 @@ function projectAttachedMessages(messages: readonly unknown[]): AttachedSessionM
     }
   }
   return projected;
+}
+
+function projectTextContent(content: readonly unknown[], maxLength: number): string {
+  let text = "";
+  let truncated = false;
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const block = part as Record<string, unknown>;
+    if (block.type !== "text" || typeof block.text !== "string") continue;
+    const separator = text ? "\n" : "";
+    const remaining = maxLength - text.length - separator.length;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    text += separator + block.text.slice(0, remaining);
+    if (block.text.length > remaining) {
+      truncated = true;
+      break;
+    }
+  }
+  return truncated ? `${text}…` : text;
 }
 
 function summarizeToolArguments(value: unknown): string {

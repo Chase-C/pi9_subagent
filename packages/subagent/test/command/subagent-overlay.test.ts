@@ -32,6 +32,26 @@ function overlay(manager: any, initialPage: "sessions" | "agents" | "attached" |
   return { component, get renders() { return renders; }, get closed() { return closed; } };
 }
 
+test("narrow rendering keeps the selected logical session row visible", () => {
+  const sessions = Array.from({ length: 6 }, (_, index) => fakeAgent({
+    id: `session-${index}`,
+    prompt: index === 2 ? "▶ misleading task text" : `Task ${index}`,
+    status: { kind: "running" },
+  }));
+  const manager = {
+    listSessions: () => sessions,
+    listAttachedSessions: () => [],
+    onAgentUpdate: () => () => {},
+  };
+  const { component } = overlay(manager);
+  for (let index = 0; index < 5; index++) component.handleInput("\x1b[B");
+
+  const text = component.render(60).join("\n");
+
+  assert.match(text, /▶.*helper/);
+  assert.match(text, /Task 5/);
+});
+
 test("filter focus propagates the hardware cursor marker and all narrow lines fit", () => {
   const session = fakeAgent({ id: "long", prompt: "A very long task description ".repeat(20), status: { kind: "running" } });
   const manager = {
@@ -61,6 +81,76 @@ test("disposing the overlay unsubscribes live manager updates", () => {
   component.dispose();
 
   assert.equal(unsubscribed, true);
+});
+
+test("queued sessions can be stopped from Sessions and Attached", async () => {
+  const queued = fakeAgent({ id: "queued", status: { kind: "queued" } });
+  const stopped: string[] = [];
+  const manager = {
+    listSessions: () => [queued],
+    listAttachedSessions: () => [queued],
+    stopSession: async (id: string) => { stopped.push(id); },
+    onAgentUpdate: () => () => {},
+  };
+  const sessionsOverlay = overlay(manager, "sessions").component;
+  sessionsOverlay.handleInput("x");
+  const attachedOverlay = overlay(manager, "attached").component;
+  attachedOverlay.handleInput("x");
+  await Promise.resolve();
+
+  assert.deepEqual(stopped, ["queued", "queued"]);
+});
+
+test("changing attached selection clears the prior session's composer draft", async () => {
+  const first = fakeAgent({ id: "first", status: { kind: "running" } });
+  const second = fakeAgent({ id: "second", status: { kind: "running" } });
+  const steered: Array<[string, string]> = [];
+  const manager = {
+    listSessions: () => [first, second],
+    listAttachedSessions: () => [first, second],
+    attachedSessionDetail: (id: string) => ({ session: id === "first" ? first : second, messages: [], pending: { steering: [], followUp: [] } }),
+    steerSession: async (id: string, text: string) => { steered.push([id, text]); },
+    onAgentUpdate: () => () => {},
+  };
+  const { component } = overlay(manager, "attached");
+
+  component.handleInput("\r");
+  for (const character of "first draft") component.handleInput(character);
+  component.handleInput("\x1b");
+  component.handleInput("\x1b[B");
+  component.handleInput("\r");
+  component.handleInput("\r");
+  await Promise.resolve();
+
+  assert.deepEqual(steered, []);
+});
+
+test("attaching another session cannot reuse an existing composer draft", async () => {
+  const first = fakeAgent({ id: "first", status: { kind: "running" } });
+  const second = fakeAgent({ id: "second", status: { kind: "running" } });
+  const attached = [first];
+  const steered: Array<[string, string]> = [];
+  const manager = {
+    listSessions: () => [second],
+    listAttachedSessions: () => attached,
+    attachToSession: () => { attached.push(second); return second; },
+    attachedSessionDetail: (id: string) => ({ session: id === "first" ? first : second, messages: [], pending: { steering: [], followUp: [] } }),
+    steerSession: async (id: string, text: string) => { steered.push([id, text]); },
+    onAgentUpdate: () => () => {},
+  };
+  const { component } = overlay(manager, "attached");
+
+  component.handleInput("\r");
+  for (const character of "first draft") component.handleInput(character);
+  component.handleInput("\x1b");
+  component.handleInput("\t");
+  component.handleInput("\t");
+  component.handleInput("a");
+  component.handleInput("\r");
+  component.handleInput("\r");
+  await Promise.resolve();
+
+  assert.deepEqual(steered, []);
 });
 
 test("the Attached composer steers a running session in place", async () => {

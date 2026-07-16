@@ -180,7 +180,7 @@ export class Agent {
    * policy is disabled, but only background dispatch or a retained conversation is persistent.
    */
   get catalogRetention(): AgentCatalogRetention {
-    const persistent = this._background || this.shouldRetainConversation;
+    const persistent = this._background || this._attachmentPinned || this.shouldRetainConversation;
     return {
       shouldRemainCataloged: this.hasCurrentAttempt || persistent,
       retention: persistent ? "persistent" : "transient",

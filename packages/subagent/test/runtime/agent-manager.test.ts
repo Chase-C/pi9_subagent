@@ -224,6 +224,39 @@ test("attaching to a transient running session pins it for retention", async () 
   await batch.resultsPromise;
 });
 
+test("an attached queued session remains cataloged when stopped before runtime attach", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any, attempt: any) => {
+    if (attempt.prompt === "block") {
+      agent.attach(makeSession());
+      await gate;
+    }
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "block" },
+    { kind: "spawn", agent: "oneshot", prompt: "queued" },
+  ], undefined, { background: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const queued = manager.listSessions().find(session => session.status.kind === "queued")!;
+  manager.attachToSession(queued.id);
+
+  await manager.stopSession(queued.id);
+  release();
+  await batch.resultsPromise;
+
+  assert.equal(manager.listSessions().find(session => session.id === queued.id)?.status.kind, "done");
+  assert.deepEqual(manager.listAttachedSessions().map(session => session.id), [queued.id]);
+  assert.equal(manager.listAttachedSessions()[0].capabilities.canResume, false);
+  assert.equal(manager.detachFromSession(queued.id), true);
+  assert.equal(manager.listSessions().some(session => session.id === queued.id), false);
+});
+
 test("an attached non-resumable session remains cataloged and resumable after completion", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -399,6 +432,31 @@ test("attached session details project conversation messages without exposing Ag
   assert.equal("steer" in (detail as any), false);
   release();
   await batch.resultsPromise;
+});
+
+test("attached transcript projection bounds large message and tool-result content", () => {
+  const agent = new Agent(
+    "large-transcript",
+    { name: "worker", description: "", systemPrompt: "", source: "project", resumable: false },
+    { kind: "spawn", agent: "worker", prompt: "work" },
+    () => {},
+  );
+  agent.attach({
+    ...makeSession(),
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "a".repeat(10_000) }] },
+      { role: "toolResult", toolName: "read", content: [{ type: "text", text: "b".repeat(50_000) }] },
+    ],
+  } as any);
+  const manager = makeManager({ agents: new Map() } as any);
+  (manager as any)._agents = [agent];
+  manager.attachToSession(agent.id);
+
+  const messages = manager.attachedSessionDetail(agent.id).messages;
+
+  assert.equal(messages.length, 2);
+  assert.ok(messages[0].text.length <= 1_201);
+  assert.ok(messages[1].text.length <= 401);
 });
 
 test("stopping an attached running session aborts it without detaching it", async () => {

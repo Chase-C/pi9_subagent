@@ -49,6 +49,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private readonly selected: Record<SubagentOverlayPage, number> = { sessions: 0, agents: 0, attached: 0, settings: 0 };
   private readonly filters = { sessions: new Input(), agents: new Input() };
   private readonly composer = new Input();
+  private composerSessionId?: string;
   private readonly unsubscribe?: () => void;
   private readonly settingsComponent: SubagentSettingsComponent;
   private actionError = "";
@@ -187,7 +188,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const right = this.renderInspector(rightWidth);
     if (width < 80) {
       const divider = this.theme.fg?.("borderMuted", "─".repeat(width)) ?? "─".repeat(width);
-      return [...compactViewport(left, 5, 1), divider, ...compactViewport(right, 6, 3)];
+      return [...selectedViewport(left, 5, this.selectedListLine), divider, ...compactViewport(right, 6, 3)];
     }
     const height = 12;
     const visibleLeft = compactViewport(left, height, 1);
@@ -261,8 +262,10 @@ export class SubagentOverlayComponent implements Component, Focusable {
     lines.push(...inspectLines.flatMap(line => wrapLine(` ${line}`, width)));
     if (this.page === "attached") {
       lines.push("", this.heading(session.status.kind === "running" ? " Live Conversation" : " Conversation"));
+      let hasAssistantTranscript = false;
       try {
         const detail = this.manager.attachedSessionDetail(session.id);
+        hasAssistantTranscript = detail.messages.some(message => message.role === "assistant");
         for (const message of detail.messages.slice(-8)) {
           const label = message.role === "tool" || message.role === "toolResult"
             ? `${message.isError ? "✗" : "›"} ${message.toolName ?? "tool"}`
@@ -279,7 +282,9 @@ export class SubagentOverlayComponent implements Component, Focusable {
           lines.push(truncateToWidth(` ${tool.completedAt ? "✓" : "●"} ${tool.name}`, width, "…"));
         }
       }
-      if (session.status.kind === "done" && session.status.output) lines.push(...wrapLine(` ${session.status.output}`, width));
+      if (session.status.kind === "done" && session.status.output && !hasAssistantTranscript) {
+        lines.push(...wrapLine(` ${compact(session.status.output).slice(0, 1_200)}`, width));
+      }
       const prompt = session.status.kind === "running" ? "Send steering message" : session.capabilities.canResume ? "Resume this session" : "Input unavailable";
       const inputLine = this.composer.getValue() || this.focusRegion === "composer"
         ? this.composer.render(Math.max(8, width - 3))[0] ?? ""
@@ -299,6 +304,8 @@ export class SubagentOverlayComponent implements Component, Focusable {
     } else if ((data === "a" || data === "A") && row) {
       try {
         this.manager.attachToSession(row.session.id);
+        this.composer.setValue("");
+        this.composerSessionId = undefined;
         this.page = "attached";
         this.selected.attached = Math.max(0, this.attachedRows.findIndex(item => item.session.id === row.session.id));
         this.actionError = "";
@@ -307,7 +314,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
         this.options.notify(this.actionError, "warning");
       }
       this.requestRender();
-    } else if ((data === "x" || data === "X") && row?.session.status.kind === "running") {
+    } else if ((data === "x" || data === "X") && row && isActive(row.session)) {
       void this.manager.stopSession(row.session.id).catch(error => this.options.notify(errorMessage(error), "warning"));
       this.requestRender();
     } else if ((data === "c" || data === "C") && row?.session.capabilities.canRemove) {
@@ -321,24 +328,33 @@ export class SubagentOverlayComponent implements Component, Focusable {
 
   private handleAttachedInput(data: string): void {
     const row = this.attachedRows[this.selected.attached];
-    if ((data === "x" || data === "X") && row?.session.status.kind === "running") {
+    if ((data === "x" || data === "X") && row && isActive(row.session)) {
       void this.manager.stopSession(row.session.id).catch(error => this.options.notify(errorMessage(error), "warning"));
       this.requestRender();
     } else if ((data === "d" || data === "D") && row) {
       this.manager.detachFromSession(row.session.id);
+      this.composer.setValue("");
+      this.composerSessionId = undefined;
       this.selected.attached = clamp(this.selected.attached, 0, Math.max(0, this.attachedRows.length - 1));
       this.actionError = "";
       this.requestRender();
     } else if ((data === "s" || data === "S" || isEnterKey(data, this.keybindings)) && row) {
-      if (row.session.status.kind === "running" || row.session.capabilities.canResume) this.setFocus("composer");
+      if (row.session.status.kind === "running" || row.session.capabilities.canResume) this.focusComposer(row.session.id);
     }
   }
 
   private submitComposer(value: string): void {
     const session = this.attachedRows[this.selected.attached]?.session;
     const text = value.trim();
-    if (!session || !text) return;
+    if (!session || session.id !== this.composerSessionId) {
+      this.composer.setValue("");
+      this.composerSessionId = undefined;
+      this.setFocus("list");
+      return;
+    }
+    if (!text) return;
     this.composer.setValue("");
+    this.composerSessionId = undefined;
     this.actionError = "";
     if (session.status.kind === "running") {
       void this.manager.steerSession(session.id, text).catch(error => {
@@ -361,7 +377,12 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const count = this.page === "sessions" ? this.sessionRows.length
       : this.page === "agents" ? this.filteredAgents.length
       : this.attachedRows.length;
-    this.selected[this.page] = clamp(this.selected[this.page] + delta, 0, Math.max(0, count - 1));
+    const previous = this.selected[this.page];
+    this.selected[this.page] = clamp(previous + delta, 0, Math.max(0, count - 1));
+    if (this.page === "attached" && this.selected.attached !== previous) {
+      this.composer.setValue("");
+      this.composerSessionId = undefined;
+    }
     this.requestRender();
   }
 
@@ -369,6 +390,12 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const index = PAGES.indexOf(this.page);
     this.page = PAGES[(index + delta + PAGES.length) % PAGES.length];
     this.setFocus("list");
+  }
+
+  private focusComposer(sessionId: string): void {
+    if (this.composerSessionId !== sessionId) this.composer.setValue("");
+    this.composerSessionId = sessionId;
+    this.setFocus("composer");
   }
 
   private setFocus(region: FocusRegion): void {
@@ -405,6 +432,18 @@ export class SubagentOverlayComponent implements Component, Focusable {
     return filterAgents(this.options.agents, this.filters.agents.getValue());
   }
 
+  private get selectedListLine(): number {
+    if (this.page === "agents") {
+      const agents = this.filteredAgents;
+      const start = viewportStart(this.selected.agents, agents.length, 6);
+      return Math.max(0, this.selected.agents - start) * 2;
+    }
+    const rows = this.page === "attached" ? this.attachedRows : this.sessionRows;
+    const selected = this.selected[this.page];
+    const start = viewportStart(selected, rows.length, 4);
+    return Math.max(0, selected - start) * 3;
+  }
+
   private heading(text: string): string {
     return this.theme.fg?.("accent", this.theme.bold?.(text) ?? text) ?? text;
   }
@@ -439,6 +478,12 @@ function wrapLine(text: string, width: number): string[] {
 
 function compact(text: string): string { return text.replace(/\s+/g, " ").trim(); }
 
+function selectedViewport(lines: string[], size: number, selectedLine: number): string[] {
+  if (lines.length <= size) return lines;
+  const start = clamp(selectedLine - 1, 0, Math.max(0, lines.length - size));
+  return lines.slice(start, start + size);
+}
+
 function compactViewport(lines: string[], size: number, tail: number): string[] {
   if (lines.length <= size) return lines;
   const tailCount = Math.min(tail, size - 1);
@@ -448,6 +493,10 @@ function compactViewport(lines: string[], size: number, tail: number): string[] 
 
 function viewportStart(selected: number, count: number, size: number): number {
   return clamp(selected - Math.floor(size / 2), 0, Math.max(0, count - size));
+}
+
+function isActive(session: AgentSnapshot): boolean {
+  return session.status.kind === "queued" || session.status.kind === "running";
 }
 
 function statusIcon(session: AgentSnapshot): string {
