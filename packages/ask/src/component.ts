@@ -211,7 +211,7 @@ export class AskComponent implements Component, Focusable {
         const submitFocus = this.renderSubmit(optionLines, paneLayout.leftWidth);
         const sectionStart = lines.length;
         const previewLines = [
-          this.config.theme.fg("dim", " PREVIEW · SELECTED OPTION"),
+          this.config.theme.fg("dim", " PREVIEW · FOCUSED OPTION"),
           this.config.theme.fg("dim", "─".repeat(paneLayout.rightWidth)),
           "",
           ...this.renderPreview(preview, paneLayout.rightWidth - 1).map(line => ` ${line}`),
@@ -288,7 +288,7 @@ export class AskComponent implements Component, Focusable {
       if (paneLayout) {
         const sectionStart = lines.length;
         const previewLines = [
-          this.config.theme.fg("dim", " PREVIEW · SELECTED OPTION"),
+          this.config.theme.fg("dim", " PREVIEW · FOCUSED OPTION"),
           this.config.theme.fg("dim", "─".repeat(paneLayout.rightWidth)),
           "",
           ...this.renderPreview(undefined, paneLayout.rightWidth - 1).map(line => ` ${line}`),

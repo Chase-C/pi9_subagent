@@ -301,9 +301,9 @@ describe("AskComponent", () => {
     expect(output).toContain("[release]");
     expect(output).toContain("target");
     expect(output).toContain("ASCII: +--+");
-    const header = lines.find(line => line.includes("PREVIEW · SELECTED OPTION"));
+    const header = lines.find(line => line.includes("PREVIEW · FOCUSED OPTION"));
     expect(header).toMatch(/^│ {2}OPTIONS/);
-    expect(header).toContain("│ PREVIEW · SELECTED OPTION");
+    expect(header).toContain("│ PREVIEW · FOCUSED OPTION");
     expect(lines[0]).toMatch(/^╭─+╮$/);
     expect(lines.at(-1)).toMatch(/^╰─+╯$/);
     expect(lines.some(line => line.includes("┃ Staging") && line.includes("│"))).toBe(true);
@@ -338,7 +338,7 @@ describe("AskComponent", () => {
     component.handleInput("\x1b[B");
     const lines = component.render(100);
 
-    const headerIndex = lines.findIndex(line => line.includes("PREVIEW · SELECTED OPTION"));
+    const headerIndex = lines.findIndex(line => line.includes("PREVIEW · FOCUSED OPTION"));
     const previewIndex = lines.findIndex(line => line.includes("TOP_ALIGNED_PREVIEW"));
     expect(headerIndex).toBeGreaterThan(-1);
     expect(previewIndex).toBeGreaterThan(headerIndex);
@@ -413,7 +413,7 @@ describe("AskComponent", () => {
 
     expect(component.state.editor.kind).toBe("freeform");
     expect(output).toContain("OPTIONS");
-    expect(output).toContain("PREVIEW · SELECTED OPTION");
+    expect(output).toContain("PREVIEW · FOCUSED OPTION");
     expect(output).toContain("Type a response");
   });
 
@@ -468,7 +468,7 @@ describe("AskComponent", () => {
     expect(lines.length).toBeLessThanOrEqual(8);
     expect(lines.join("\n")).toContain("Option 10");
     expect(lines.join("\n")).toContain("BOTTOM_PREVIEW_SENTINEL");
-    expect(lines.join("\n")).toContain("PREVIEW · SELECTED OPTION");
+    expect(lines.join("\n")).toContain("PREVIEW · FOCUSED OPTION");
     expect(lines[0]).toMatch(/^╭─+╮$/);
     expect(lines.at(-1)).toMatch(/^╰─+╯$/);
     expect(lines.every(line => visibleWidth(line) <= 100)).toBe(true);
