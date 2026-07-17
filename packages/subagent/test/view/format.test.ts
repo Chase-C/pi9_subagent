@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import {
+  agentsDetails,
   backgroundStartedDetails,
   createSubagentTextComponent,
   formatSubagentSessionInspect,
@@ -14,6 +15,32 @@ import {
   runSummary,
 } from "../../src/view/format.js";
 import { fakeAgent, fakeRunSection } from "../helpers/fake-agent.js";
+
+test("expanded agents action nests command details below each name without instructions", () => {
+  const lines = formatSubagentToolLines(agentsDetails([{
+    name: "helper",
+    description: "Reviews implementation changes.",
+    source: "project",
+    sourcePath: "/project/.pi/agents/helper.md",
+    model: "gpt-5.6-sol",
+    thinking: "high",
+    tools: ["read", "grep"],
+    skills: ["review"],
+    retainConversation: true,
+  }]), true);
+
+  assert.deepEqual(lines, [
+    "helper",
+    "  Reviews implementation changes.",
+    "  Source: project",
+    "  Model: gpt-5.6-sol · thinking:high",
+    "  Retain conversation: true",
+    "  Tools: read, grep",
+    "  Skills: review",
+    "  Path: /project/.pi/agents/helper.md",
+  ]);
+  assert.doesNotMatch(lines.join("\n"), /Instructions|system prompt/i);
+});
 
 test("subagent run display animates only the running status glyph", () => {
   const sessions = [

@@ -474,10 +474,18 @@ function formatAgentListLines(agents: AgentListingEntry[], expanded: boolean, bo
   }
 
   return agents.flatMap((agent, index) => {
+    const configuration = [
+      `Source: ${agent.source}`,
+      `Model: ${agent.model ?? "default"} · thinking:${agent.thinking ?? "default"}`,
+      `Retain conversation: ${agent.retainConversation}`,
+      `Tools: ${agent.tools?.length ? agent.tools.join(", ") : "default"}`,
+      `Skills: ${agent.skills?.length ? agent.skills.join(", ") : "none"}`,
+      ...(agent.sourcePath ? [`Path: ${agent.sourcePath}`] : []),
+    ];
     const lines = [
       applyBold(bold, agent.name),
       ...agent.description.split(/\r?\n/).map(line => `  ${line}`),
-      ...agentConfigMetadataLines(agent).map(line => `  ${line}`),
+      ...configuration.map(line => `  ${line}`),
     ];
     if (index < agents.length - 1) lines.push("");
     return lines;
