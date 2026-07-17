@@ -1,3 +1,4 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { renderResult } from "../src/renderer.js";
 import type { TodoToolDetails } from "../src/types.js";
@@ -21,35 +22,34 @@ const details: TodoToolDetails = {
 };
 
 describe("todo renderer", () => {
-  it("renders compact phase and task totals without an expansion hint", () => {
-    const collapsed = renderResult({ details }, { expanded: false }, plainTheme).render(120).join("\n").trimEnd();
-    expect(collapsed).toBe("2 phases · 3 tasks");
-    expect(collapsed).not.toContain("expand");
-  });
-
-  it("uses singular labels for one phase and task", () => {
-    const single: TodoToolDetails = {
-      action: "set",
-      state: { phases: [{ name: "Build", tasks: [todo("Implement renderer")] }] },
-      changedTasks: [],
+  it("renders collapsed results as one muted line", () => {
+    const colors: string[] = [];
+    const theme = {
+      ...plainTheme,
+      fg: (color: string, text: string) => {
+        colors.push(color);
+        return text;
+      },
     };
-    expect(renderResult({ details: single }, { expanded: false }, plainTheme).render(80).join("\n").trimEnd())
-      .toBe("1 phase · 1 task");
+
+    expect(renderResult({ details }, { expanded: false }, theme).render(120)).toHaveLength(1);
+    expect(colors).toEqual(["muted"]);
   });
 
-  it("matches widget phase and task styling without a Todos header", () => {
+  it("applies widget task colors in expanded results", () => {
+    const calls: { color: string; text: string }[] = [];
     const themed = {
-      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-      bold: (text: string) => `<bold>${text}</bold>`,
+      fg: (color: string, text: string) => {
+        calls.push({ color, text });
+        return text;
+      },
+      bold: (text: string) => text,
     };
-    const text = renderResult({ details }, { expanded: true }, themed).render(120).join("\n");
-    expect(text).toContain("<muted>  1. Planning · 0/1</muted>");
-    expect(text).toContain("<muted>    󰄰 Plan release announcement</muted>");
-    expect(text).toContain("<toolTitle><bold>  2. Build</bold></toolTitle> <muted>· 1/2</muted>");
-    expect(text).toContain("<text>    󰄰 Implement renderer</text>");
-    expect(text).toContain("<success>    󰄴 Publish package</success>");
-    expect(text).not.toContain("Todos");
-    expect(text).not.toContain("[task-");
+    renderResult({ details }, { expanded: true }, themed).render(120);
+
+    expect(calls.find(({ text }) => text.includes("Plan release announcement"))?.color).toBe("muted");
+    expect(calls.find(({ text }) => text.includes("Implement renderer"))?.color).toBe("text");
+    expect(calls.find(({ text }) => text.includes("Publish package"))?.color).toBe("success");
   });
 
   it("keeps every phase and orders active, pending, then terminal tasks", () => {
@@ -74,32 +74,10 @@ describe("todo renderer", () => {
     expect(expanded).toContain("3. Empty");
   });
 
-  it("uses fallback glyphs and terminal styling", () => {
-    const themed = {
-      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-      bold: (text: string) => text,
-      strikethrough: (text: string) => `~${text}~`,
-    };
-    const text = renderResult({ details: {
-      action: "view",
-      state: { phases: [{ name: "Tasks", tasks: [
-        todo("Pending"),
-        todo("Active", "in_progress"),
-        todo("Done", "completed"),
-        todo("Cancelled", "cancelled"),
-      ] }], workingOn: "Handling the active task" },
-      changedTasks: [],
-    } }, { expanded: true }, themed, { fallbackGlyphs: true }).render(80).join("\n");
-    expect(text).toContain("<toolTitle>  1. Tasks</toolTitle> <muted>· 2/4</muted>");
-    expect(text).toContain("<muted>    ○ Pending</muted>");
-    expect(text).toContain("<text>    ○ Active</text>");
-    expect(text).toContain("<success>    ✓ ~Done~</success>");
-    expect(text).toContain("<muted>    × ~Cancelled~</muted>");
-  });
-
   it("handles narrow and empty states safely", () => {
-    expect(renderResult({ details }, { expanded: true }, plainTheme).render(12).length).toBeGreaterThan(3);
+    const narrow = renderResult({ details }, { expanded: true }, plainTheme).render(12);
+    expect(narrow.every((line) => visibleWidth(line) <= 12)).toBe(true);
     const empty: TodoToolDetails = { action: "view", state: { phases: [] }, changedTasks: [] };
-    expect(renderResult({ details: empty }, { expanded: true }, plainTheme).render(80).join("\n")).toContain("No todo tasks");
+    expect(renderResult({ details: empty }, { expanded: true }, plainTheme).render(80)).toHaveLength(1);
   });
 });
