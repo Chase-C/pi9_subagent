@@ -5,7 +5,7 @@ import { IDLE_WORKING_GLYPH, WORKING_SPINNER_FRAMES } from "./glyphs.js";
 import type { TodoState } from "./types.js";
 import { renderTodoWidgetLines, type TodoWidgetLayoutOptions } from "./widget-layout.js";
 
-const PI_SPINNER_INTERVAL_MS = 120;
+const WORKING_SPINNER_INTERVAL_MS = 200;
 
 type TodoWidgetComponentOptions = TodoWidgetLayoutOptions & {
   blankLineBelow?: boolean;
@@ -53,6 +53,6 @@ export class TodoWidgetComponent implements Component {
       this.frameIndex = (this.frameIndex + 1) % WORKING_SPINNER_FRAMES.length;
       this.tui?.requestRender();
       this.scheduleNextFrame();
-    }, PI_SPINNER_INTERVAL_MS);
+    }, WORKING_SPINNER_INTERVAL_MS);
   }
 }

@@ -112,9 +112,6 @@ export function renderTodoTaskLine(task: Todo, theme: ThemeLike | undefined, fal
     : task.name;
   const line = `    ${marker} ${name}`;
   if (!theme?.fg) return line;
-  if (task.status === "in_progress") {
-    return `${theme.fg("muted", `    ${marker}`)} ${theme.fg("text", name)}`;
-  }
   return theme.fg(color, line);
 }
 

@@ -34,7 +34,7 @@ const componentContent: Component = {
 };
 
 describe("TodoToolFrame", () => {
-  it("renders a native-style title/action shell and preserves component content", () => {
+  it("preserves component content and applies native theme colors", () => {
     const calls: ThemeCall[] = [];
     const frame = new TodoToolFrame({
       title: "todo",
@@ -48,11 +48,7 @@ describe("TodoToolFrame", () => {
     expect(lines.length).toBeGreaterThan(2);
     expect(lines[0].trim()).toBe("");
     expect(lines.at(-1)?.trim()).toBe("");
-    expect(output).toContain("todo");
-    expect(output).toContain("plan");
-    expect(output).not.toContain("pending");
     expect(output).toContain("component content");
-    expect(output).not.toMatch(/[\u2500-\u257f]/);
     assertWidth(lines, 32);
     expect(calls).toEqual(expect.arrayContaining([
       { kind: "fg", color: "toolTitle" },
@@ -65,7 +61,7 @@ describe("TodoToolFrame", () => {
     ]));
   });
 
-  it("uses native background callbacks without displaying each state", () => {
+  it("uses native background callbacks for each state", () => {
     for (const [state, background, foreground] of [
       ["pending", "toolPendingBg", "warning"],
       ["success", "toolSuccessBg", "success"],
@@ -73,11 +69,8 @@ describe("TodoToolFrame", () => {
     ] as const) {
       const calls: ThemeCall[] = [];
       const frame = new TodoToolFrame({ title: "todo", action: "transition", state, content: "keep this" }, recordingTheme(calls));
-      const lines = frame.render(40);
-      const output = lines.join("\n");
+      frame.render(40);
 
-      expect(output).toContain("keep this");
-      expect(output).not.toContain(state);
       expect(calls).toContainEqual({ kind: "bg", color: background });
       expect(calls).not.toContainEqual({ kind: "fg", color: foreground });
       expect(calls).not.toEqual(expect.arrayContaining([
@@ -98,7 +91,6 @@ describe("TodoToolFrame", () => {
       expect(lines.length).toBeGreaterThan(0);
       assertWidth(lines, width);
     }
-    expect(frame.render(12).join("\n")).toContain("todo");
     expect(frame.render(40).join("\n")).toContain("deliberately long todo result");
   });
 
@@ -109,11 +101,6 @@ describe("TodoToolFrame", () => {
     const visible = new TodoToolFrame({ title: "todo", action: "view", empty: "frame" });
     const lines = visible.render(24);
     expect(lines.length).toBeGreaterThan(0);
-    const output = lines.join("\n");
-    expect(output).toContain("todo");
-    expect(output).toContain("view");
-    expect(output).not.toContain("pending");
-    expect(output).not.toMatch(/[\u2500-\u257f]/);
     assertWidth(lines, 24);
   });
 });

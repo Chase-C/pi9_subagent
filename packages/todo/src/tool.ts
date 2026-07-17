@@ -212,10 +212,11 @@ export function registerTodoTool(pi: ExtensionAPI): void {
     ].join("\n"),
     promptSnippet: "Track multi-step work in a phased task plan",
     promptGuidelines: [
+      "When creating a todo plan, prefer a few broad phases with many concrete tasks; use smaller phases only for meaningful execution boundaries.",
       "Update the todo plan immediately as work starts, finishes, or is abandoned; never defer status transitions to the end.",
       "Mark todo tasks `completed` only after verification and `cancelled` when abandoned or obsolete; keep all `in_progress` tasks confined to one phase.",
       "Include an accurate `workingOn` summary in every todo transition that leaves one or more tasks `in_progress`.",
-      "Use todo `add` for material new work rather than expanding the scope of existing tasks; use the destructive `set` action only for planning or replanning.",
+      "As work evolves, mark stale todo tasks `cancelled` and use todo `add` for newly discovered tasks instead of expanding the scope of existing tasks",
     ],
     parameters: TodoParamsSchema,
     renderShell: "self",

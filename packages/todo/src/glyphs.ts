@@ -12,14 +12,14 @@ export const TODO_TRUNCATION_GLYPH = "…";
 
 export const NERD_FONT_TODO_GLYPHS: TodoGlyphs = {
   pending: "󰄰",
-  in_progress: "󰝥",
+  in_progress: "󰄰",
   completed: "󰄴",
   cancelled: "󰍷",
 };
 
 export const FALLBACK_TODO_GLYPHS: TodoGlyphs = {
   pending: "○",
-  in_progress: "▶",
+  in_progress: "○",
   completed: "✓",
   cancelled: "×",
 };
