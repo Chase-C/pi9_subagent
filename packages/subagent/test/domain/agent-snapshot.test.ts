@@ -9,60 +9,102 @@ const noop: AgentUpdateListener = () => {};
 const fakeSession = { subscribe: () => () => {}, abort: () => {} } as any;
 
 const baseConfig = {
+  retainConversation: false,
   name: "helper",
   description: "d",
   systemPrompt: "s",
   source: "project" as const,
-  resumable: false,
 };
 
-test("snapshot labels a fresh foreground spawn as foreground+transient", () => {
+function assertNoLifecycleAliases(value: object): void {
+  for (const alias of ["resumable", "resumed", "canClear"])
+    assert.equal(Object.prototype.hasOwnProperty.call(value, alias), false);
+}
+
+test("a fresh foreground spawn is active, transient, and has no available conversation", () => {
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
-  const view = agent.snapshot();
-  assert.equal(view.dispatch, "foreground");
-  assert.equal(view.retention, "transient");
+  const snapshot = agent.snapshot();
+
+  assert.deepEqual(snapshot.attempt, { kind: "spawn", dispatch: "foreground" });
+  assert.deepEqual(snapshot.conversation, { policy: "release", available: false });
+  assert.deepEqual(snapshot.retention, { catalog: "transient", reasons: ["active"] });
+  assertNoLifecycleAliases(snapshot);
+  assertNoLifecycleAliases(snapshot.config);
+  assertNoLifecycleAliases(snapshot.capabilities);
 });
 
-test("snapshot marks background-dispatched agents as dispatch=background and retention=persistent", () => {
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop, { background: true });
-  const view = agent.snapshot();
-  assert.equal(view.dispatch, "background");
-  assert.equal(view.retention, "persistent");
-});
+test("a background spawn is persistently cataloged from queued through terminal", () => {
+  const agent = new Agent(
+    "id",
+    baseConfig,
+    { kind: "spawn", agent: "helper", prompt: "work" },
+    noop,
+    { dispatch: "background" },
+  );
 
-test("snapshot marks a completed foreground resumable agent as persistent", () => {
-  const config = { ...baseConfig, resumable: true };
-  const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
-  agent.attach(fakeSession);
+  assert.deepEqual(agent.snapshot().retention, {
+    catalog: "persistent",
+    reasons: ["active", "background-result"],
+  });
+  agent.bindSession(fakeSession);
+  assert.deepEqual(agent.snapshot().retention, {
+    catalog: "persistent",
+    reasons: ["active", "background-result"],
+  });
   completedRun(agent, "done");
-  const view = agent.snapshot();
-  assert.equal(view.dispatch, "foreground");
-  assert.equal(view.retention, "persistent");
+  assert.deepEqual(agent.snapshot().retention, {
+    catalog: "persistent",
+    reasons: ["background-result"],
+  });
 });
 
-test("snapshot marks a completed foreground non-resumable agent as transient", () => {
+test("a retained policy is persistent while queued but only keeps a bound conversation", () => {
+  const config = { ...baseConfig, retainConversation: true };
+  const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
+
+  assert.deepEqual(agent.retentionDecision, {
+    cataloged: true,
+    catalog: "persistent",
+    keepConversation: false,
+    conversationAvailable: false,
+    canResume: false,
+    canRemove: false,
+    reasons: ["active", "conversation-policy"],
+  });
+
+  agent.bindSession(fakeSession);
+  completedRun(agent, "done");
+  const snapshot = agent.snapshot();
+  assert.deepEqual(snapshot.conversation, { policy: "retain", available: true });
+  assert.deepEqual(snapshot.retention, { catalog: "persistent", reasons: ["conversation-policy"] });
+  assert.deepEqual(snapshot.capabilities, { canResume: true, canRemove: true });
+});
+
+test("a completed release-policy foreground spawn is transient despite its bound session", () => {
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
-  agent.attach(fakeSession);
+  agent.bindSession(fakeSession);
   completedRun(agent, "done");
-  const view = agent.snapshot();
-  assert.equal(view.dispatch, "foreground");
-  assert.equal(view.retention, "transient");
+  const snapshot = agent.snapshot();
+
+  assert.deepEqual(snapshot.conversation, { policy: "release", available: false });
+  assert.deepEqual(snapshot.retention, { catalog: "transient", reasons: [] });
+  assert.deepEqual(snapshot.capabilities, { canResume: false, canRemove: false });
 });
 
-test("direct snapshots omit top-level resumed while terminal status derives it from the attempt", () => {
-  const config = { ...baseConfig, resumable: true };
+test("snapshot attempt kind and previous runs identify spawn and resume without aliases", () => {
+  const config = { ...baseConfig, retainConversation: true };
   const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
-  agent.attach(fakeSession);
+  agent.bindSession(fakeSession);
   completedRun(agent, "first");
 
-  const spawnView = agent.snapshot();
-  assert.equal(Object.prototype.hasOwnProperty.call(spawnView, "resumed"), false);
-  assert.equal(spawnView.status.kind, "done");
-  assert.equal(spawnView.status.kind === "done" && spawnView.status.resumed, false);
+  const spawnSnapshot = agent.snapshot();
+  assert.equal(spawnSnapshot.attempt.kind, "spawn");
+  assertNoLifecycleAliases(spawnSnapshot);
+  assertNoLifecycleAliases(spawnSnapshot.status);
 
   const resolved = resolveTask({
     task: { kind: "resume", sessionId: agent.id, prompt: "follow-up" },
-    background: false,
+    dispatch: "background",
     groupId: "g",
     inputIndex: 0,
     registry: { agents: new Map([["helper", config]]) } as any,
@@ -71,24 +113,24 @@ test("direct snapshots omit top-level resumed while terminal status derives it f
     listener: noop,
   });
   if (resolved.kind !== "resume") throw new Error("expected resume");
-  const liveView = resolved.agent.snapshot();
-  assert.equal(Object.prototype.hasOwnProperty.call(liveView, "resumed"), false);
-  assert.equal(liveView.status.kind, "queued");
 
-  resolved.agent.attach(fakeSession);
+  const liveSnapshot = resolved.agent.snapshot();
+  assert.deepEqual(liveSnapshot.attempt, { kind: "resume", dispatch: "background" });
+  assert.deepEqual(liveSnapshot.previousRuns?.[0].attempt, { kind: "spawn", dispatch: "foreground" });
+  assertNoLifecycleAliases(liveSnapshot);
+  assertNoLifecycleAliases(liveSnapshot.status);
+
+  resolved.agent.bindSession(fakeSession);
   completedRun(resolved.agent, "follow-up");
-  const resumeView = resolved.agent.snapshot();
-  assert.equal(Object.prototype.hasOwnProperty.call(resumeView, "resumed"), false);
-  assert.equal(resumeView.status.kind, "done");
-  assert.equal(resumeView.status.kind === "done" && resumeView.status.resumed, true);
+  assert.deepEqual(resolved.agent.snapshot().attempt, { kind: "resume", dispatch: "background" });
 });
 
-test("snapshot preserves the raw done output without truncating it (compaction lives in the formatter)", () => {
+test("snapshot preserves raw done output without truncating it", () => {
   const raw = "x".repeat(200);
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
-  agent.attach(fakeSession);
+  agent.bindSession(fakeSession);
   completedRun(agent, raw);
-  const view = agent.snapshot();
-  if (view.status.kind !== "done") throw new Error("expected done status");
-  assert.equal(view.status.output, raw);
+  const snapshot = agent.snapshot();
+  if (snapshot.status.kind !== "done") throw new Error("expected done status");
+  assert.equal(snapshot.status.output, raw);
 });

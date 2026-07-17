@@ -22,7 +22,7 @@ export interface SubagentRuntimeSettings {
    * across the whole recursive tree rather than per-manager or per-parent.
    */
   maxConcurrentSubagents: number;
-  defaultResumable: boolean;
+  defaultRetainConversation: boolean;
   backgroundNotify: BackgroundNotifyMode;
 }
 
@@ -49,7 +49,7 @@ export interface SubagentDisplaySettings {
   widgetShowRetainedSessions: boolean;
   /** When false, omit the foreground-transient footer line. */
   widgetShowForeground: boolean;
-  /** Max rows per Background/Resumable section before a +N more overflow line. */
+  /** Max rows per Background/Retained section before a +N more overflow line. */
   widgetMaxRowsPerSection: number;
 }
 
@@ -70,7 +70,7 @@ export function createDefaultSubagentSettings(): SubagentSettings {
     runtime: {
       maxTasksPerRun: 8,
       maxConcurrentSubagents: 4,
-      defaultResumable: false,
+      defaultRetainConversation: false,
       backgroundNotify: "auto",
     },
     agentDiscovery: {
@@ -162,7 +162,7 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
   if (runtime) {
     assignPositiveInt(runtime, "maxTasksPerRun", value => { settings.runtime.maxTasksPerRun = value; }, warnings);
     assignPositiveInt(runtime, "maxConcurrentSubagents", value => { settings.runtime.maxConcurrentSubagents = value; }, warnings);
-    assignBoolean(runtime, "defaultResumable", value => { settings.runtime.defaultResumable = value; }, warnings);
+    assignBoolean(runtime, "defaultRetainConversation", value => { settings.runtime.defaultRetainConversation = value; }, warnings);
     assignEnum(runtime, "backgroundNotify", BACKGROUND_NOTIFY_MODES, value => { settings.runtime.backgroundNotify = value; }, warnings);
   }
 

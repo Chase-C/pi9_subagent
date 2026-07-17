@@ -7,7 +7,7 @@ import { RunGroup } from "../../src/runtime/run-group.js";
 import { baseCtx, makeManager, makeSession, run } from "../helpers/runtime.js";
 
 const noop: AgentUpdateListener = () => {};
-const testAgentConfig = { name: "helper", description: "d", systemPrompt: "s", source: "project" as const, resumable: false };
+const testAgentConfig = { name: "helper", description: "d", systemPrompt: "s", source: "project" as const, retainConversation: false };
 
 function makeAgent(id: string, parentId?: string): Agent {
   return new Agent(id, testAgentConfig, { kind: "spawn", agent: "helper", prompt: id }, noop, { parentId });
@@ -32,7 +32,7 @@ test("RunGroup.tree emits a descendant root only once", () => {
 
 test("BatchRun emits grouped progress rows in input order including unknown agents", async () => {
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, `done:${attempt.prompt}`);
   };
   const registry = {
@@ -71,7 +71,7 @@ test("BatchRun keeps emitting active batch updates for spinner animation even wi
   let finish: () => void;
   const blocker = new Promise<void>(resolve => { finish = resolve; });
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await blocker;
     return completedRun(agent, "done");
   };
@@ -101,7 +101,7 @@ test("BatchRun emits live agent progress with the right transitions", async () =
   let emit: ((e: any) => void) | undefined;
   const session = { messages: [], subscribe(handler: any) { emit = handler; return () => {}; }, prompt: async () => {}, abort: () => {} };
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(session);
+    agent.bindSession(session);
     emit!({ type: "message_start" });
     emit!({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "working through the delegated task" } });
     emit!({ type: "tool_execution_start", toolName: "read" });
@@ -140,7 +140,7 @@ test("BatchRun throttles live message snippets while lifecycle updates are immed
   let finish: () => void;
   const allowFinish = new Promise<void>(resolve => { finish = resolve; });
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(session);
+    agent.bindSession(session);
     emit!({ type: "message_start" });
     emit!({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "one" } });
     emit!({ type: "message_start" });

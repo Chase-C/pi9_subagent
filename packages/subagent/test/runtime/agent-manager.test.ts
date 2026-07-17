@@ -13,18 +13,18 @@ import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers
 function matrixAgent(status: "queued" | "running" | "completed" | "error", background: boolean, state: "enabled" | "disabled" | "retained", id: string): Agent {
   const agent = new Agent(
     id,
-    { name: "matrix", description: "", systemPrompt: "", source: "project", resumable: state !== "disabled" },
+    { name: "matrix", description: "", systemPrompt: "", source: "project", retainConversation: state !== "disabled" },
     { kind: "spawn", agent: "matrix", prompt: id },
     () => {},
-    { background },
+    { dispatch: background ? "background" : "foreground" },
   );
   const session = makeSession() as any;
 
-  if (state === "retained" || status === "running") agent.attach(session);
+  if (state === "retained" || status === "running") agent.bindSession(session);
   if (status === "queued") {
     if (state === "retained") {
       completedRun(agent, "seed");
-      agent.beginResume("queued", undefined, background);
+      agent.beginResume("queued", background ? "background" : "foreground");
     }
   } else if (status === "completed") {
     completedRun(agent, "done");
@@ -51,8 +51,8 @@ test("catalog retention matrix preserves inventory and post-run cleanup behavior
         const active = status === "queued" || status === "running";
         const persistent = background || state !== "disabled" && (active || state === "retained");
         const expectedListed = active || persistent;
-        assert.equal(agent.catalogRetention.shouldRemainCataloged, expectedListed, `${status}/${background}/${state}`);
-        assert.equal(agent.snapshot().retention, persistent ? "persistent" : "transient", `${status}/${background}/${state} retention`);
+        assert.equal(agent.retentionDecision.cataloged, expectedListed, `${status}/${background}/${state}`);
+        assert.equal(agent.snapshot().retention.catalog, persistent ? "persistent" : "transient", `${status}/${background}/${state} retention`);
         assert.equal(manager.listSessions().length, expectedListed ? 1 : 0, `${status}/${background}/${state} list`);
 
         if (!active) {
@@ -61,10 +61,10 @@ test("catalog retention matrix preserves inventory and post-run cleanup behavior
           const cleanupManager = makeManager({
             agents: new Map([[
               "matrix",
-              { name: "matrix", description: "", systemPrompt: "", source: "project", resumable: state !== "disabled" },
+              { name: "matrix", description: "", systemPrompt: "", source: "project", retainConversation: state !== "disabled" },
             ]]),
           } as any, 1, async (_ctx: any, cleanupAgent: any) => {
-            if (state === "retained") cleanupAgent.attach(makeSession());
+            if (state === "retained") cleanupAgent.bindSession(makeSession());
             return status === "completed"
               ? completedRun(cleanupAgent, "done")
               : errorRun(cleanupAgent, "failed");
@@ -74,7 +74,7 @@ test("catalog retention matrix preserves inventory and post-run cleanup behavior
             undefined,
             [{ kind: "spawn", agent: "matrix", prompt: "terminal" }],
             undefined,
-            { background },
+            { dispatch: background ? "background" : "foreground" },
           );
           await cleanupBatch.resultsPromise;
           assert.equal(cleanupManager.listSessions().length, expectedListed ? 1 : 0, `${status}/${background}/${state} cleanup`);
@@ -85,9 +85,9 @@ test("catalog retention matrix preserves inventory and post-run cleanup behavior
 });
 
 test("AgentManager allocates readable unique IDs and does not reuse removed IDs", async () => {
-  const config = { name: "worker", description: "", systemPrompt: "", source: "project", resumable: true };
+  const config = { name: "worker", description: "", systemPrompt: "", source: "project", retainConversation: true };
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "done");
   };
   const manager = makeManager({ agents: new Map([["worker", config]]) } as any, 3, runner);
@@ -96,7 +96,7 @@ test("AgentManager allocates readable unique IDs and does not reuse removed IDs"
     { kind: "spawn", agent: "worker", prompt: "one" },
     { kind: "spawn", agent: "worker", prompt: "two" },
     { kind: "spawn", agent: "worker", prompt: "three" },
-  ], undefined, { background: false });
+  ], undefined, { dispatch: "foreground" });
   const firstIds = firstBatch.sessions.map(session => session.id);
   await firstBatch.resultsPromise;
 
@@ -113,7 +113,7 @@ test("AgentManager allocates readable unique IDs and does not reuse removed IDs"
 
   const replacementBatch = manager.startRun(baseCtx(), undefined, [
     { kind: "spawn", agent: "worker", prompt: "replacement" },
-  ], undefined, { background: false });
+  ], undefined, { dispatch: "foreground" });
   const replacementId = replacementBatch.sessions[0].id;
   await replacementBatch.resultsPromise;
 
@@ -121,62 +121,62 @@ test("AgentManager allocates readable unique IDs and does not reuse removed IDs"
   assert.equal(firstIds.includes(replacementId), false);
 });
 
-test("manager inventory and raw results omit top-level resumed while retaining terminal status.resumed", async () => {
-  const config = { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true };
+test("manager inventory and raw results preserve canonical attempt kinds", async () => {
+  const config = { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true };
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(attempt.kind === "resume" ? agent.retainedSession()! : makeSession());
+    agent.bindSession(attempt.kind === "resume" ? agent.retainedSession()! : makeSession());
     return completedRun(agent, `done:${attempt.prompt}`);
   };
   const manager = makeManager({ agents: new Map([["chatty", config]]) } as any, 1, runner);
 
   const firstBatch = manager.startRun(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "first" },
-  ], undefined, { background: false });
-  assert.equal(firstBatch.sessions[0].resumed, false);
+  ], undefined, { dispatch: "foreground" });
+  assert.equal(firstBatch.sessions[0].attempt.kind, "spawn");
   const [firstSnapshot] = await firstBatch.resultsPromise;
-  assert.equal(Object.prototype.hasOwnProperty.call(firstSnapshot, "resumed"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(manager.listSessions()[0], "resumed"), false);
+  assert.equal(firstSnapshot.attempt.kind, "spawn");
+  assert.equal(manager.listSessions()[0].attempt.kind, "spawn");
 
   const resumeBatch = manager.startRun(baseCtx(), undefined, [
     { kind: "resume", sessionId: firstSnapshot.id, prompt: "follow-up" },
-  ], undefined, { background: false });
-  assert.equal(resumeBatch.sessions[0].resumed, true);
+  ], undefined, { dispatch: "foreground" });
+  assert.equal(resumeBatch.sessions[0].attempt.kind, "resume");
   const [resumeSnapshot] = await resumeBatch.resultsPromise;
-  assert.equal(Object.prototype.hasOwnProperty.call(resumeSnapshot, "resumed"), false);
   assert.equal(resumeSnapshot.status.kind, "done");
-  assert.equal(resumeSnapshot.status.kind === "done" && resumeSnapshot.status.resumed, true);
-  assert.equal(Object.prototype.hasOwnProperty.call(manager.listSessions()[0], "resumed"), false);
+  assert.equal(resumeSnapshot.attempt.kind, "resume");
+  assert.equal(resumeSnapshot.previousRuns?.[0].attempt.kind, "spawn");
+  assert.equal(manager.listSessions()[0].attempt.kind, "resume");
 });
 
 test("AgentManager.listSessions returns all retained sessions when called with no filter", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(session);
+    agent.bindSession(session);
     return completedRun(agent, "ok");
   };
   const registry = {
-    agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }]]),
+    agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", tools: [], retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 1, runner);
   await run(manager, baseCtx(), undefined, [{ kind: "spawn", agent: "good", prompt: "go" }]);
 
   const all = manager.listSessions();
   assert.equal(all.length, 1);
-  assert.equal(all[0].dispatch, "foreground");
+  assert.equal(all[0].attempt.dispatch, "foreground");
 });
 
-test("AgentManager does not expose skipped resumable tasks as sessions", async () => {
+test("AgentManager does not expose skipped retainConversation tasks as sessions", async () => {
   let finishFirst: () => void;
   const firstCanFinish = new Promise<void>(resolve => { finishFirst = resolve; });
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await firstCanFinish;
     return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([
-      ["blocker", { name: "blocker", description: "d", systemPrompt: "s", source: "project", resumable: false }],
-      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
+      ["blocker", { name: "blocker", description: "d", systemPrompt: "s", source: "project", retainConversation: false }],
+      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }],
     ]),
   };
   const manager = makeManager(registry as any, 1, runner);
@@ -192,18 +192,137 @@ test("AgentManager does not expose skipped resumable tasks as sessions", async (
   const results = await pending;
 
   assert.equal(results[1].status, "skipped");
-  assert.equal(results[1].resumable, false);
+  assert.equal(results[1].canResume, false);
   assert.equal(Object.prototype.hasOwnProperty.call(results[1], "sessionId"), false);
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("AgentManager does not expose or resume non-resumable completed sessions", async () => {
+test("steering a running session delegates directly", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const steered: string[] = [];
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession({
+      ...makeSession(),
+      async steer(text: string) { steered.push(text); },
+    });
+    await gate;
     return completedRun(agent, "done");
   };
   const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { dispatch: "foreground" });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = manager.listSessions()[0].id;
+
+  await manager.steerSession(sessionId, "Focus on the parser");
+
+  assert.deepEqual(steered, ["Focus on the parser"]);
+  release();
+  await batch.resultsPromise;
+});
+
+test("session conversations are readable directly", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.bindSession({
+      ...makeSession(),
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Inspect the parser" }] },
+        { role: "assistant", content: [{ type: "text", text: "I found the issue." }, { type: "toolCall", name: "read", arguments: { path: "parser.ts" } }] },
+        { role: "toolResult", toolName: "read", content: [{ type: "text", text: "source" }], isError: false },
+      ],
+    });
+    await gate;
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { dispatch: "foreground" });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = manager.listSessions()[0].id;
+
+  const detail = manager.sessionConversation(sessionId);
+
+  assert.equal(detail.session.id, sessionId);
+  assert.deepEqual(detail.messages.map(message => [message.role, message.text, message.toolName]), [
+    ["user", "Inspect the parser", undefined],
+    ["assistant", "I found the issue.", undefined],
+    ["tool", "read {\"path\":\"parser.ts\"}", "read"],
+    ["toolResult", "source", "read"],
+  ]);
+  assert.equal("steer" in (detail as any), false);
+  release();
+  await batch.resultsPromise;
+});
+
+test("conversation projection bounds large message and tool-result content", () => {
+  const agent = new Agent(
+    "large-transcript",
+    { name: "worker", description: "", systemPrompt: "", source: "project", retainConversation: false },
+    { kind: "spawn", agent: "worker", prompt: "work" },
+    () => {},
+  );
+  agent.bindSession({
+    ...makeSession(),
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "a".repeat(10_000) }] },
+      { role: "toolResult", toolName: "read", content: [{ type: "text", text: "b".repeat(50_000) }] },
+    ],
+  } as any);
+  const manager = makeManager({ agents: new Map() } as any);
+  (manager as any)._agents = [agent];
+
+  const messages = manager.sessionConversation(agent.id).messages;
+
+  assert.equal(messages.length, 2);
+  assert.ok(messages[0].text.length <= 1_201);
+  assert.ok(messages[1].text.length <= 401);
+});
+
+test("AgentManager.stopSession aborts a running session", async () => {
+  let abortCalls = 0;
+  const runner = async (_ctx: any, agent: any) => {
+    let release!: () => void;
+    const stopped = new Promise<void>(resolve => { release = resolve; });
+    agent.bindSession({
+      ...makeSession(),
+      abort() { abortCalls += 1; release(); },
+    });
+    await stopped;
+    return interruptedRun(agent, "stopped");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { dispatch: "foreground" });
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  await manager.stopSession(manager.listSessions()[0].id);
+  await batch.resultsPromise;
+
+  assert.equal(abortCalls, 1);
+});
+
+test("AgentManager does not expose or resume non-retainConversation completed sessions", async () => {
+  const runner = async (_ctx: any, agent: any) => {
+    agent.bindSession(makeSession());
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 1, runner);
 
@@ -218,56 +337,40 @@ test("AgentManager does not expose or resume non-resumable completed sessions", 
     { kind: "resume", sessionId: "anything", prompt: "follow up" },
   ]);
   assert.equal(retried.status, "error");
-  assert.equal(retried.resumed, true);
-  assert.match(retried.error ?? "", /Unknown resumable subagent session/);
+  assert.equal(retried.kind, "resume");
+  assert.match(retried.error ?? "", /Unknown retained subagent session/);
 });
 
-test("AgentManager discards a completed session when a task overrides resumable to false at spawn or resume", async () => {
+test("AgentManager honors a spawn-side retainConversation override", async () => {
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, `out:${attempt.prompt}`);
   };
-  const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(agent.retainedSession()!);
-    return completedRun(agent, `follow:${attempt.prompt}`);
-  };
   const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
-  const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
+  const manager = makeManager(registry as any, 1, runner);
 
-  // Spawn-side override: session is never retained.
-  const spawnResults = await run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "spawn-only", resumable: false },
+  const [result] = await run(manager, baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "retain me", retainConversation: true },
   ]);
-  assert.equal(spawnResults[0].status, "completed");
-  assert.equal(spawnResults[0].resumable, false);
-  assert.equal(Object.prototype.hasOwnProperty.call(spawnResults[0], "sessionId"), false);
-  assert.deepEqual(manager.listSessions(), []);
 
-  // Resume-side override: session retained on initial spawn, then discarded on resume.
-  const [seed] = await run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "initial" },
-  ]);
-  assert.equal(manager.listSessions().length, 1);
-  const [resumed] = await run(manager, baseCtx(), undefined, [
-    { kind: "resume", sessionId: seed.sessionId!, prompt: "tear down", resumable: false },
-  ]);
-  assert.equal(resumed.status, "completed");
-  assert.equal(resumed.resumable, false);
-  assert.deepEqual(manager.listSessions(), []);
+  assert.equal(result.status, "completed");
+  assert.equal(result.canResume, true);
+  assert.ok(result.sessionId);
+  assert.equal(manager.listSessions()[0].conversation.policy, "retain");
 });
 
-test("AgentManager retains only resumable interrupted sessions, clearing only after parent cancellation settles", async () => {
+test("AgentManager retains only retainConversation interrupted sessions, clearing only after parent cancellation settles", async () => {
   const runner = async (_ctx: any, agent: any, _attempt: any, signal: AbortSignal) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
     return interruptedRun(agent, "cancelled by parent");
   };
   const registry = {
     agents: new Map([
-      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }],
-      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
+      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }],
+      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }],
     ]),
   };
   const manager = makeManager(registry as any, 2, runner as any);
@@ -294,36 +397,36 @@ test("AgentManager retains only resumable interrupted sessions, clearing only af
     { kind: "resume", sessionId: results[1].sessionId!, prompt: "follow up" },
   ]);
   assert.equal(retried.status, "error");
-  assert.equal(retried.resumed, true);
+  assert.equal(retried.kind, "resume");
   assert.match(retried.error ?? "", /while it is interrupted/);
   assert.deepEqual(await manager.remove({ sessionIds: [results[1].sessionId!] }), { removed: 1, aborted: 0, sessionIds: [results[1].sessionId!], errors: [] });
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("AgentManager retains a completed session when a task overrides resumable to true", async () => {
+test("AgentManager retains a completed session when a task overrides retainConversation to true", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(session);
+    agent.bindSession(session);
     return completedRun(agent, `done:${attempt.prompt}`);
   };
   const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(agent.retainedSession()!);
+    agent.bindSession(agent.retainedSession()!);
     return completedRun(agent, `follow:${attempt.prompt}`);
   };
   const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
 
   const results = await run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "oneshot", prompt: "work", resumable: true },
+    { kind: "spawn", agent: "oneshot", prompt: "work", retainConversation: true },
   ]);
 
-  assert.equal(results[0].resumable, true);
+  assert.equal(results[0].canResume, true);
   assert.ok(results[0].sessionId);
   assert.deepEqual(
-    manager.listSessions().map(s => [s.id, s.config.name, s.config.resumable]),
-    [[results[0].sessionId, "oneshot", true]],
+    manager.listSessions().map(s => [s.id, s.config.name, s.conversation.policy]),
+    [[results[0].sessionId, "oneshot", "retain"]],
   );
 
   const [resumed] = await run(manager, baseCtx(), undefined, [
@@ -342,17 +445,17 @@ test("AgentManager.backgroundResults reports queued resume elapsed from the curr
     const retainedSession = makeSession();
     const registry = {
       agents: new Map([
-        ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
-        ["blocker", { name: "blocker", description: "d", systemPrompt: "s", source: "project", resumable: false }],
+        ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }],
+        ["blocker", { name: "blocker", description: "d", systemPrompt: "s", source: "project", retainConversation: false }],
       ]),
     };
     const runner = async (_ctx: any, agent: any, attempt: any) => {
-      agent.attach(agent.agentName === "chatty" ? retainedSession : makeSession());
+      agent.bindSession(agent.agentName === "chatty" ? retainedSession : makeSession());
       if (agent.agentName === "blocker") await new Promise<void>(resolve => { releaseBlocker = resolve; });
       return completedRun(agent, `done:${attempt.prompt}`);
     };
     const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
-      agent.attach(agent.retainedSession()!);
+      agent.bindSession(agent.retainedSession()!);
       return completedRun(agent, `follow:${attempt.prompt}`);
     };
     const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
@@ -366,7 +469,7 @@ test("AgentManager.backgroundResults reports queued resume elapsed from the curr
     const batch = manager.startRun(baseCtx(), undefined, [
       { kind: "spawn", agent: "blocker", prompt: "block" },
       { kind: "resume", sessionId: initial.sessionId!, prompt: "queued" },
-    ], undefined, { background: true });
+    ], undefined, { dispatch: "background" });
 
     await new Promise(resolve => setImmediate(resolve));
     now = 100_250;
@@ -383,7 +486,7 @@ test("AgentManager.backgroundResults reports queued resume elapsed from the curr
   }
 });
 
-test("AgentManager retains, resumes, lists, and clears completed resumable sessions", async () => {
+test("AgentManager retains, resumes, lists, and clears completed retainConversation sessions", async () => {
   let runEmit: ((event: any) => void) | undefined;
   const runner = async (_ctx: any, agent: any, attempt: any) => {
     const session = {
@@ -392,18 +495,18 @@ test("AgentManager retains, resumes, lists, and clears completed resumable sessi
       prompt: async () => { },
       abort: () => { },
     };
-    agent.attach(session);
+    agent.bindSession(session);
     runEmit!({ type: "turn_end" });
     return completedRun(agent, `response:${attempt.prompt}`);
   };
   const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(agent.retainedSession()!);
+    agent.bindSession(agent.retainedSession()!);
     runEmit!({ type: "turn_end" });
     return completedRun(agent, `follow:${attempt.prompt}`);
   };
 
   const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
   const results = await run(manager, baseCtx(), undefined, [
@@ -453,12 +556,12 @@ test("AgentManager.remove with a queued sessionId prevents the queued spawn from
   const runnerPrompts: string[] = [];
   const runner = async (_ctx: any, agent: any, attempt: any) => {
     runnerPrompts.push(attempt.prompt);
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     if (attempt.prompt === "block") await runningGate;
     return completedRun(agent, "done");
   };
   const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 1, runner);
 
@@ -486,20 +589,20 @@ test("AgentManager.remove with a queued resume sessionId prevents the queued res
   let unblockRunning: () => void;
   const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     if (attempt.prompt === "block") await runningGate;
     return completedRun(agent, "done");
   };
   let resumeCalls = 0;
   const resumeRunner = async (_ctx: any, agent: any) => {
     resumeCalls += 1;
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "resumed");
   };
   const registry = {
     agents: new Map([
-      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
-      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }],
+      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }],
+      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }],
     ]),
   };
   const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
@@ -522,17 +625,17 @@ test("AgentManager.remove with a queued resume sessionId prevents the queued res
 
   assert.equal(resumeCalls, 0);
   assert.equal(results[1].status, "skipped");
-  assert.equal(results[1].resumed, true);
+  assert.equal(results[1].kind, "resume");
   assert.deepEqual(manager.listSessions(), []);
 });
 
 test("AgentManager.remove on a second pass of the same sessionId returns the unknown-id error", async () => {
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "done");
   };
   const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 1, runner);
   const [seed] = await run(manager, baseCtx(), undefined, [
@@ -561,12 +664,12 @@ test("AgentManager.remove with a running sessionId aborts the underlying session
       prompt: async () => { },
       abort: () => { abortCalls += 1; resolveAbort!(); },
     };
-    agent.attach(session);
+    agent.bindSession(session);
     await aborted;
     return interruptedRun(agent, "aborted by remove");
   };
   const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -589,13 +692,13 @@ test("AgentManager.remove with a running sessionId aborts the underlying session
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("AgentManager background non-resumable agents stay listed with terminal status after settlement", async () => {
+test("AgentManager background non-retainConversation agents stay listed with terminal status after settlement", async () => {
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "done");
   };
   const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -604,13 +707,13 @@ test("AgentManager background non-resumable agents stay listed with terminal sta
     undefined,
     [{ kind: "spawn", agent: "oneshot", prompt: "work" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await batch.resultsPromise;
 
   const listed = manager.listSessions();
   assert.equal(listed.length, 1);
-  assert.equal(listed[0].dispatch, "background");
+  assert.equal(listed[0].attempt.dispatch, "background");
   assert.equal(listed[0].status.kind, "done");
   assert.equal(listed[0].status.kind === "done" && listed[0].status.outcome, "completed");
 });
@@ -626,12 +729,12 @@ test("AgentManager.remove by sessionId aborts a running background session", asy
       prompt: async () => { },
       abort: () => { abortCalls += 1; unblockRunning?.(); },
     };
-    agent.attach(session);
+    agent.bindSession(session);
     await runningGate;
     return interruptedRun(agent, "aborted by remove");
   };
   const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -640,7 +743,7 @@ test("AgentManager.remove by sessionId aborts a running background session", asy
     undefined,
     [{ kind: "spawn", agent: "oneshot", prompt: "long running bg" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await new Promise(resolve => setTimeout(resolve, 20));
   const runningId = manager.listSessions()[0].id;
@@ -657,11 +760,11 @@ test("AgentManager.remove by sessionId aborts a running background session", asy
 
 test("AgentManager.backgroundResults returns ready:true with the projected result for a completed background session", async () => {
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "bg-output");
   };
   const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -670,7 +773,7 @@ test("AgentManager.backgroundResults returns ready:true with the projected resul
     undefined,
     [{ kind: "spawn", agent: "oneshot", prompt: "go" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await batch.resultsPromise;
   const sessionId = batch.sessions[0].id;
@@ -694,12 +797,12 @@ test("AgentManager.backgroundResults returns ready:false running with elapsedMs 
   let release: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await gate;
     return completedRun(agent, "done");
   };
   const registry = {
-    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -708,7 +811,7 @@ test("AgentManager.backgroundResults returns ready:false running with elapsedMs 
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "longwork", label: "phase 1" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await new Promise(resolve => setTimeout(resolve, 20));
   const sessionId = batch.sessions[0].id;
@@ -732,12 +835,12 @@ test("AgentManager.backgroundResults returns ready:false queued with elapsedMs f
   let release: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await gate;
     return completedRun(agent, "done");
   };
   const registry = {
-    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 1, runner);
 
@@ -749,7 +852,7 @@ test("AgentManager.backgroundResults returns ready:false queued with elapsedMs f
       { kind: "spawn", agent: "helper", prompt: "queued one" },
     ],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await new Promise(resolve => setTimeout(resolve, 20));
   const queuedId = batch.sessions[1].id;
@@ -784,12 +887,12 @@ test("AgentManager.backgroundResults preserves input order across mixed entries 
   let release: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     if (attempt.prompt === "running") await gate;
     return completedRun(agent, `done:${attempt.prompt}`);
   };
   const registry = {
-    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -798,7 +901,7 @@ test("AgentManager.backgroundResults preserves input order across mixed entries 
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "completed" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await completedBatch.resultsPromise;
   const completedId = completedBatch.sessions[0].id;
@@ -808,7 +911,7 @@ test("AgentManager.backgroundResults preserves input order across mixed entries 
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "running" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await new Promise(resolve => setTimeout(resolve, 20));
   const runningId = runningBatch.sessions[0].id;
@@ -833,27 +936,27 @@ test("AgentManager.backgroundResults preserves input order across mixed entries 
 test("AgentManager.backgroundResults reads retained foreground sessions identically to background ones", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(session);
+    agent.bindSession(session);
     return completedRun(agent, "retained-output");
   };
   const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 1, runner);
 
-  // Foreground retained session (not started via startBatch background:true).
+  // Foreground retained session (not started with background dispatch).
   const [seed] = await run(manager, baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial" },
   ]);
-  assert.equal(manager.listSessions()[0].dispatch, "foreground");
+  assert.equal(manager.listSessions()[0].attempt.dispatch, "foreground");
 
   const [entry] = toResults(manager.backgroundResults([seed.sessionId!]), { exposeId: true }) as any[];
   assert.equal(entry.ready, true);
   assert.equal(entry.result.output, "retained-output");
-  assert.equal(entry.result.resumable, true);
+  assert.equal(entry.result.canResume, true);
 });
 
-test("AgentManager.cancelDescendantsOfaborts direct children of the given parent id", async () => {
+test("AgentManager.cancelDescendantsOf aborts direct children of the given parent id", async () => {
   const aborts: string[] = [];
   const runner = async (_ctx: any, agent: any) => {
     let resolveAbort: () => void;
@@ -862,14 +965,14 @@ test("AgentManager.cancelDescendantsOfaborts direct children of the given parent
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
-      abort: () => { aborts.push(agent.spawn.prompt); resolveAbort!(); },
+      abort: () => { aborts.push(agent.activePrompt!); resolveAbort!(); },
     };
-    agent.attach(session);
+    agent.bindSession(session);
     await aborted;
     return interruptedRun(agent, "aborted");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
@@ -878,7 +981,7 @@ test("AgentManager.cancelDescendantsOfaborts direct children of the given parent
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
     undefined,
-    { background: false, parentId: "parent-1" },
+    { dispatch: "foreground", parentId: "parent-1" },
   );
   await new Promise(resolve => setTimeout(resolve, 20));
   const childId = manager.listSessions()[0].id;
@@ -901,14 +1004,14 @@ test("AgentManager.cancelDescendantsOfwalks grandchildren first (post-order)", a
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
-      abort: () => { abortOrder.push(agent.spawn.prompt); resolveAbort!(); },
+      abort: () => { abortOrder.push(agent.activePrompt!); resolveAbort!(); },
     };
-    agent.attach(session);
+    agent.bindSession(session);
     await aborted;
     return interruptedRun(agent, "aborted");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
@@ -919,7 +1022,7 @@ test("AgentManager.cancelDescendantsOfwalks grandchildren first (post-order)", a
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
     undefined,
-    { background: false, parentId: "root" },
+    { dispatch: "foreground", parentId: "root" },
   );
   await new Promise(resolve => setTimeout(resolve, 10));
   const childId = manager.listSessions().find(s => s.parentSessionId === "root")!.id;
@@ -928,7 +1031,7 @@ test("AgentManager.cancelDescendantsOfwalks grandchildren first (post-order)", a
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "grandchild" }],
     undefined,
-    { background: false, parentId: childId },
+    { dispatch: "foreground", parentId: childId },
   );
   await new Promise(resolve => setTimeout(resolve, 10));
 
@@ -948,19 +1051,19 @@ test("AgentManager.cancelDescendantsOfis a no-op when the id has no descendants"
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("AgentManager.cancelDescendantsOfskips already-terminal descendants without re-aborting them", async () => {
+test("AgentManager.cancelDescendantsOf skips already-terminal descendants without re-aborting them", async () => {
   const abortCalls: string[] = [];
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach({
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
-      abort: () => { abortCalls.push(agent.spawn.prompt); },
+      abort: () => { abortCalls.push(agent.activePrompt!); },
     });
     return completedRun(agent, "ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
@@ -990,24 +1093,24 @@ test("AgentManager.remove fans out abort across a 2-level subagent tree via Agen
     // abort flag, but the runner doesn't resume until a later macrotask — so Agent.abort()'s
     // own settle("aborted") runs first.
     const flag = { aborted: false };
-    agent.attach({
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
-      abort: () => { aborts.push(agent.spawn.prompt); flag.aborted = true; },
+      abort: () => { aborts.push(agent.activePrompt!); flag.aborted = true; },
     });
     while (!flag.aborted) await new Promise(r => setTimeout(r, 5));
     return interruptedRun(agent, "aborted");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
   const rootBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "root" }],
-    undefined, { background: false },
+    undefined, { dispatch: "foreground" },
   );
   await new Promise(r => setTimeout(r, 10));
   const rootId = manager.listSessions().find(s => s.parentSessionId === undefined)!.id;
@@ -1015,7 +1118,7 @@ test("AgentManager.remove fans out abort across a 2-level subagent tree via Agen
   const childBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
-    undefined, { background: false, parentId: rootId },
+    undefined, { dispatch: "foreground", parentId: rootId },
   );
   await new Promise(r => setTimeout(r, 10));
   const childId = manager.listSessions().find(s => s.parentSessionId === rootId)!.id;
@@ -1023,7 +1126,7 @@ test("AgentManager.remove fans out abort across a 2-level subagent tree via Agen
   const grandBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "grandchild" }],
-    undefined, { background: false, parentId: childId },
+    undefined, { dispatch: "foreground", parentId: childId },
   );
   await new Promise(r => setTimeout(r, 10));
   assert.equal(manager.listSessions().filter(s => s.status.kind === "running").length, 3);
@@ -1049,17 +1152,17 @@ test("AgentManager.cancelDescendantsOf skipBackground=true cancels a running non
   const aborts: string[] = [];
   const runner = async (_ctx: any, agent: any) => {
     const flag = { aborted: false };
-    agent.attach({
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
-      abort: () => { aborts.push(agent.spawn.prompt); flag.aborted = true; },
+      abort: () => { aborts.push(agent.activePrompt!); flag.aborted = true; },
     });
     while (!flag.aborted) await new Promise(r => setTimeout(r, 5));
     return interruptedRun(agent, "aborted");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
@@ -1068,7 +1171,7 @@ test("AgentManager.cancelDescendantsOf skipBackground=true cancels a running non
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
     undefined,
-    { background: false, parentId: "parent-1" },
+    { dispatch: "foreground", parentId: "parent-1" },
   );
   await new Promise(r => setTimeout(r, 20));
   assert.equal(manager.listSessions()[0].status.kind, "running");
@@ -1087,18 +1190,18 @@ test("AgentManager.cancelDescendantsOf skipBackground=true skips background desc
   const runner = async (_ctx: any, agent: any) => {
     let resolve!: () => void;
     const done = new Promise<void>(r => { resolve = r; });
-    sessions[agent.spawn.prompt] = { resolve, promise: done };
-    agent.attach({
+    sessions[agent.activePrompt!] = { resolve, promise: done };
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
-      abort: () => { aborts.push(agent.spawn.prompt); resolve(); },
+      abort: () => { aborts.push(agent.activePrompt!); resolve(); },
     });
     await done;
     return interruptedRun(agent, "done");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
@@ -1107,14 +1210,14 @@ test("AgentManager.cancelDescendantsOf skipBackground=true skips background desc
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "fg" }],
     undefined,
-    { background: false, parentId: "parent-1" },
+    { dispatch: "foreground", parentId: "parent-1" },
   );
   const bgBatch = manager.startRun(
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
     undefined,
-    { background: true, parentId: "parent-1" },
+    { dispatch: "background", parentId: "parent-1" },
   );
   await new Promise(r => setTimeout(r, 20));
 
@@ -1131,7 +1234,7 @@ test("AgentManager.cancelDescendantsOf skipBackground=true skips background desc
 test("AgentManager.cancelDescendantsOf stamps cancelled descendants with the reason", async () => {
   const runner = async (_ctx: any, agent: any) => {
     const flag = { aborted: false };
-    agent.attach({
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
@@ -1141,7 +1244,7 @@ test("AgentManager.cancelDescendantsOf stamps cancelled descendants with the rea
     return interruptedRun(agent, "aborted");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
@@ -1150,7 +1253,7 @@ test("AgentManager.cancelDescendantsOf stamps cancelled descendants with the rea
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
     undefined,
-    { background: false, parentId: "parent-9" },
+    { dispatch: "foreground", parentId: "parent-9" },
   );
   await new Promise(r => setTimeout(r, 20));
 
@@ -1167,12 +1270,12 @@ test("run updates return just the root when the root has no descendants", async 
   let release!: () => void;
   const blocker = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await blocker;
     return completedRun(agent, "ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
   let tree: any[] = [];
@@ -1181,7 +1284,7 @@ test("run updates return just the root when the root has no descendants", async 
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "root" }],
     update => { tree = update.tree; },
-    { background: false },
+    { dispatch: "foreground" },
   );
 
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -1198,12 +1301,12 @@ test("run updates walk a root → child → grandchild chain via descendant runs
   let release!: () => void;
   const blocker = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await blocker;
     return completedRun(agent, "ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
   let tree: any[] = [];
@@ -1211,21 +1314,21 @@ test("run updates walk a root → child → grandchild chain via descendant runs
   const rootHandle = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "root" }],
-    update => { tree = update.tree; }, { background: false },
+    update => { tree = update.tree; }, { dispatch: "foreground" },
   );
   await new Promise(r => setTimeout(r, 10));
   const rootId = manager.listSessions()[0].id;
   const childHandle = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
-    undefined, { background: false, parentId: rootId },
+    undefined, { dispatch: "foreground", parentId: rootId },
   );
   await new Promise(r => setTimeout(r, 10));
   const childId = manager.listSessions().find(s => s.parentSessionId === rootId)!.id;
   const grandHandle = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "grand" }],
-    undefined, { background: false, parentId: childId },
+    undefined, { dispatch: "foreground", parentId: childId },
   );
   await new Promise(r => setTimeout(r, 10));
 
@@ -1250,12 +1353,12 @@ test("run updates order siblings by createdAt and multiple roots by input order 
   let release!: () => void;
   const blocker = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await blocker;
     return completedRun(agent, "ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 8, runner);
   let tree: any[] = [];
@@ -1268,7 +1371,7 @@ test("run updates order siblings by createdAt and multiple roots by input order 
       { kind: "spawn", agent: "worker", prompt: "rootA" },
       { kind: "spawn", agent: "worker", prompt: "rootB" },
     ],
-    update => { tree = update.tree; }, { background: false },
+    update => { tree = update.tree; }, { dispatch: "foreground" },
   );
   await new Promise(r => setTimeout(r, 5));
   const allRoots = manager.listSessions().filter(s => s.parentSessionId === undefined);
@@ -1280,13 +1383,13 @@ test("run updates order siblings by createdAt and multiple roots by input order 
   const childA1 = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child-a1" }],
-    undefined, { background: false, parentId: rootAId },
+    undefined, { dispatch: "foreground", parentId: rootAId },
   );
   await new Promise(r => setTimeout(r, 5));
   const childA2 = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child-a2" }],
-    undefined, { background: false, parentId: rootAId },
+    undefined, { dispatch: "foreground", parentId: rootAId },
   );
   await new Promise(r => setTimeout(r, 5));
 
@@ -1311,16 +1414,16 @@ test("a foreground run emits the run-attempt, queue, and run-update spans when t
   process.env.PI_SUBAGENT_DEBUG_TIMING_FILE = logFile;
   try {
     const runner = async (_ctx: any, agent: any) => {
-      agent.attach(makeSession());
+      agent.bindSession(makeSession());
       return completedRun(agent, "ok");
     };
     const registry = {
-      agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", resumable: false }]]),
+      agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", retainConversation: false }]]),
     };
     const manager = makeManager(registry as any, 1, runner);
 
     await manager
-      .startRun(baseCtx(), undefined, [{ kind: "spawn", agent: "good", prompt: "go" }], () => {}, { background: false })
+      .startRun(baseCtx(), undefined, [{ kind: "spawn", agent: "good", prompt: "go" }], () => {}, { dispatch: "foreground" })
       .resultsPromise;
 
     const log = await readFile(logFile, "utf8");

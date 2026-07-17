@@ -110,16 +110,22 @@ export async function runAction(
 ): Promise<ActionResult> {
   const parsed = invocation.tasks;
   const startOptions = deps.parentSessionId !== undefined
-    ? { background: invocation.background === true, parentId: deps.parentSessionId }
-    : { background: invocation.background === true };
+    ? { dispatch: invocation.dispatch ?? "foreground", parentId: deps.parentSessionId }
+    : { dispatch: invocation.dispatch ?? "foreground" };
 
-  if (invocation.background === true) {
+  if (invocation.dispatch === "background") {
     const handle = deps.agentManager.startRun(ctx, signal, parsed, () => {
       updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
     }, startOptions);
     handle.resultsPromise.catch(() => {});
     updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
-    const details = backgroundStartedDetails(handle.sessions);
+    const sessions = handle.sessions.map(session => {
+      const task = session.inputIndex === undefined ? undefined : parsed[session.inputIndex];
+      return session.label === undefined && task?.kind === "spawn" && task.label !== undefined
+        ? { ...session, label: task.label }
+        : session;
+    });
+    const details = backgroundStartedDetails(sessions);
     return toolResult(details, { isError: (details.errors?.length ?? 0) > 0 });
   }
 

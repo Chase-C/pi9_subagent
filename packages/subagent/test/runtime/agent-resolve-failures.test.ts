@@ -25,7 +25,7 @@ test("task resolution unknown-agent failure surfaces the input label on both syn
 test("task resolution rejects duplicate resume tasks without corrupting the retained session", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(session);
+    agent.bindSession(session);
     return completedRun(agent, `old:${attempt.prompt}`);
   };
   let finishResume: () => void;
@@ -34,12 +34,12 @@ test("task resolution rejects duplicate resume tasks without corrupting the reta
   const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
     resumePrompts.push(attempt.prompt);
     if (attempt.prompt !== "first follow-up") throw new Error(`duplicate resume runner invoked for ${attempt.prompt}`);
-    agent.attach(agent.retainedSession()!);
+    agent.bindSession(agent.retainedSession()!);
     await resumeCanFinish;
     return completedRun(agent, `new:${attempt.prompt}`);
   };
   const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
   const [first] = await run(manager,baseCtx(), undefined, [
@@ -61,8 +61,8 @@ test("task resolution rejects duplicate resume tasks without corrupting the reta
 
   assert.equal(duplicate.status, "error");
   assert.equal(duplicate.prompt, "duplicate follow-up");
-  assert.equal(duplicate.resumed, true);
-  assert.equal(duplicate.sessionId, first.sessionId);
+  assert.equal(duplicate.kind, "resume");
+  assert.equal(Object.prototype.hasOwnProperty.call(duplicate, "sessionId"), false);
   assert.match(duplicate.error ?? "", /already.*resum/i);
 
   const sessions = manager.listSessions();
@@ -76,11 +76,11 @@ test("task resolution rejects duplicate resume tasks without corrupting the reta
 test("task resolution resume failure for an unknown sessionId yields a per-task error and does not block siblings", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(session);
+    agent.bindSession(session);
     return completedRun(agent, `done:${attempt.prompt}`);
   };
   const registry = {
-    agents: new Map([["fresh", { name: "fresh", description: "d", systemPrompt: "s", source: "project" }]]),
+    agents: new Map([["fresh", { name: "fresh", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -91,9 +91,9 @@ test("task resolution resume failure for an unknown sessionId yields a per-task 
 
   assert.equal(results.length, 2);
   assert.equal(results[0].status, "error");
-  assert.equal(results[0].resumed, true);
-  assert.match(results[0].error ?? "", /Unknown resumable subagent session: nonexistent/);
+  assert.equal(results[0].kind, "resume");
+  assert.match(results[0].error ?? "", /Unknown retained subagent session: nonexistent/);
   assert.equal(results[1].status, "completed");
-  assert.equal(results[1].resumed, false);
+  assert.equal(results[1].kind, "spawn");
   assert.equal(results[1].output, "done:real");
 });

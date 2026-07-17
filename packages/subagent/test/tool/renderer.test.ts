@@ -2,7 +2,6 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import subagentExtension from "../../src/index.js";
-import { createSubagentResumeMessage } from "../../src/view/resume-message.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 
 function registerExtension() {
@@ -54,22 +53,6 @@ test("background completion message renderer shows compact themed status summary
   assert.doesNotMatch(rendered, /Call subagent results/);
 });
 
-test("resume message renderer uses current details", () => {
-  const renderers = registerExtensionWithMessageRenderers();
-  const renderer = renderers.get("subagent-resume");
-  assert.equal(typeof renderer, "function");
-
-  const message = createSubagentResumeMessage({
-    agent: "helper",
-    prompt: "try another approach",
-    status: "completed",
-    output: "done",
-    sessionId: "s1",
-  });
-  const current = renderer(message, { expanded: false }, passthroughTheme);
-  assert.match(current.render(160).join("\n"), /Subagent resume completed · helper/);
-});
-
 test("background completion message renderer expands to full session details and results hint", () => {
   const renderers = registerExtensionWithMessageRenderers();
   const renderer = renderers.get("subagent-background-completion");
@@ -106,7 +89,7 @@ test("subagent tool result renderer falls back to simple text when themed render
           view: "inventory",
           sessions: [{
             id: "s1", inputIndex: 0, createdAt: 1,
-            config: { name: "helper", description: "Helper", source: "project", model: undefined, thinking: undefined, tools: undefined, resumable: false },
+            config: { name: "helper", description: "Helper", source: "project", model: undefined, thinking: undefined, tools: undefined, retainConversation: false },
             status: { kind: "done", outcome: "completed", completedAt: 2 },
             activity: { turns: 1, compactions: 0, toolHistory: [] },
             usage: undefined,
@@ -134,18 +117,6 @@ test("subagent tool result renderer keeps plain text for a current error envelop
   );
 
   assert.equal(component.render(120).join("\n").trim(), "task[0]: bad");
-});
-
-test("subagent tool result renderer keeps the empty-sessions message for an explicit empty sessions shape", () => {
-  const tool = registerExtension();
-
-  const component = tool.renderResult(
-    { content: [{ type: "text", text: '{ "sessions": [] }' }], details: { view: "inventory", sessions: [] } },
-    { expanded: false },
-    { fg: (_c: string, t: string) => t },
-  );
-
-  assert.match(component.render(120).join("\n"), /No subagent sessions\./);
 });
 
 test("subagent run title shows live running/queued/finished counts and elapsed once a partial result populates state", () => {

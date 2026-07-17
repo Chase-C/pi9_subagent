@@ -2,10 +2,9 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import {
+  agentsDetails,
   backgroundStartedDetails,
   createSubagentTextComponent,
-  formatSubagentSessionInspect,
-  formatSubagentSessionSummary,
   formatSubagentToolLines,
   formatWidgetLines,
   inventoryDetails,
@@ -14,6 +13,30 @@ import {
   runSummary,
 } from "../../src/view/format.js";
 import { fakeAgent, fakeRunSection } from "../helpers/fake-agent.js";
+
+test("expanded agents action nests available details below each name without instructions", () => {
+  const agent = {
+    name: "helper",
+    description: "Reviews implementation changes.",
+    source: "project" as const,
+    sourcePath: "/project/.pi/agents/helper.md",
+    model: "gpt-5.6-sol",
+    thinking: "high" as const,
+    tools: ["read", "grep"],
+    skills: ["review"],
+    retainConversation: true,
+    systemPrompt: "SECRET AGENT INSTRUCTIONS",
+  };
+  const lines = formatSubagentToolLines(agentsDetails([agent]), true);
+  const rendered = lines.join("\n");
+
+  assert.equal(lines[0], "helper");
+  assert.equal(lines.slice(1).every(line => line.startsWith("  ")), true);
+  for (const value of [agent.description, agent.source, agent.sourcePath, agent.model, agent.thinking, ...agent.tools, ...agent.skills]) {
+    assert.match(rendered, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.doesNotMatch(rendered, /SECRET AGENT INSTRUCTIONS/);
+});
 
 test("subagent run display animates only the running status glyph", () => {
   const sessions = [
@@ -54,11 +77,8 @@ test("collapsed inventory renders one results-style identity row per session", (
 });
 
 test("background dispatch stays out of collapsed inventory and appears in expanded metadata", () => {
-  const retained = fakeAgent({ retention: "persistent", config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
-  const background = fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "helper", resumable: true }, status: { kind: "running", startedAt: 1 } });
+  const background = fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "helper", retainConversation: true }, status: { kind: "running", startedAt: 1 } });
 
-  assert.doesNotMatch(formatSubagentSessionSummary(retained), /dispatch:/);
-  assert.match(formatSubagentSessionSummary(background), /dispatch:background/);
   assert.doesNotMatch(formatSubagentToolLines(inventoryDetails([background]), false, 0).join("\n"), /dispatch:/);
   assert.match(formatSubagentToolLines(inventoryDetails([background]), true, 0).join("\n"), /dispatch:background/);
 });
@@ -106,14 +126,14 @@ test("results view collapsed renders one run-style row per entry, status by glyp
 test("results view expanded renders each entry as a run-style block with its result snippet", () => {
   const details = resultsDetails([
     { snapshot: fakeAgent({
-      id: "sess-1", label: "phase 1", resumed: true, config: { name: "helper", resumable: true },
-      status: { kind: "completed", startedAt: 1, completedAt: 2, response: "all done", resumed: true },
+      id: "sess-1", label: "phase 1", kind: "resume", config: { name: "helper", retainConversation: true },
+      status: { kind: "completed", startedAt: 1, completedAt: 2, response: "all done" },
     }) },
     { snapshot: fakeAgent({ id: "flaky-1", config: { name: "flaky" }, status: { kind: "error", startedAt: 1, completedAt: 2, error: "boom" } }) },
   ]);
   const expanded = formatSubagentToolLines(details, true, 0).join("\n");
   assert.match(expanded, /✓ helper  phase 1/);
-  assert.match(expanded, /resumed/);
+  assert.match(expanded, /attempt:resume/);
   assert.match(expanded, /all done/);
   assert.match(expanded, /✗ flaky/);
   assert.match(expanded, /boom/);
@@ -168,7 +188,7 @@ test("inventory expanded output orders descendants DFS under their parents with 
 test("expanded inventory renders lifecycle metadata without run or result narrative", () => {
   const root = fakeAgent({
     id: "root-session",
-    config: { name: "planner", resumable: true },
+    config: { name: "planner", retainConversation: true },
     prompt: "PROMPT_MUST_NOT_RENDER",
     messageSnippet: "MESSAGE_MUST_NOT_RENDER",
     activity: { toolHistory: [{ id: "tool-1", name: "read", inputSummary: "TOOL_MUST_NOT_RENDER", startedAt: 2, completedAt: 3 }] },
@@ -177,7 +197,7 @@ test("expanded inventory renders lifecycle metadata without run or result narrat
   const child = fakeAgent({
     id: "child-session",
     parentSessionId: "root-session",
-    config: { name: "reviewer", resumable: false },
+    config: { name: "reviewer", retainConversation: false },
     prompt: "CHILD_PROMPT_MUST_NOT_RENDER",
     messageSnippet: "CHILD_MESSAGE_MUST_NOT_RENDER",
     activity: { toolHistory: [{ id: "tool-2", name: "bash", inputSummary: "CHILD_TOOL_MUST_NOT_RENDER", startedAt: 2 }] },
@@ -191,9 +211,9 @@ test("expanded inventory renders lifecycle metadata without run or result narrat
   assert.match(rendered, /^    ✗ reviewer$/m);
   assert.match(rendered, /session:root-session/);
   assert.match(rendered, /dispatch:foreground/);
-  assert.match(rendered, /resumable:true/);
+  assert.match(rendered, /retained:true/);
   assert.match(rendered, /parent:root-session/);
-  assert.match(rendered, /resumable:false/);
+  assert.match(rendered, /retained:false/);
   assert.doesNotMatch(rendered, /PROMPT_MUST_NOT_RENDER|MESSAGE_MUST_NOT_RENDER|TOOL_MUST_NOT_RENDER|OUTPUT_MUST_NOT_RENDER|ERROR_MUST_NOT_RENDER|tool call|token|\d+s/);
 
   const rootRow = lines.findIndex(line => line === "  ✓ planner");
@@ -642,9 +662,9 @@ test("collapsed subagent run does not render previous run sections for a resumed
 test("results expanded mirrors the running view for a resumed snapshot, including its previous-run sections", () => {
   const details = resultsDetails([
     { snapshot: fakeAgent({
-      id: "sess-1", label: "phase 2", resumed: true, config: { name: "helper", resumable: true },
+      id: "sess-1", label: "phase 2", kind: "resume", config: { name: "helper", retainConversation: true },
       prompt: "Final prompt.",
-      status: { kind: "completed", startedAt: 1, completedAt: 2, response: "final output", resumed: true },
+      status: { kind: "completed", startedAt: 1, completedAt: 2, response: "final output" },
       previousRuns: [
         fakeRunSection({ prompt: "First prompt.", status: { kind: "completed", startedAt: 1, completedAt: 2, response: "earlier output" } }),
       ],
@@ -654,25 +674,13 @@ test("results expanded mirrors the running view for a resumed snapshot, includin
 
   // The current run renders as a run-style row + prompt + result snippet.
   assert.match(expanded, /✓ helper  phase 2/);
-  assert.match(expanded, /resumed/);
+  assert.match(expanded, /attempt:resume/);
   assert.match(expanded, /Final prompt\./);
   assert.match(expanded, /final output/);
   // Completed expanded now matches the running expanded view, so previous-run sections render too.
   assert.match(expanded, /Previous Run 1 · completed/);
   assert.match(expanded, /First prompt\./);
   assert.match(expanded, /earlier output/);
-});
-
-test("subagent session inspect output uses remove terminology", () => {
-  const retainedSession = fakeAgent({
-    retention: "persistent",
-    capabilities: { canResume: true, canRemove: true, canClear: true },
-    config: { resumable: true },
-    status: { kind: "completed", startedAt: 2_000, completedAt: 5_000, response: "done" },
-  });
-  const inspectLines = formatSubagentSessionInspect(retainedSession).join("\n");
-  assert.match(inspectLines, /Actions: inspect, resume, remove/);
-  assert.doesNotMatch(inspectLines, /clear/);
 });
 
 test("runSummary counts retained result subagents without double-counting ids", () => {

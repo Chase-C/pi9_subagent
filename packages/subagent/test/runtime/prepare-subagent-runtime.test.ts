@@ -15,10 +15,10 @@ function fakeManager() {
 }
 
 function fakeRegistry() {
-  const calls: Array<{ cwd: string; discovery?: unknown; defaultResumable?: boolean; onWarning?: (msg: string) => void }> = [];
+  const calls: Array<{ cwd: string; discovery?: unknown; defaultRetainConversation?: boolean; onWarning?: (msg: string) => void }> = [];
   return {
     calls,
-    async reload(cwd: string, options: { discovery?: unknown; defaultResumable?: boolean; onWarning?: (msg: string) => void } = {}) {
+    async reload(cwd: string, options: { discovery?: unknown; defaultRetainConversation?: boolean; onWarning?: (msg: string) => void } = {}) {
       calls.push({ cwd, ...options });
     },
   };
@@ -52,7 +52,7 @@ test("prepareSubagentRuntime configures the agent manager with maxConcurrentSuba
   assert.deepEqual(manager.calls, [{ maxRunning: 3 }]);
 });
 
-test("prepareSubagentRuntime reloads the registry with discovery, defaultResumable, and a warning callback", async () => {
+test("prepareSubagentRuntime reloads the registry with discovery, defaultRetainConversation, and a warning callback", async () => {
   const registry = fakeRegistry();
   const notifications: Array<{ message: string; level?: string }> = [];
   const ctx = { cwd: "/work/repo", hasUI: true, ui: { notify: (m: string, l?: string) => notifications.push({ message: m, level: l }) } };
@@ -61,7 +61,7 @@ test("prepareSubagentRuntime reloads the registry with discovery, defaultResumab
     ctx,
     settingsStore: fakeStore({
       widgetPlacement: "belowEditor",
-      runtime: { maxConcurrentSubagents: 2, defaultResumable: true },
+      runtime: { maxConcurrentSubagents: 2, defaultRetainConversation: true },
       agentDiscovery: { includeUserAgents: false },
     }),
     agentManager: fakeManager(),
@@ -71,7 +71,7 @@ test("prepareSubagentRuntime reloads the registry with discovery, defaultResumab
   assert.equal(registry.calls.length, 1);
   const [call] = registry.calls;
   assert.equal(call.cwd, "/work/repo");
-  assert.equal(call.defaultResumable, true);
+  assert.equal(call.defaultRetainConversation, true);
   assert.equal((call.discovery as any).includeUserAgents, false);
 
   // Warning callback should route through ctx.ui.notify with level "warning".

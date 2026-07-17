@@ -19,14 +19,14 @@ function registerExtension(dependencies: any = {}) {
 test("subagent tool action=list with status filter [completed, error] returns terminal-success and terminal-failed sessions but excludes others", async () => {
   let nextRunner: ((agent: any) => any) | null = null;
   const runner = async (_ctx: any, agent: any, _attempt: any) => {
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    agent.bindSession({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return nextRunner!(agent);
   };
   const fakeRegistry = {
     agents: new Map([
-      ["good", { name: "good", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }],
-      ["bad", { name: "bad", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }],
-      ["cut", { name: "cut", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }],
+      ["good", { name: "good", description: "", systemPrompt: "", source: "project", retainConversation: true, tools: [] }],
+      ["bad", { name: "bad", description: "", systemPrompt: "", source: "project", retainConversation: true, tools: [] }],
+      ["cut", { name: "cut", description: "", systemPrompt: "", source: "project", retainConversation: true, tools: [] }],
     ]),
     async reload() {},
     summarizeAgent() { return ""; },
@@ -52,11 +52,11 @@ test("subagent tool action=list with status filter [completed, error] returns te
 
 test("subagent tool action=list rejects an empty status filter", async () => {
   const runner = async (_ctx: any, agent: any, _attempt: any) => {
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    agent.bindSession({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "ok");
   };
   const fakeRegistry = {
-    agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }]]),
+    agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", retainConversation: true, tools: [] }]]),
     async reload() {},
     summarizeAgent() { return ""; },
   };
@@ -91,14 +91,14 @@ test("subagent tool action=list with no filter returns retained sessions with no
       cwd: "/work/project",
       skills: ["requested-skill"],
       tools: ["read"],
-      resumable: true,
+      retainConversation: true,
     });
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    agent.bindSession({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "The final answer from the child.");
   };
   const fakeRegistry = {
     agents: new Map([
-      ["chatty", { name: "chatty", description: "Keeps context", systemPrompt: "s", source: "project", resumable: true, model: "test/model", tools: ["read"], skills: ["default-skill"] }],
+      ["chatty", { name: "chatty", description: "Keeps context", systemPrompt: "s", source: "project", retainConversation: true, model: "test/model", tools: ["read"], skills: ["default-skill"] }],
     ]),
     async reload() {},
     summarizeAgent() { return "chatty (project)"; },
@@ -122,35 +122,37 @@ test("subagent tool action=list with no filter returns retained sessions with no
   assert.deepEqual(retained.config.tools, ["read"]);
   assert.deepEqual(retained.config.skills, ["requested-skill"]);
   assert.equal(retained.status.output, "The final answer from the child.");
-  assert.equal(retained.dispatch, "foreground");
-  assert.equal(retained.retention, "persistent");
+  assert.deepEqual(retained.attempt, { kind: "spawn", dispatch: "foreground" });
+  assert.equal(retained.retention.catalog, "persistent");
 
   const modelSession = JSON.parse(result.content[0].text).sessions[0];
   assert.equal(modelSession.sessionId, retained.id);
   assert.equal(modelSession.agent, "chatty");
   assert.equal(modelSession.status, "completed");
-  assert.equal(modelSession.dispatch, "foreground");
+  assert.deepEqual(modelSession.attempt, { kind: "spawn", dispatch: "foreground" });
   assert.equal(modelSession.label, "remember work");
   assert.equal("elapsedMs" in modelSession, false);
   assert.deepEqual(modelSession.capabilities, { canResume: true, canRemove: true });
   assert.deepEqual(Object.keys(modelSession).sort(), [
     "agent",
+    "attempt",
     "capabilities",
-    "dispatch",
+    "conversation",
     "label",
+    "retention",
     "sessionId",
     "status",
   ]);
 });
 
-test("model-facing inventory reports background sessions as removable without leaking canClear", async () => {
+test("model-facing inventory reports background sessions as removable", async () => {
   const runner = async (_ctx: any, agent: any, _attempt: any) => {
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    agent.bindSession({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "done");
   };
   const fakeRegistry = {
     agents: new Map([
-      ["oneshot", { name: "oneshot", description: "", systemPrompt: "", source: "project", resumable: false, tools: [] }],
+      ["oneshot", { name: "oneshot", description: "", systemPrompt: "", source: "project", retainConversation: false, tools: [] }],
     ]),
     async reload() {},
     summarizeAgent() { return ""; },
@@ -161,7 +163,7 @@ test("model-facing inventory reports background sessions as removable without le
     undefined,
     [{ kind: "spawn", agent: "oneshot", prompt: "go" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await handle.resultsPromise;
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
@@ -169,23 +171,24 @@ test("model-facing inventory reports background sessions as removable without le
   const result = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
 
   assert.equal(result.details.sessions[0].capabilities.canRemove, true);
-  assert.equal(result.details.sessions[0].capabilities.canClear, true, "deprecated alias matches the safe removal capability");
   const modelSession = JSON.parse(result.content[0].text).sessions[0];
   assert.deepEqual(modelSession.capabilities, { canResume: false, canRemove: true });
-  assert.equal(Object.prototype.hasOwnProperty.call(modelSession.capabilities, "canClear"), false);
 });
 
 test("model-facing inventory does not advertise active sessions as safely removable", async () => {
   let release!: () => void;
+  let markStarted!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any) => {
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  const runner = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    markStarted();
     await gate;
     return completedRun(agent, "done");
   };
   const fakeRegistry = {
     agents: new Map([
-      ["worker", { name: "worker", description: "Works", systemPrompt: "", source: "project", resumable: true, tools: [] }],
+      ["worker", { name: "worker", description: "Works", systemPrompt: "", source: "project", retainConversation: true, tools: [] }],
     ]),
     async reload() {},
     summarizeAgent() { return ""; },
@@ -196,16 +199,15 @@ test("model-facing inventory does not advertise active sessions as safely remova
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "go" }],
     undefined,
-    { background: false },
+    { dispatch: "foreground" },
   );
-  await new Promise(resolve => setImmediate(resolve));
+  await started;
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
   const result = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
   const detailsSession = result.details.sessions[0];
   assert.equal(detailsSession.status.kind, "running");
   assert.equal(detailsSession.capabilities.canRemove, false);
-  assert.equal(detailsSession.capabilities.canClear, false);
   assert.deepEqual(JSON.parse(result.content[0].text).sessions[0].capabilities, {
     canResume: false,
     canRemove: false,

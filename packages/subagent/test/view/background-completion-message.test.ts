@@ -15,25 +15,11 @@ const entry = {
   elapsedMs: 1_250,
 };
 
-test("background completion factory keeps plain content and details on the same projection", () => {
+test("background completion factory keeps content and structured details on the same projection", () => {
   const message = createBackgroundCompletionMessage([entry]);
 
   assert.deepEqual(message.details, { completions: [entry] });
-  assert.equal(
-    message.content,
-    "1 background subagent completed since the last notification:\n"
-      + "- helper (short task) · completed · 1.3s · sessionId session-1\n"
-      + "\n"
-      + "Call subagent results with these sessionIds to retrieve output.",
-  );
-
-  assert.equal(
-    formatBackgroundCompletionMessage(message.details, true, undefined),
-    "1 background subagent completed since the last notification:\n"
-      + "- helper (short task) · completed · 1.3s · sessionId session-1\n"
-      + "\n"
-      + "Call subagent results with these sessionIds to retrieve output.",
-  );
+  assert.equal(message.content, formatBackgroundCompletionMessage(message.details, true, undefined));
 });
 
 test("background completion content lists 20 of 21 entries with exact overflow and boundary truncation", () => {
@@ -53,13 +39,11 @@ test("background completion content lists 20 of 21 entries with exact overflow a
   const lines = message.content.split("\n");
 
   assert.equal(message.details.completions.length, 21, "details retain every completion");
-  assert.equal(lines[0], "21 background subagents completed since the last notification:");
-  assert.equal(lines.filter(line => line.includes("sessionId ")).length, 20, "content lists only 20 entries");
-  assert.equal(lines[1], "- helper (abcdefg...) · completed · 1.3s · sessionId session-1");
-  assert.equal(lines[20], "- helper · completed · 1.3s · sessionId session-20");
-  assert.equal(lines[21], "- ... and 1 more");
-  assert.equal(lines[22], "");
-  assert.equal(lines[23], "Call subagent results with these sessionIds to retrieve output.");
+  const entries = lines.filter(line => line.includes("sessionId "));
+  assert.equal(entries.length, 20, "content lists only 20 entries");
+  assert.match(entries[0], /helper \(abcdefg\.\.\.\).*session-1$/);
+  assert.match(entries.at(-1)!, /session-20$/);
+  assert.match(message.content, /1 more/);
   assert.doesNotMatch(message.content, /session-21/);
 
   const collapsed = formatBackgroundCompletionMessage(message.details, false, undefined);

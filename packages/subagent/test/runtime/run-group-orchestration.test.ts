@@ -11,13 +11,13 @@ test("orchestrator returns ordered per-run output and reports unknown agents and
   const runner = async (_ctx: any, agent: any, attempt: any) => {
     calls.push(attempt.prompt);
     if (attempt.prompt === "three") throw new Error("child failed");
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, `response:${attempt.prompt}`);
   };
   const registry = {
     agents: new Map([
-      ["good", { name: "good", description: "d", systemPrompt: "s", source: "project" }],
-      ["bad", { name: "bad", description: "d", systemPrompt: "s", source: "project" }],
+      ["good", { name: "good", description: "d", systemPrompt: "s", source: "project", retainConversation: false }],
+      ["bad", { name: "bad", description: "d", systemPrompt: "s", source: "project", retainConversation: false }],
     ]),
   };
   const manager = makeManager(registry as any, 2, runner);
@@ -38,20 +38,20 @@ test("orchestrator returns ordered per-run output and reports unknown agents and
   assert.match(results[2].error ?? "", /child failed/);
 });
 
-test("orchestrator handles a mixed batch of one spawn and one resume with resumed flags on both results and rendered AgentViews", async () => {
+test("orchestrator preserves attempt kinds for a mixed spawn and resume batch", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(session);
+    agent.bindSession(session);
     return completedRun(agent, `spawn:${attempt.prompt}`);
   };
   const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(agent.retainedSession()!);
+    agent.bindSession(agent.retainedSession()!);
     return completedRun(agent, `resume:${attempt.prompt}`);
   };
   const registry = {
     agents: new Map([
-      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
-      ["fresh", { name: "fresh", description: "d", systemPrompt: "s", source: "project", resumable: true }],
+      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }],
+      ["fresh", { name: "fresh", description: "d", systemPrompt: "s", source: "project", retainConversation: false }],
     ]),
   };
   const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
@@ -60,7 +60,7 @@ test("orchestrator handles a mixed batch of one spawn and one resume with resume
     { kind: "spawn", agent: "chatty", prompt: "first" },
   ]);
   assert.equal(seed.status, "completed");
-  assert.equal(seed.resumed, false);
+  assert.equal(seed.kind, "spawn");
   assert.ok(seed.sessionId);
 
   const updates: any[] = [];
@@ -71,32 +71,31 @@ test("orchestrator handles a mixed batch of one spawn and one resume with resume
 
   assert.equal(results.length, 2);
   assert.equal(results[0].agent, "fresh");
-  assert.equal(results[0].resumed, false);
+  assert.equal(results[0].kind, "spawn");
   assert.equal(results[0].output, "spawn:two");
   assert.equal(results[1].agent, "chatty");
-  assert.equal(results[1].resumed, true);
+  assert.equal(results[1].kind, "resume");
   assert.equal(results[1].output, "resume:three");
   assert.equal(results[1].sessionId, seed.sessionId);
 
   const liveResume = updates[0].sessions[1];
-  assert.equal(liveResume.resumed, true);
+  assert.equal(liveResume.attempt.kind, "resume");
   assert.equal(liveResume.status.kind, "queued");
 
   const final = updates.at(-1);
   assert.equal(final.sessions.length, 2);
-  assert.equal(final.sessions[0].resumed, false);
-  assert.equal(final.sessions[1].resumed, true);
+  assert.equal(final.sessions[0].attempt.kind, "spawn");
+  assert.equal(final.sessions[1].attempt.kind, "resume");
   assert.equal(final.sessions[1].status.kind, "done");
-  assert.equal(final.sessions[1].status.resumed, true);
 });
 
-test("orchestrator.startBatch returns sessions synchronously and a resultsPromise mirroring run() for background:false", async () => {
+test("orchestrator.startBatch returns sessions synchronously for foreground dispatch", async () => {
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, `done:${attempt.prompt}`);
   };
   const registry = {
-    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -108,28 +107,28 @@ test("orchestrator.startBatch returns sessions synchronously and a resultsPromis
       { kind: "spawn", agent: "helper", prompt: "two" },
     ],
     undefined,
-    { background: false },
+    { dispatch: "foreground" },
   );
 
   assert.equal(batch.sessions.length, 2);
   assert.deepEqual(batch.sessions.map(s => s.config.name), ["helper", "helper"]);
-  assert.deepEqual(batch.sessions.map(s => s.dispatch), ["foreground", "foreground"]);
+  assert.deepEqual(batch.sessions.map(s => s.attempt.dispatch), ["foreground", "foreground"]);
 
   const results = (await batch.resultsPromise).map(toResult);
   assert.deepEqual(results.map(r => r.status), ["completed", "completed"]);
   assert.deepEqual(results.map(r => r.output), ["done:one", "done:two"]);
 });
 
-test("orchestrator.startBatch with background:true returns sessions tagged dispatch:background and surfaces them in listSessions while running", async () => {
+test("orchestrator.startBatch tags background dispatch and lists it while running", async () => {
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await runGate;
     return completedRun(agent, `done:${attempt.prompt}`);
   };
   const registry = {
-    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -138,21 +137,21 @@ test("orchestrator.startBatch with background:true returns sessions tagged dispa
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "go" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
 
   assert.equal(batch.sessions.length, 1);
-  assert.equal(batch.sessions[0].dispatch, "background");
+  assert.equal(batch.sessions[0].attempt.dispatch, "background");
 
   const listed = manager.listSessions();
   assert.equal(listed.length, 1);
-  assert.equal(listed[0].dispatch, "background");
+  assert.equal(listed[0].attempt.dispatch, "background");
 
   releaseRun!();
   await batch.resultsPromise;
 });
 
-test("orchestrator.startBatch background:true surfaces preflight failures as transient background attempts", async () => {
+test("orchestrator.startBatch surfaces background preflight failures as transient attempts", async () => {
   const registry = { agents: new Map() };
   const manager = makeManager(registry as any, 2, async () => {
     throw new Error("runner should not be called");
@@ -163,38 +162,37 @@ test("orchestrator.startBatch background:true surfaces preflight failures as tra
     baseCtx(),
     undefined,
     [
-      { kind: "spawn", agent: "missing", prompt: "unknown agent", resumable: true },
+      { kind: "spawn", agent: "missing", prompt: "unknown agent" },
       { kind: "resume", sessionId: "missing-session", prompt: "bad resume" },
     ],
     update => updates.push(update),
-    { background: true },
+    { dispatch: "background" },
   );
 
-  assert.deepEqual(batch.sessions.map(s => s.dispatch), ["background", "background"]);
-  assert.deepEqual(batch.sessions.map(s => s.retention), ["transient", "transient"]);
-  assert.deepEqual(batch.sessions.map(s => s.resumed), [false, true]);
-  assert.deepEqual(updates[0].sessions.map((s: any) => s.resumed), [false, true]);
+  assert.deepEqual(batch.sessions.map(s => s.attempt.dispatch), ["background", "background"]);
+  assert.deepEqual(batch.sessions.map(s => s.retention.catalog), ["transient", "transient"]);
+  assert.deepEqual(batch.sessions.map(s => s.attempt.kind), ["spawn", "resume"]);
+  assert.deepEqual(updates[0].sessions.map((s: any) => s.attempt.kind), ["spawn", "resume"]);
   assert.deepEqual(backgroundStartedDetails(batch.sessions).handles, []);
 
   const snapshots = await batch.resultsPromise;
-  assert.deepEqual(snapshots.map(s => s.status.kind === "done" ? s.status.resumed : undefined), [false, true]);
-  assert.ok(snapshots.every(s => !Object.prototype.hasOwnProperty.call(s, "resumed")));
+  assert.deepEqual(snapshots.map(s => s.attempt.kind), ["spawn", "resume"]);
   const results = snapshots.map(toResult);
   assert.deepEqual(results.map(r => r.status), ["error", "error"]);
 });
 
-test("orchestrator.startBatch background:true ignores parent signal abort and lets children complete", async () => {
+test("orchestrator.startBatch background dispatch ignores parent signal abort and lets children complete", async () => {
   const seenSignals: Array<AbortSignal | undefined> = [];
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
   const runner = async (_ctx: any, agent: any, attempt: any, signal: AbortSignal | undefined) => {
     seenSignals.push(signal);
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     await runGate;
     return completedRun(agent, `done:${attempt.prompt}`);
   };
   const registry = {
-    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
   const controller = new AbortController();
@@ -204,7 +202,7 @@ test("orchestrator.startBatch background:true ignores parent signal abort and le
     controller.signal,
     [{ kind: "spawn", agent: "helper", prompt: "background work" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
 
   controller.abort();
@@ -219,18 +217,18 @@ test("orchestrator.startBatch background:true ignores parent signal abort and le
   assert.notEqual(seenSignals[0], controller.signal);
 });
 
-test("orchestrator.startBatch background:true promotes resumed sessions and supports explicit-ID removal", async () => {
+test("orchestrator.startBatch background dispatch resumes retained sessions and supports explicit-ID removal", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(session);
+    agent.bindSession(session);
     return completedRun(agent, `seed:${attempt.prompt}`);
   };
   const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(agent.retainedSession()!);
+    agent.bindSession(agent.retainedSession()!);
     return completedRun(agent, `resumed:${attempt.prompt}`);
   };
   const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
   const [seed] = await run(manager,baseCtx(), undefined, [
@@ -242,12 +240,12 @@ test("orchestrator.startBatch background:true promotes resumed sessions and supp
     undefined,
     [{ kind: "resume", sessionId: seed.sessionId!, prompt: "follow-up" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
 
   assert.equal(batch.sessions.length, 1);
   assert.equal(batch.sessions[0].id, seed.sessionId);
-  assert.equal(batch.sessions[0].dispatch, "background");
+  assert.equal(batch.sessions[0].attempt.dispatch, "background");
 
   const [resumed] = (await batch.resultsPromise).map(toResult);
   assert.equal(resumed.status, "completed");
@@ -256,7 +254,7 @@ test("orchestrator.startBatch background:true promotes resumed sessions and supp
   const listed = manager.listSessions();
   assert.equal(listed.length, 1);
   assert.equal(listed[0].id, seed.sessionId);
-  assert.equal(listed[0].dispatch, "background");
+  assert.equal(listed[0].attempt.dispatch, "background");
 
   const result = await manager.remove({ sessionIds: [seed.sessionId!] });
   assert.equal(result.removed, 1);
@@ -268,11 +266,11 @@ test("orchestrator.run forwards parentId to every spawned agent and surfaces par
   const seenParents: Array<string | undefined> = [];
   const runner = async (_ctx: any, agent: any) => {
     seenParents.push(agent.parentId);
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "ok");
   };
   const registry = {
-    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
 
@@ -284,7 +282,7 @@ test("orchestrator.run forwards parentId to every spawned agent and surfaces par
       { kind: "spawn", agent: "helper", prompt: "two" },
     ],
     undefined,
-    { background: false, parentId: "parent-1" },
+    { dispatch: "foreground", parentId: "parent-1" },
   ).resultsPromise;
 
   assert.deepEqual(seenParents, ["parent-1", "parent-1"]);

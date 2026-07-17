@@ -1,10 +1,36 @@
 import { test, vi } from "vitest";
 import assert from "node:assert/strict";
 
-import { updateSubagentWidget } from "../../src/ui/widget.js";
+import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "../../src/ui/widget.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 import { mockTheme, renderWidgetContent, type WidgetComponentFactory } from "../helpers/render-widget.js";
+
+test("widget lifecycle clears stale running sessions across reload", () => {
+  const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+  const widgets: unknown[][] = [];
+  let sessions = [fakeAgent({ dispatch: "background", status: { kind: "running", startedAt: 1 } })];
+  const ctx = {
+    hasUI: true,
+    ui: { setWidget: (...args: unknown[]) => widgets.push(args) },
+  };
+
+  registerSubagentWidgetLifecycle(
+    { on: (event, handler) => handlers.set(event, handler) },
+    { listSessions: () => sessions },
+    () => DEFAULT_SUBAGENT_SETTINGS,
+  );
+
+  handlers.get("session_start")?.({}, ctx);
+  assert.equal(typeof widgets.at(-1)?.[1], "function");
+
+  handlers.get("session_shutdown")?.({ reason: "reload" }, ctx);
+  assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: DEFAULT_SUBAGENT_SETTINGS.widgetPlacement }]);
+
+  sessions = [];
+  handlers.get("session_start")?.({ reason: "reload" }, ctx);
+  assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: DEFAULT_SUBAGENT_SETTINGS.widgetPlacement }]);
+});
 
 test("updateSubagentWidget passes a component factory to setWidget when content exists", () => {
   const widgets: unknown[][] = [];
@@ -146,7 +172,7 @@ test("updateSubagentWidget clears the widget when only foreground-transient agen
   assert.deepEqual(widgets, [["subagent", undefined, { placement: DEFAULT_SUBAGENT_SETTINGS.widgetPlacement }]]);
 });
 
-test("updateSubagentWidget keeps active foreground-resumable agents visible", () => {
+test("updateSubagentWidget keeps active foreground-retainConversation agents visible", () => {
   const widgets: unknown[][] = [];
   updateSubagentWidget(
     {
@@ -156,7 +182,7 @@ test("updateSubagentWidget keeps active foreground-resumable agents visible", ()
     [
       fakeAgent({
         retention: "persistent",
-        config: { name: "resumable-inline", resumable: true },
+        config: { name: "retainConversation-inline", retainConversation: true },
         status: { kind: "running", startedAt: 1 },
       }),
     ],
@@ -165,8 +191,8 @@ test("updateSubagentWidget keeps active foreground-resumable agents visible", ()
 
   assert.equal(typeof widgets[0][1], "function");
   const lines = renderWidgetContent(widgets[0][1] as WidgetComponentFactory, mockTheme(), 80).join("\n");
-  assert.match(lines, /Resumable · 1 running/);
-  assert.match(lines, /resumable-inline/);
+  assert.match(lines, /Retained · 1 running/);
+  assert.match(lines, /retainConversation-inline/);
 });
 
 test("updateSubagentWidget notifies on render failure", () => {

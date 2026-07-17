@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
-import type { AgentUpdateKind } from "../domain/agent-lifecycle.js";
+import type { AgentDispatch, AgentUpdateKind } from "../domain/agent-lifecycle.js";
 import type { ResultEntry } from "../domain/agent-result.js";
 import { effectiveStatus } from "../domain/agent-decisions.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
@@ -21,8 +21,21 @@ export type { RunUpdate, RunUpdateListener } from "./run-group.js";
 export type { ResultEntry } from "../domain/agent-result.js";
 
 export interface StartRunOptions {
-  background: boolean;
+  dispatch: AgentDispatch;
   parentId?: string;
+}
+
+export interface SessionConversationMessage {
+  readonly role: "user" | "assistant" | "tool" | "toolResult";
+  readonly text: string;
+  readonly toolName?: string;
+  readonly isError?: boolean;
+}
+
+export interface SessionConversationDetail {
+  readonly session: AgentSnapshot;
+  readonly messages: readonly SessionConversationMessage[];
+  readonly pending: { readonly steering: readonly string[]; readonly followUp: readonly string[] };
 }
 
 export interface RunHandle {
@@ -60,11 +73,34 @@ export class AgentManager {
   listSessions(filter?: { status?: SessionStatus[] }): AgentSnapshot[] {
     const listed = this._agents
       .filter(agent => !this._removingSessionIds.has(agent.id))
-      .filter(agent => agent.catalogRetention.shouldRemainCataloged);
+      .filter(agent => agent.retentionDecision.cataloged);
     const views = listed.map(agent => agent.snapshot());
     if (!filter || filter.status === undefined) return views;
     const allowed = new Set(filter.status);
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
+  }
+
+  sessionConversation(sessionId: string): SessionConversationDetail {
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup) throw new Error(lookup.error);
+    return this._conversationDetail(lookup.agent);
+  }
+
+  async stopSession(sessionId: string): Promise<void> {
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup) throw new Error(lookup.error);
+    await lookup.agent.abort("Stopped by user.");
+  }
+
+  async steerSession(sessionId: string, text: string): Promise<void> {
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup) throw new Error(lookup.error);
+    if (lookup.agent.status.kind !== "running") {
+      throw new Error(`Cannot steer subagent session ${sessionId} while it is not running.`);
+    }
+    const session = lookup.agent.retainedSession();
+    if (!session) throw new Error(`Subagent session ${sessionId} has not started.`);
+    await session.steer(text);
   }
 
   configure(options: { maxRunning?: number }) {
@@ -95,7 +131,7 @@ export class AgentManager {
     const { skipBackground = false, reason } = options;
     const toCancel = this._agents
       .filter(a => a.parentId === parentSessionId)
-      .filter(a => !(skipBackground && a.background));
+      .filter(a => !(skipBackground && a.snapshot().attempt.dispatch === "background"));
 
     for (const child of toCancel) {
       await this.cancelDescendantsOf(child.id, options);
@@ -185,13 +221,13 @@ export class AgentManager {
     this._groups.set(groupId, group);
 
     // Background runs deliberately decouple from the caller's cancellation signal.
-    const childSignal = options.background ? undefined : signal;
+    const childSignal = options.dispatch === "background" ? undefined : signal;
     const touched = new Set<string>();
 
-    const { background, parentId } = options;
+    const { dispatch, parentId } = options;
     const results = tasks.map((task, inputIndex) => {
       const result = resolveTask({
-        task, background, groupId, inputIndex, parentId, registry: this.registry,
+        task, dispatch, groupId, inputIndex, parentId, registry: this.registry,
         findAgent: id => this._agents.find(a => a.id === id),
         allocateSessionId: () => this._sessionIdAllocator.allocate(),
         listener: (agent, update) => this._agentUpdate(agent, update),
@@ -221,7 +257,7 @@ export class AgentManager {
     const resultsPromise = Promise.all(results)
       .finally(() => {
         this._agents = this._agents.filter(
-          agent => !touched.has(agent.id) || agent.catalogRetention.shouldRemainCataloged
+          agent => !touched.has(agent.id) || agent.retentionDecision.cataloged
         );
 
         group.flush();
@@ -256,6 +292,18 @@ export class AgentManager {
     visit(snapshot.id);
     if (!this._agents.some(agent => agent.id === snapshot.id)) this._descendantsByAncestor.delete(snapshot.id);
     return { ...snapshot, subagents };
+  }
+
+  private _conversationDetail(agent: Agent): SessionConversationDetail {
+    const runtime = agent.retainedSession();
+    return {
+      session: agent.snapshot(),
+      messages: projectConversationMessages((runtime?.messages ?? []).slice(-60)),
+      pending: {
+        steering: runtime?.getSteeringMessages?.() ?? [],
+        followUp: runtime?.getFollowUpMessages?.() ?? [],
+      },
+    };
   }
 
   /** Looks up an agent by sessionId or returns the standard not-found error entry. */
@@ -320,5 +368,75 @@ export class AgentManager {
         fanoutEnd({});
       });
     this._pendingFinalize.set(agent.id, promise);
+  }
+}
+
+function projectConversationMessages(messages: readonly unknown[]): SessionConversationMessage[] {
+  const projected: SessionConversationMessage[] = [];
+  for (const value of messages) {
+    if (!value || typeof value !== "object") continue;
+    const message = value as Record<string, unknown>;
+    const role = message.role;
+    const content = Array.isArray(message.content) ? message.content : [];
+    if (role === "user" || role === "assistant") {
+      const text = projectTextContent(content, 1_200);
+      if (text) projected.push({ role, text });
+      if (role === "assistant") {
+        for (const part of content) {
+          if (!part || typeof part !== "object") continue;
+          const block = part as Record<string, unknown>;
+          if (block.type !== "toolCall" || typeof block.name !== "string") continue;
+          const argumentsText = summarizeToolArguments(block.arguments);
+          projected.push({
+            role: "tool",
+            text: argumentsText ? `${block.name} ${argumentsText}` : block.name,
+            toolName: block.name,
+          });
+        }
+      }
+    } else if (role === "toolResult") {
+      const text = projectTextContent(content, 400);
+      const toolName = typeof message.toolName === "string" ? message.toolName : undefined;
+      projected.push({
+        role: "toolResult",
+        text: text || toolName || "Tool result",
+        ...(toolName ? { toolName } : {}),
+        ...(typeof message.isError === "boolean" ? { isError: message.isError } : {}),
+      });
+    }
+  }
+  return projected;
+}
+
+function projectTextContent(content: readonly unknown[], maxLength: number): string {
+  let text = "";
+  let truncated = false;
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const block = part as Record<string, unknown>;
+    if (block.type !== "text" || typeof block.text !== "string") continue;
+    const separator = text ? "\n" : "";
+    const remaining = maxLength - text.length - separator.length;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    text += separator + block.text.slice(0, remaining);
+    if (block.text.length > remaining) {
+      truncated = true;
+      break;
+    }
+  }
+  return truncated ? `${text}…` : text;
+}
+
+function summarizeToolArguments(value: unknown): string {
+  if (value === undefined) return "";
+  try {
+    const text = JSON.stringify(value);
+    if (!text) return "";
+    return text.length > 160 ? `${text.slice(0, 159)}…` : text;
+  } catch {
+    return "";
   }
 }

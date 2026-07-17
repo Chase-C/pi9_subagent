@@ -12,7 +12,7 @@ export interface PrepareSubagentRuntimeAgentManager {
 export interface PrepareSubagentRuntimeAgentRegistry {
   reload(cwd: string, options: {
     discovery?: Partial<SubagentAgentDiscoverySettings>;
-    defaultResumable?: boolean;
+    defaultRetainConversation?: boolean;
     onWarning?: (message: string) => void;
   }): Promise<void>;
 }
@@ -35,7 +35,7 @@ export async function prepareSubagentRuntime({
   if (agentRegistry) {
     await agentRegistry.reload(ctx.cwd, {
       discovery: settings.agentDiscovery,
-      defaultResumable: settings.runtime.defaultResumable,
+      defaultRetainConversation: settings.runtime.defaultRetainConversation,
       onWarning: message => ctx.ui?.notify?.(message, "warning"),
     });
   }

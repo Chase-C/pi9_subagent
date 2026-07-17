@@ -30,7 +30,7 @@ export function serializeAgentConfig(config: AgentConfig) {
     thinking: config.thinking,
     tools: config.tools,
     skills: config.skills,
-    resumable: config.resumable,
+    retainConversation: config.retainConversation,
     sourcePath: config.sourcePath,
   };
 }
@@ -40,9 +40,9 @@ export function listAgentDefinitions(agentRegistry: AgentRegistry) {
 }
 
 export function listAgentDefinitionsForModel(agentRegistry: AgentRegistry) {
-  return listAgentDefinitions(agentRegistry).map(({ resumable, ...agent }) => ({
+  return listAgentDefinitions(agentRegistry).map(({ retainConversation, ...agent }) => ({
     ...agent,
-    defaultResumable: resumable,
+    defaultRetainConversation: retainConversation,
   }));
 }
 
@@ -52,11 +52,10 @@ export interface ModelInventoryEntry {
   label?: string;
   parentSessionId?: string;
   status: SessionStatus;
-  dispatch: AgentSnapshot["dispatch"];
-  capabilities: {
-    canResume: boolean;
-    canRemove: boolean;
-  };
+  attempt: AgentSnapshot["attempt"];
+  conversation: Pick<AgentSnapshot["conversation"], "policy" | "available">;
+  retention: AgentSnapshot["retention"];
+  capabilities: AgentSnapshot["capabilities"];
 }
 
 export interface ModelInventory {
@@ -83,11 +82,13 @@ function serializeSessionForModel(session: AgentSnapshot): ModelInventoryEntry {
     ...(session.label !== undefined ? { label: session.label } : {}),
     ...(session.parentSessionId !== undefined ? { parentSessionId: session.parentSessionId } : {}),
     status: serializeStatusForInventory(session.status),
-    dispatch: session.dispatch,
-    capabilities: {
-      canResume: session.capabilities.canResume,
-      canRemove: session.capabilities.canRemove,
+    attempt: session.attempt,
+    conversation: {
+      policy: session.conversation.policy,
+      available: session.conversation.available,
     },
+    retention: session.retention,
+    capabilities: session.capabilities,
   };
 }
 

@@ -80,7 +80,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Skip subagent when delegation overhead exceeds doing the work directly, or when its output cannot be verified or consumed without repeating the work.",
       "Call subagent action=agents before choosing an agent unless the user named one explicitly or definitions were already listed.",
       "Subagents spawn with no knowledge of the parent conversation — the prompt is everything they receive, so include all information the task requires.",
-      "Use subagent background=true only when the parent has independent work to continue; otherwise prefer foreground results.",
+      "Use subagent dispatch: \"background\" only when the parent has independent work to continue; otherwise prefer foreground results.",
     ],
     parameters: SubagentParams,
     renderCall(args, theme, context) {

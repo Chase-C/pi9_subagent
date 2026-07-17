@@ -42,7 +42,7 @@ export function projectSubagentSessionIndex(snapshot: ReturnType<Agent["snapshot
     agent: snapshot.config.name,
     ...(snapshot.label !== undefined ? { label: snapshot.label } : {}),
     status: status.outcome,
-    dispatch: snapshot.dispatch,
+    dispatch: snapshot.attempt.dispatch,
     retention: snapshot.retention,
     completedAt: status.completedAt,
     ...(startedAt !== undefined ? { startedAt, elapsedMs: Math.max(0, status.completedAt - startedAt) } : {}),

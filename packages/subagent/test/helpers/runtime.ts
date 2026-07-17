@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { toResult, type AgentResult } from "../../src/domain/agent-result.js";
 import { AgentManager, type AgentRunner, type RunUpdateListener } from "../../src/runtime/agent-manager.js";
@@ -28,7 +28,7 @@ export function run(
   onUpdate?: RunUpdateListener,
   options: { parentId?: string } = {},
 ): Promise<AgentResult[]> {
-  return manager.startRun(ctx, signal, tasks, onUpdate, { background: false, ...options })
+  return manager.startRun(ctx, signal, tasks, onUpdate, { dispatch: "foreground", ...options })
     .resultsPromise.then(snapshots => snapshots.map(toResult));
 }
 
@@ -39,7 +39,7 @@ export const makeSession = () => ({
   subscribe: () => () => {},
   prompt: async () => {},
   abort: () => {},
-});
+}) as unknown as AgentSession;
 
 /** Pick the resume or spawn runner based on attempt kind. */
 export const mergeRunners = (

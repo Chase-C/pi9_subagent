@@ -4,6 +4,28 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Replace the lifecycle contract with immutable spawn-time conversation policy (`retainConversation`), attempt-scoped foreground/background `dispatch`, and attempt-scoped history.
+- Replace lifecycle snapshot and result fields with structured attempt, conversation, retention, and capability projections. No migration code, compatibility aliases, or compatibility projections are provided; legacy task/frontmatter fields are rejected and the old settings key is ignored.
+- Make spawn policy and label immutable: resume tasks accept only a session handle and prompt.
+
+### Added
+
+- Add filterable flat/tree session projections, with running descendants nested under their parents and retained terminal sessions kept at the root.
+- Add a full-width conversation mode for running and resumable sessions, with direct messaging and live transcript updates.
+
+### Changed
+
+- Centralize catalog, conversation, result, resume/remove, and widget decisions around retention reasons and capabilities.
+- Replace the separate `/subagents` dialogs with one overlay for Sessions, Agents, and Settings.
+- Rename the widget section to Retained and derive membership from retention reasons and capabilities.
+- Let users enter a conversation from Sessions and message a running subagent directly.
+
+### Fixed
+
+- Drop queued background completion notifications when a later foreground or background attempt supersedes them.
+
 ## [0.5.1] - 2026-07-16
 
 ### Changed

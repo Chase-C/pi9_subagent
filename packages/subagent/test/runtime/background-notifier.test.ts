@@ -116,8 +116,8 @@ const idleCtx: FakeCtx = { isIdle: () => true };
 function makeManager(runner: any, resumeRunner?: any): AgentManager {
   const registry = {
     agents: new Map([
-      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }],
-      ["resumable", { name: "resumable", description: "d", systemPrompt: "s", source: "project", resumable: true }],
+      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }],
+      ["retainConversation", { name: "retainConversation", description: "d", systemPrompt: "s", source: "project", retainConversation: true }],
     ]),
   };
   const combined = (ctx: any, agent: any, attempt: any, signal: any) =>
@@ -131,14 +131,14 @@ async function runBackgroundOne(manager: AgentManager, prompt = "go") {
     undefined,
     [{ kind: "spawn", agent: "oneshot", prompt }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await handle.resultsPromise;
   return handle.sessions[0].id;
 }
 
 const completingRunner = async (_ctx: any, agent: any, _attempt: any) => {
-  agent.attach(makeSession());
+  agent.bindSession(makeSession());
   return completedRun(agent, "ok");
 };
 
@@ -454,7 +454,7 @@ test("BackgroundNotifier leaves pending auto notification for steer delivery if 
 
 test("BackgroundNotifier payload references subagent results, includes per-session metadata, and never includes output or error from the child", async () => {
   const manager = makeManager(async (_ctx: any, agent: any, _attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "SUPER-SECRET-CHILD-OUTPUT");
   });
   const pi = fakePi();
@@ -466,7 +466,7 @@ test("BackgroundNotifier payload references subagent results, includes per-sessi
     undefined,
     [{ kind: "spawn", agent: "oneshot", prompt: "go", label: "scout one" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await batch.resultsPromise;
   const sessionId = batch.sessions[0].id;
@@ -586,7 +586,7 @@ test("BackgroundNotifier in steer mode coalesces multiple completions into a sin
 
 test("BackgroundNotifier in steer mode payload contains per-session metadata, references subagent results, and never includes child output or error", async () => {
   const manager = makeManager(async (_ctx: any, agent: any, _attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "SUPER-SECRET-CHILD-OUTPUT");
   });
   const pi = fakePi();
@@ -597,7 +597,7 @@ test("BackgroundNotifier in steer mode payload contains per-session metadata, re
     undefined,
     [{ kind: "spawn", agent: "oneshot", prompt: "go", label: "steer-only" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await batch.resultsPromise;
   const sessionId = batch.sessions[0].id;
@@ -644,13 +644,112 @@ test("BackgroundNotifier in steer mode immediately steers an active parent run w
   notifier.unsubscribe();
 });
 
+test("BackgroundNotifier drops a queued completion when the session resumes in foreground before delivery", async () => {
+  let finishResume = () => {};
+  const resumeGate = new Promise<void>(resolve => { finishResume = resolve; });
+  const resumeRunner = async (_ctx: any, agent: any, _attempt: any) => {
+    agent.bindSession(makeSession());
+    await resumeGate;
+    return completedRun(agent, "foreground result");
+  };
+  const manager = makeManager(completingRunner, resumeRunner);
+  const pi = fakePi();
+  const retry = manualRetry();
+  let idle = false;
+  const notifier = new BackgroundNotifier({
+    pi,
+    manager,
+    getMode: () => "auto",
+    scheduleRetry: retry.schedule,
+  });
+
+  pi.fireSessionStart({ isIdle: () => idle });
+  const batch = manager.startRun(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "retainConversation", prompt: "go" }],
+    undefined,
+    { dispatch: "background" },
+  );
+  await batch.resultsPromise;
+  const sessionId = batch.sessions[0].id;
+  assert.equal(retry.pending(), 1, "the first completion is queued while the parent is active");
+
+  const resumed = manager.startRun(
+    baseCtx(),
+    undefined,
+    [{ kind: "resume", sessionId, prompt: "continue" }],
+    undefined,
+    { dispatch: "foreground" },
+  );
+  idle = true;
+  retry.flushOne();
+  assert.equal(pi.sent.length, 0, "the superseded background completion is not delivered");
+
+  finishResume();
+  await resumed.resultsPromise;
+  assert.equal(pi.sent.length, 0, "the foreground attempt does not produce a background notification");
+
+  notifier.unsubscribe();
+});
+
+test("BackgroundNotifier replaces a queued completion when the session resumes in background before delivery", async () => {
+  let finishResume = () => {};
+  const resumeGate = new Promise<void>(resolve => { finishResume = resolve; });
+  const resumeRunner = async (_ctx: any, agent: any, _attempt: any) => {
+    agent.bindSession(makeSession());
+    await resumeGate;
+    return completedRun(agent, "background result");
+  };
+  const manager = makeManager(completingRunner, resumeRunner);
+  const pi = fakePi();
+  const retry = manualRetry();
+  let idle = false;
+  const notifier = new BackgroundNotifier({
+    pi,
+    manager,
+    getMode: () => "auto",
+    scheduleRetry: retry.schedule,
+  });
+
+  pi.fireSessionStart({ isIdle: () => idle });
+  const batch = manager.startRun(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "retainConversation", prompt: "go" }],
+    undefined,
+    { dispatch: "background" },
+  );
+  await batch.resultsPromise;
+  const sessionId = batch.sessions[0].id;
+  assert.equal(retry.pending(), 1, "the first completion is queued while the parent is active");
+
+  const resumed = manager.startRun(
+    baseCtx(),
+    undefined,
+    [{ kind: "resume", sessionId, prompt: "continue" }],
+    undefined,
+    { dispatch: "background" },
+  );
+  idle = true;
+  retry.flushOne();
+  assert.equal(pi.sent.length, 0, "the superseded completion is not delivered while the new attempt runs");
+
+  finishResume();
+  await resumed.resultsPromise;
+  assert.equal(pi.sent.length, 1, "the resumed background attempt notifies when it completes");
+  assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+
+  notifier.unsubscribe();
+});
+
 test("BackgroundNotifier notifies again when a background session resumes and completes with the same sessionId", async () => {
   const runner = async (_ctx: any, agent: any, _attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "ok");
   };
   const resumeRunner = async (_ctx: any, agent: any, _attempt: any) => {
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "ok again");
   };
   const manager = makeManager(runner, resumeRunner);
@@ -661,9 +760,9 @@ test("BackgroundNotifier notifies again when a background session resumes and co
   const batch = manager.startRun(
     baseCtx(),
     undefined,
-    [{ kind: "spawn", agent: "resumable", prompt: "go" }],
+    [{ kind: "spawn", agent: "retainConversation", prompt: "go" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await batch.resultsPromise;
   const sessionId = batch.sessions[0].id;
@@ -678,7 +777,7 @@ test("BackgroundNotifier notifies again when a background session resumes and co
     undefined,
     [{ kind: "resume", sessionId, prompt: "continue" }],
     undefined,
-    { background: true },
+    { dispatch: "background" },
   );
   await resumed.resultsPromise;
 

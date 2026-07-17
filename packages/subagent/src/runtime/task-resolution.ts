@@ -1,11 +1,12 @@
 import { Agent, type AgentUpdateListener } from "../domain/agent.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
+import type { AgentDispatch } from "../domain/agent-lifecycle.js";
 import { preflightFailure } from "../domain/preflight-failure.js";
 import type { TaskRequest } from "../schema.js";
 
 export interface ResolveTaskArgs {
   task: TaskRequest;
-  background: boolean;
+  dispatch: AgentDispatch;
   groupId: string;
   inputIndex: number;
   registry: AgentRegistry;
@@ -17,7 +18,7 @@ export interface ResolveTaskArgs {
 
 /** Resolve one task and apply a valid resume transition to its existing Agent. */
 export function resolveTask(args: ResolveTaskArgs) {
-  const { task, background, registry, findAgent, listener, parentId } = args;
+  const { task, dispatch, registry, findAgent, listener, parentId } = args;
   if (task.kind === "spawn") {
     const config = registry.agents.get(task.agent);
     if (config) {
@@ -25,14 +26,14 @@ export function resolveTask(args: ResolveTaskArgs) {
       if (id !== undefined) {
         return {
           kind: "spawn" as const,
-          agent: new Agent(id, config, task, listener, { background, parentId }),
+          agent: new Agent(id, config, task, listener, { dispatch, parentId }),
         };
       }
 
       return {
         kind: "failure" as const,
         failure: preflightFailure(
-          { groupId: args.groupId, inputIndex: args.inputIndex, task, background },
+          { groupId: args.groupId, inputIndex: args.inputIndex, task, dispatch },
           { error: "Subagent session ID space exhausted." },
         ),
       };
@@ -42,36 +43,33 @@ export function resolveTask(args: ResolveTaskArgs) {
     const error = `Unknown agent: ${task.agent}. Available agents:\n${available}`;
     return {
       kind: "failure" as const,
-      failure: preflightFailure({ groupId: args.groupId, inputIndex: args.inputIndex, task, background }, { error }),
+      failure: preflightFailure({ groupId: args.groupId, inputIndex: args.inputIndex, task, dispatch }, { error }),
     };
   }
 
   const target = findAgent(task.sessionId);
   let error: string | undefined;
   if (!target) {
-    error = `Unknown resumable subagent session: ${task.sessionId}`;
+    error = `Unknown retained subagent session: ${task.sessionId}`;
   } else if (target.hasCurrentAttempt) {
     error = `Cannot resume subagent session ${task.sessionId}: it is already resuming.`;
-  } else if (!target.resumableEnabled) {
-    error = `Cannot resume subagent session ${task.sessionId}: it was created with resumable: false.`;
-  } else if (!target.canResume) {
+  } else if (!target.retentionDecision.canResume) {
     error = `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.outcome : target.status.kind}.`;
   } else {
-    target.beginResume(task.prompt, task.resumable, background, task.label);
+    target.beginResume(task.prompt, dispatch);
     return { kind: "resume" as const, agent: target };
   }
 
   return {
     kind: "failure" as const,
     failure: preflightFailure(
-      { groupId: args.groupId, inputIndex: args.inputIndex, task, background },
+      { groupId: args.groupId, inputIndex: args.inputIndex, task, dispatch },
       { error: error!, target: target ? {
         id: target.id,
         agentName: target.agentName,
+        label: target.label,
         config: target.config,
         requestedConfig: target.requestedConfig,
-        spawn: target.spawn,
-        shouldRetainConversation: target.shouldRetainConversation,
       } : undefined },
     ),
   };

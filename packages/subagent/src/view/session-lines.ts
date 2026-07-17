@@ -5,9 +5,7 @@ import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import {
   effectiveStatus,
   getActiveTools,
-  getCompletedAt,
   getSnippet,
-  getStartedAt,
   getToolUseCount,
   isActiveStatusKind,
 } from "../domain/agent-decisions.js";
@@ -16,12 +14,9 @@ import { compact } from "./view-helpers.js";
 import { applyBold, type Bold, type DisplayLine } from "./text-component.js";
 import {
   abbreviateTokens,
-  formatTimestamp,
-  formatUsage,
   orderAsTree,
   plural,
   rowElapsed,
-  snippetLines,
   statusPresentation,
 } from "./format-helpers.js";
 import {
@@ -34,67 +29,7 @@ import {
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
 
-export function formatSubagentSessionSummary(agent: AgentSnapshot): string {
-  return [agent.label ?? agent.config.name, effectiveStatus(agent.status), ...sessionBadges(agent)].join(" · ");
-}
-
-function sessionBadges(agent: AgentSnapshot) {
-  return [
-    agent.config.resumable ? "resumable" : undefined,
-    agent.dispatch === "background" ? "dispatch:background" : undefined,
-    `session:${agent.id}`,
-  ].filter((badge): badge is string => Boolean(badge));
-}
-
-export function formatSubagentSessionInspect(
-  agent: AgentSnapshot,
-  now = Date.now(),
-  display: SubagentDisplaySettings = DEFAULT_DISPLAY,
-): string[] {
-  const status = agent.status;
-  const startedAt = getStartedAt(status);
-  const completedAt = getCompletedAt(status);
-  const activeTools = getActiveTools(agent);
-
-  const lines = [
-    `Session ${agent.id}`,
-    `Status: ${effectiveStatus(status)}${agent.config.resumable ? " · resumable" : ""}`,
-    `Agent: ${agent.config.name}${agent.config.source ? ` (${agent.config.source})` : ""}`,
-  ];
-
-  if (agent.config.description) lines.push(`Description: ${agent.config.description}`);
-  if (agent.config.model || agent.config.thinking) {
-    lines.push(`Model: ${agent.config.model ?? "default"}${agent.config.thinking ? ` · thinking:${agent.config.thinking}` : ""}`);
-  }
-  lines.push(`Tools: ${agent.config.tools?.length ? agent.config.tools.join(", ") : "default"}`);
-  if (agent.config.sourcePath) lines.push(`Path: ${agent.config.sourcePath}`);
-  if (activeTools.length) {
-    lines.push(`Active tool${activeTools.length === 1 ? "" : "s"}: ${activeTools.join(", ")}`);
-  }
-  const toolUses = getToolUseCount(agent);
-  lines.push(`Progress: ${plural(agent.activity.turns, "turn")} · ${plural(toolUses, "tool use")} · ${plural(agent.activity.compactions, "compaction")}`);
-  if (agent.usage) lines.push(`Usage: ${formatUsage(agent.usage)}`);
-  lines.push(`Timestamps: created ${formatTimestamp(agent.createdAt)}${startedAt ? ` · started ${formatTimestamp(startedAt)}` : ""}${completedAt ? ` · completed ${formatTimestamp(completedAt)}` : ""} · elapsed ${rowElapsed(agent, now)}`);
-
-  const snippet = getSnippet(status);
-  if (snippet) {
-    // The inspect view is a labeled metadata list, so the output/error keeps a key here even
-    // though the run/results body now renders the snippet bare.
-    const label = effectiveStatus(status) === "completed" ? "Output" : "Error";
-    const rendered = snippetLines(snippet, 0, undefined, display).map(line => line.text);
-    rendered[0] = `${label}: ${rendered[0]}`;
-    lines.push(...rendered);
-  }
-  if (agent.activity.messageSnippet) lines.push(`Message: ${compact(agent.activity.messageSnippet, display.messageSnippetLength)}`);
-
-  const actions = ["inspect"];
-  if (agent.capabilities.canResume) actions.push("resume");
-  if (agent.capabilities.canRemove) actions.push("remove");
-  lines.push(`Actions: ${actions.join(", ")}`);
-  return lines;
-}
-
-export type WidgetSectionTitle = "Background" | "Resumable";
+export type WidgetSectionTitle = "Background" | "Retained";
 
 export type WidgetRow = {
   glyph: string;
@@ -114,7 +49,7 @@ export function hasBackgroundAncestor(
   while (parentId !== undefined) {
     const parent = byId.get(parentId);
     if (!parent) return false;
-    if (parent.dispatch === "background") return true;
+    if (parent.attempt.dispatch === "background") return true;
     parentId = parent.parentSessionId;
   }
   return false;
@@ -147,11 +82,17 @@ export function buildWidgetModel(
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
 ): WidgetModel {
   const byId = new Map(agents.map(a => [a.id, a]));
-  const background = agents.filter(a => a.dispatch === "background");
-  const resumable = agents.filter(a => a.dispatch === "foreground" && a.retention === "persistent");
+  const background = agents.filter(a =>
+    (isActiveStatusKind(a.status.kind) && a.attempt.dispatch === "background")
+    || a.retention.reasons.includes("background-result"),
+  );
+  const backgroundIds = new Set(background.map(agent => agent.id));
+  const retained = agents.filter(a =>
+    !backgroundIds.has(a.id) && a.retention.catalog === "persistent",
+  );
   const foregroundRunning = agents.filter(
-    a => a.dispatch === "foreground"
-      && a.retention === "transient"
+    a => a.attempt.dispatch === "foreground"
+      && a.retention.catalog === "transient"
       && isActiveStatusKind(a.status.kind)
       && !hasBackgroundAncestor(a, byId),
   ).length;
@@ -159,8 +100,8 @@ export function buildWidgetModel(
   const sections: WidgetSection[] = [];
   const backgroundSection = buildSection("Background", background, display, byId);
   if (backgroundSection) sections.push(backgroundSection);
-  const resumableSection = buildSection("Resumable", resumable, display, byId);
-  if (resumableSection) sections.push(resumableSection);
+  const retainedSection = buildSection("Retained", retained, display, byId);
+  if (retainedSection) sections.push(retainedSection);
 
   if (sections.length === 0) return { sections: [], byId };
 
@@ -186,9 +127,9 @@ export function renderWidgetModelLines(
   if (!options) return renderWidgetModelStacked(model, now, formatRow);
 
   const background = model.sections.find(section => section.title === "Background");
-  const resumable = model.sections.find(section => section.title === "Resumable");
+  const retained = model.sections.find(section => section.title === "Retained");
   const leftLines = background ? renderWidgetSectionLines(background, model, now, formatRow) : [];
-  const rightLines = resumable ? renderWidgetSectionLines(resumable, model, now, formatRow) : [];
+  const rightLines = retained ? renderWidgetSectionLines(retained, model, now, formatRow) : [];
   const leftNaturalWidth = maxLineWidth(leftLines);
 
   if (resolveWidgetLayout(options.layout, options.width, hasBothColumnSections(model.sections), leftNaturalWidth) === "columns") {
@@ -263,7 +204,7 @@ function buildSection(
 ): WidgetSection | undefined {
   const counts = { running: 0, queued: 0, ready: 0, error: 0 };
   for (const agent of agents) {
-    if (!isActiveStatusKind(agent.status.kind) && agent.retention !== "persistent") continue;
+    if (!isActiveStatusKind(agent.status.kind) && agent.retention.catalog !== "persistent") continue;
 
     if (agent.status.kind === "running") counts.running++;
     else if (agent.status.kind === "queued") counts.queued++;
@@ -275,7 +216,7 @@ function buildSection(
 
   const rowAgents = agents.filter(agent => {
     if (isActiveStatusKind(agent.status.kind)) return true;
-    return agent.retention === "persistent" && display.widgetShowRetainedSessions;
+    return agent.retention.catalog === "persistent" && display.widgetShowRetainedSessions;
   });
   const sorted = sortWidgetAgents(rowAgents);
   const maxRows = display.widgetMaxRowsPerSection;
@@ -351,7 +292,7 @@ export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, 
   const parts = sessionRowSegments(row, now, applyBold(bold, row.label ?? row.config.name), { status, toolCount: true });
 
   if (row.activity.messageSnippet) parts.push(`"${compact(row.activity.messageSnippet, display.messageSnippetLength)}"`);
-  if (row.dispatch === "background") parts.push("dispatch:background");
+  if (row.attempt.dispatch === "background") parts.push("dispatch:background");
 
   if (!isActiveStatusKind(status)) {
     const rawTail = getSnippet(row.status);
@@ -383,7 +324,7 @@ export function formatSessionIdentityLine(row: AgentSnapshot, now: number, bold?
 export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold, staticRunning = false): DisplayLine {
   const line = formatSessionIdentityLine(row, now, bold, staticRunning);
   const metadata = [
-    ...(row.resumed ? ["resumed"] : []),
+    ...(row.attempt.kind === "resume" ? ["attempt:resume"] : []),
     plural(getToolUseCount(row), "tool call"),
     plural(row.usage?.totalTokens ?? 0, "token"),
     rowElapsed(row, now),
@@ -403,7 +344,7 @@ function sessionRowSegments(
 ) {
   const parts = [
     name,
-    ...(row.resumed ? ["resumed"] : []),
+    ...(row.attempt.kind === "resume" ? ["attempt:resume"] : []),
     ...(options.status ? [options.status] : []),
     plural(row.activity.turns, "turn"),
     ...(options.toolCount ? [plural(getToolUseCount(row), "tool")] : []),

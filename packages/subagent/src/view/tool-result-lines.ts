@@ -1,6 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
 
-import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { ResultEntry } from "../domain/agent-result.js";
 import {
@@ -35,32 +34,6 @@ import {
 } from "./details.js";
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
-
-export function formatAgentConfigSummary(config: AgentListingEntry | AgentConfig): string {
-  const badges = [config.source, config.resumable ? "resumable" : undefined].filter(Boolean);
-  return [config.name, ...badges, config.description].join(" · ");
-}
-
-export function formatAgentConfigInspect(config: AgentListingEntry | AgentConfig): string[] {
-  return [
-    `Name: ${config.name}`,
-    `Description: ${config.description}`,
-    ...agentConfigMetadataLines(config),
-  ];
-}
-
-function agentConfigMetadataLines(config: AgentListingEntry | AgentConfig): string[] {
-  const lines = [
-    `Source: ${config.source}`,
-    `Model: ${config.model ?? "default"}`,
-    `Thinking: ${config.thinking ?? "default"}`,
-    `Tools: ${config.tools?.length ? config.tools.join(", ") : "default"}`,
-    `Skills: ${config.skills?.length ? config.skills.join(", ") : "none"}`,
-    `Resumable: ${config.resumable}`,
-  ];
-  if (config.sourcePath) lines.push(`Path: ${config.sourcePath}`);
-  return lines;
-}
 
 export function formatSubagentToolLines(
   details: SubagentDetails,
@@ -279,11 +252,11 @@ function formatInventoryLines(
     const lines: DisplayLine[] = [
       row,
       { text: `${metadataIndent}session:${entry.agent.id}`, color: "muted", hangingIndent: metadataIndent.length },
-      { text: `${metadataIndent}dispatch:${entry.agent.dispatch}`, color: "muted", hangingIndent: metadataIndent.length },
+      { text: `${metadataIndent}dispatch:${entry.agent.attempt.dispatch}`, color: "muted", hangingIndent: metadataIndent.length },
       ...(entry.agent.parentSessionId
         ? [{ text: `${metadataIndent}parent:${entry.agent.parentSessionId}`, color: "muted" as const, hangingIndent: metadataIndent.length }]
         : []),
-      { text: `${metadataIndent}resumable:${entry.agent.config.resumable}`, color: "muted", hangingIndent: metadataIndent.length },
+      { text: `${metadataIndent}retained:${entry.agent.retention.catalog === "persistent"}`, color: "muted", hangingIndent: metadataIndent.length },
     ];
     if (index < ordered.length - 1) lines.push({ text: "" });
     return lines;
@@ -474,10 +447,18 @@ function formatAgentListLines(agents: AgentListingEntry[], expanded: boolean, bo
   }
 
   return agents.flatMap((agent, index) => {
+    const configuration = [
+      `Source: ${agent.source}`,
+      `Model: ${agent.model ?? "default"} · thinking:${agent.thinking ?? "default"}`,
+      `Retain conversation: ${agent.retainConversation}`,
+      `Tools: ${agent.tools?.length ? agent.tools.join(", ") : "default"}`,
+      `Skills: ${agent.skills?.length ? agent.skills.join(", ") : "none"}`,
+      ...(agent.sourcePath ? [`Path: ${agent.sourcePath}`] : []),
+    ];
     const lines = [
       applyBold(bold, agent.name),
       ...agent.description.split(/\r?\n/).map(line => `  ${line}`),
-      ...agentConfigMetadataLines(agent).map(line => `  ${line}`),
+      ...configuration.map(line => `  ${line}`),
     ];
     if (index < agents.length - 1) lines.push("");
     return lines;
