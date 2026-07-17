@@ -3,6 +3,7 @@ import { CURSOR_MARKER, KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { AskComponent } from "../src/component.js";
+import { CHECKED_BOX, EMPTY_BOX } from "../src/glyphs.js";
 
 function theme(): Theme {
   return {
@@ -67,10 +68,10 @@ describe("AskComponent", () => {
 
   it("toggles multi-select options with Space and Enter, then submits from the button", () => {
     const { component, onSubmit } = make({ allowMultiple: true });
-    expect(component.render(80).join("\n")).not.toContain("Staging [selected]");
+    expect(component.render(80).join("\n")).toContain(`┃ ${EMPTY_BOX} Staging`);
 
     component.handleInput(" ");
-    expect(component.render(80).join("\n")).toContain("Staging [selected]");
+    expect(component.render(80).join("\n")).toContain(`┃ ${CHECKED_BOX} Staging`);
 
     component.handleInput("\x1b[B");
     component.handleInput("\r");
@@ -84,6 +85,23 @@ describe("AskComponent", () => {
     expect(onSubmit).toHaveBeenCalledWith({
       selections: [{ option: 0 }, { option: 1 }],
     });
+  });
+
+  it("renders the active unchecked checkbox in the normal text color", () => {
+    const fg = vi.fn((_color: string, text: string) => text);
+    const styledTheme = theme();
+    styledTheme.fg = fg;
+    const { component } = make({ allowMultiple: true, theme: styledTheme });
+
+    component.render(80);
+    expect(fg.mock.calls.filter(([, text]) => text === EMPTY_BOX).map(([color]) => color))
+      .toEqual(["text", "muted", "muted"]);
+
+    fg.mockClear();
+    component.handleInput("\x1b[B");
+    component.render(80);
+    expect(fg.mock.calls.filter(([, text]) => text === EMPTY_BOX).map(([color]) => color))
+      .toEqual(["muted", "text", "muted"]);
   });
 
   it("opens a comment with literal c without selecting, previews it, and saves with Enter", () => {
@@ -149,16 +167,16 @@ describe("AskComponent", () => {
       allowMultiple: true,
     });
     component.handleInput("\x1b[B");
-    expect(component.render(80).join("\n")).not.toContain("Type a response… [selected]");
+    expect(component.render(80).join("\n")).toContain(`┃ ${EMPTY_BOX} Type a response…`);
 
     component.handleInput("\r");
     component.handleInput("Use the fallback");
     component.handleInput("\r");
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(component.render(80).join("\n")).toContain("Type a response… — Use the fallback [selected]");
+    expect(component.render(80).join("\n")).toContain(`${CHECKED_BOX} Type a response… — Use the fallback`);
 
     component.handleInput(" ");
-    expect(component.render(80).join("\n")).not.toContain("Type a response… — Use the fallback [selected]");
+    expect(component.render(80).join("\n")).toContain(`${EMPTY_BOX} Type a response… — Use the fallback`);
     component.handleInput(" ");
     component.handleInput("\x1b[B");
     component.handleInput("\r");

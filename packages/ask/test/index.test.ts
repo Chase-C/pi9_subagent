@@ -534,7 +534,7 @@ describe("ask extension integration", () => {
       { mode: "tui", ui: { custom, notify: vi.fn() }, sessionManager: { getBranch: () => [ask, ...(kind === "summary" ? [summary] : kind === "tool-result" ? [result] : [])] } },
     );
     expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
-      customType: "ask:reanswer", content: "", display: false,
+      customType: "ask:reanswer", content: "Selected: Yes", display: false,
       details: { toolCallId: "call-1", answer: { selections: [{ option: 0 }] } },
     }), { triggerTurn: true, deliverAs: "followUp" });
     expect(emit).not.toHaveBeenCalledWith("ask:reanswered", expect.anything());
