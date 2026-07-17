@@ -1,10 +1,36 @@
 import { test, vi } from "vitest";
 import assert from "node:assert/strict";
 
-import { updateSubagentWidget } from "../../src/ui/widget.js";
+import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "../../src/ui/widget.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 import { mockTheme, renderWidgetContent, type WidgetComponentFactory } from "../helpers/render-widget.js";
+
+test("widget lifecycle clears stale running sessions across reload", () => {
+  const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+  const widgets: unknown[][] = [];
+  let sessions = [fakeAgent({ dispatch: "background", status: { kind: "running", startedAt: 1 } })];
+  const ctx = {
+    hasUI: true,
+    ui: { setWidget: (...args: unknown[]) => widgets.push(args) },
+  };
+
+  registerSubagentWidgetLifecycle(
+    { on: (event, handler) => handlers.set(event, handler) },
+    { listSessions: () => sessions },
+    () => DEFAULT_SUBAGENT_SETTINGS,
+  );
+
+  handlers.get("session_start")?.({}, ctx);
+  assert.equal(typeof widgets.at(-1)?.[1], "function");
+
+  handlers.get("session_shutdown")?.({ reason: "reload" }, ctx);
+  assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: DEFAULT_SUBAGENT_SETTINGS.widgetPlacement }]);
+
+  sessions = [];
+  handlers.get("session_start")?.({ reason: "reload" }, ctx);
+  assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: DEFAULT_SUBAGENT_SETTINGS.widgetPlacement }]);
+});
 
 test("updateSubagentWidget passes a component factory to setWidget when content exists", () => {
   const widgets: unknown[][] = [];

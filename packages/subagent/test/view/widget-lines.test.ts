@@ -62,7 +62,7 @@ test("formatWidgetLines renders Background and Retained sections with header cou
   assert.equal(lines[5], "+1 foreground running");
 });
 
-test("formatWidgetLines keeps active foreground-retainConversation agents in the Retained section", () => {
+test("buildWidgetModel keeps active foreground-retainConversation agents in the Retained section", () => {
   const agents = [
     fakeAgent({
       id: "bg",
@@ -79,24 +79,23 @@ test("formatWidgetLines keeps active foreground-retainConversation agents in the
     }),
   ];
 
-  const lines = formatWidgetLines(agents, 5_000);
+  const model = buildWidgetModel(agents, 5_000);
 
-  assert.equal(lines[0], "Background · 1 ready");
-  assert.match(lines[1], /background/);
-  assert.equal(lines[2], "Retained · 1 running");
-  assert.match(lines[3], /active-helper/);
+  assert.deepEqual(model.sections.map(section => section.title), ["Background", "Retained"]);
+  assert.deepEqual(model.sections.map(section => section.agents.map(agent => agent.id)), [["bg"], ["active-res"]]);
+  assert.equal(model.sections[1].counts.running, 1);
 });
 
-test("formatWidgetLines returns empty when only foreground-transient agents are active", () => {
+test("buildWidgetModel returns no sections when only foreground-transient agents are active", () => {
   const agents = [
     fakeAgent({ retention: "transient", config: { name: "inline" }, status: { kind: "running", startedAt: 1 } }),
     fakeAgent({ id: "q", retention: "transient", config: { name: "waiting" }, status: { kind: "queued" } }),
   ];
 
-  assert.deepEqual(formatWidgetLines(agents, 5_000), []);
+  assert.deepEqual(buildWidgetModel(agents, 5_000).sections, []);
 });
 
-test("formatWidgetLines omits transient terminal background agents but keeps active transient background agents", () => {
+test("buildWidgetModel omits transient terminal background agents but keeps active ones", () => {
   const agents = [
     fakeAgent({
       id: "bg-running",
@@ -132,16 +131,14 @@ test("formatWidgetLines omits transient terminal background agents but keeps act
     }),
   ];
 
-  const lines = formatWidgetLines(agents, 5_000);
+  const model = buildWidgetModel(agents, 5_000);
 
-  assert.equal(lines[0], "Background · 1 running · 1 queued");
-  assert.match(lines[1], /^  [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] runner · 1s$/);
-  assert.equal(lines[2], "  ○ waiting · 4s");
-  assert.equal(lines.length, 3);
-  assert.doesNotMatch(lines.join("\n"), /done-transient|error-transient|ready|error/);
+  assert.equal(model.sections.length, 1);
+  assert.deepEqual(model.sections[0].counts, { running: 1, queued: 1, ready: 0, error: 0 });
+  assert.deepEqual(model.sections[0].agents.map(agent => agent.id), ["bg-running", "bg-queued"]);
 });
 
-test("formatWidgetLines omits retained rows but keeps counts when widgetShowRetainedSessions is false", () => {
+test("buildWidgetModel omits retained rows but keeps counts when configured", () => {
   const agents = [
     fakeAgent({
       dispatch: "background",
@@ -159,12 +156,14 @@ test("formatWidgetLines omits retained rows but keeps counts when widgetShowReta
     }),
   ];
 
-  const lines = formatWidgetLines(agents, 5_000, { ...DEFAULT_DISPLAY, widgetShowRetainedSessions: false });
+  const model = buildWidgetModel(agents, 5_000, { ...DEFAULT_DISPLAY, widgetShowRetainedSessions: false });
 
-  assert.deepEqual(lines, ["Background · 1 ready · 1 error"]);
+  assert.equal(model.sections.length, 1);
+  assert.deepEqual(model.sections[0].counts, { running: 0, queued: 0, ready: 1, error: 1 });
+  assert.deepEqual(model.sections[0].agents, []);
 });
 
-test("formatWidgetLines caps rows per section and keeps in-flight rows preferentially", () => {
+test("buildWidgetModel caps rows per section and keeps in-flight rows preferentially", () => {
   const agents = Array.from({ length: 8 }, (_, i) => fakeAgent({
     id: `bg-${i}`,
     dispatch: "background",
@@ -176,26 +175,23 @@ test("formatWidgetLines caps rows per section and keeps in-flight rows preferent
       : { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
   }));
 
-  const lines = formatWidgetLines(agents, 5_000, { ...DEFAULT_DISPLAY, widgetMaxRowsPerSection: 3 });
+  const model = buildWidgetModel(agents, 5_000, { ...DEFAULT_DISPLAY, widgetMaxRowsPerSection: 3 });
+  const section = model.sections[0];
 
-  assert.equal(lines[0], "Background · 2 running · 6 ready");
-  assert.equal(lines.length, 5);
-  assert.match(lines[1], /^  [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] agent-0/);
-  assert.match(lines[2], /^  [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] agent-1/);
-  assert.equal(lines[3], "  ✓ agent-2 · 1s");
-  assert.equal(lines[4], "  +5 more");
+  assert.deepEqual(section.counts, { running: 2, queued: 0, ready: 6, error: 0 });
+  assert.deepEqual(section.agents.map(agent => agent.id), ["bg-0", "bg-1", "bg-2"]);
+  assert.equal(section.overflow, 5);
 });
 
-test("formatWidgetLines omits footer when widgetShowForeground is false", () => {
+test("buildWidgetModel omits footer when widgetShowForeground is false", () => {
   const agents = [
     fakeAgent({ dispatch: "background", retention: "persistent", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
     fakeAgent({ id: "fg", retention: "transient", config: { name: "inline" }, status: { kind: "running", startedAt: 1 } }),
   ];
 
-  const lines = formatWidgetLines(agents, 5_000, { ...DEFAULT_DISPLAY, widgetShowForeground: false });
+  const model = buildWidgetModel(agents, 5_000, { ...DEFAULT_DISPLAY, widgetShowForeground: false });
 
-  assert.equal(lines.length, 2);
-  assert.doesNotMatch(lines.join("\n"), /foreground running/);
+  assert.equal(model.footer, undefined);
 });
 
 test("buildWidgetModel footer excludes foreground-transient agents nested under a background ancestor", () => {
@@ -368,14 +364,13 @@ test("hasBackgroundAncestor walks the full chain but only through agents present
   assert.equal(hasBackgroundAncestor(orphanLeaf, byId), false);
 });
 
-test("formatWidgetLines never renders foreground-transient agents as section rows", () => {
+test("buildWidgetModel never includes foreground-transient agents in sections", () => {
   const agents = [
     fakeAgent({ dispatch: "background", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
     fakeAgent({ id: "fg", retention: "transient", config: { name: "inline" }, status: { kind: "running", startedAt: 1 } }),
   ];
 
-  const joined = formatWidgetLines(agents, 5_000).join("\n");
+  const sectionAgents = buildWidgetModel(agents, 5_000).sections.flatMap(section => section.agents);
 
-  assert.match(joined, /scout/);
-  assert.doesNotMatch(joined, /inline/);
+  assert.deepEqual(sectionAgents.map(agent => agent.config.name), ["scout"]);
 });

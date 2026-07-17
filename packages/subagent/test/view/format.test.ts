@@ -16,30 +16,28 @@ import {
 } from "../../src/view/format.js";
 import { fakeAgent, fakeRunSection } from "../helpers/fake-agent.js";
 
-test("expanded agents action nests command details below each name without instructions", () => {
-  const lines = formatSubagentToolLines(agentsDetails([{
+test("expanded agents action nests available details below each name without instructions", () => {
+  const agent = {
     name: "helper",
     description: "Reviews implementation changes.",
-    source: "project",
+    source: "project" as const,
     sourcePath: "/project/.pi/agents/helper.md",
     model: "gpt-5.6-sol",
-    thinking: "high",
+    thinking: "high" as const,
     tools: ["read", "grep"],
     skills: ["review"],
     retainConversation: true,
-  }]), true);
+    systemPrompt: "SECRET AGENT INSTRUCTIONS",
+  };
+  const lines = formatSubagentToolLines(agentsDetails([agent]), true);
+  const rendered = lines.join("\n");
 
-  assert.deepEqual(lines, [
-    "helper",
-    "  Reviews implementation changes.",
-    "  Source: project",
-    "  Model: gpt-5.6-sol · thinking:high",
-    "  Retain conversation: true",
-    "  Tools: read, grep",
-    "  Skills: review",
-    "  Path: /project/.pi/agents/helper.md",
-  ]);
-  assert.doesNotMatch(lines.join("\n"), /Instructions|system prompt/i);
+  assert.equal(lines[0], "helper");
+  assert.equal(lines.slice(1).every(line => line.startsWith("  ")), true);
+  for (const value of [agent.description, agent.source, agent.sourcePath, agent.model, agent.thinking, ...agent.tools, ...agent.skills]) {
+    assert.match(rendered, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.doesNotMatch(rendered, /SECRET AGENT INSTRUCTIONS/);
 });
 
 test("subagent run display animates only the running status glyph", () => {

@@ -12,16 +12,15 @@ This changelog starts with version `v0.2.1`.
 
 ### Added
 
-- Add process-local session attachments that retain child conversations for live steering and later resume, including agents spawned with release policy.
 - Add filterable flat/tree session projections, with running descendants nested under their parents and retained terminal sessions kept at the root.
+- Add a full-width conversation mode for running and resumable sessions, with direct messaging and live transcript updates.
 
 ### Changed
 
 - Centralize catalog, conversation, result, resume/remove, and widget decisions around retention reasons and capabilities.
-- Use one attachment-order source: duplicate attach preserves order, detach clears it, and reattach receives a new order.
-- Replace the separate `/subagents` dialogs with one balanced master-detail overlay for Sessions, Agents, Attached, and Settings.
+- Replace the separate `/subagents` dialogs with one overlay for Sessions, Agents, and Settings.
 - Rename the widget section to Retained and derive membership from retention reasons and capabilities.
-- Move steering and tracked resume into the Attached page's unified inline composer.
+- Let users enter a conversation from Sessions and message a running subagent without attaching first.
 
 ### Fixed
 

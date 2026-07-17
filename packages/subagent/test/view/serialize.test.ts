@@ -102,7 +102,7 @@ test("serializes a clean lightweight inventory contract with normalized statuses
     agent: "queued-agent",
     status: "queued",
     attempt: { kind: "spawn", dispatch: "foreground" },
-    conversation: { policy: "release", available: false, attached: false },
+    conversation: { policy: "release", available: false },
     retention: { catalog: "transient", reasons: [] },
     capabilities: { canResume: false, canRemove: false },
   });
@@ -111,7 +111,7 @@ test("serializes a clean lightweight inventory contract with normalized statuses
     agent: "created-agent",
     status: "queued",
     attempt: { kind: "spawn", dispatch: "background" },
-    conversation: { policy: "retain", available: true, attached: false },
+    conversation: { policy: "retain", available: true },
     retention: { catalog: "persistent", reasons: ["conversation-policy"] },
     capabilities: { canResume: true, canRemove: true },
   });
@@ -120,7 +120,7 @@ test("serializes a clean lightweight inventory contract with normalized statuses
     agent: "running-agent",
     status: "running",
     attempt: { kind: "spawn", dispatch: "background" },
-    conversation: { policy: "retain", available: true, attached: false },
+    conversation: { policy: "retain", available: true },
     retention: { catalog: "persistent", reasons: ["conversation-policy"] },
     capabilities: { canResume: true, canRemove: true },
   });
@@ -131,7 +131,7 @@ test("serializes a clean lightweight inventory contract with normalized statuses
     parentSessionId: "parent-session",
     status: "completed",
     attempt: { kind: "spawn", dispatch: "background" },
-    conversation: { policy: "retain", available: true, attached: false },
+    conversation: { policy: "retain", available: true },
     retention: { catalog: "persistent", reasons: ["conversation-policy"] },
     capabilities: { canResume: true, canRemove: true },
   });

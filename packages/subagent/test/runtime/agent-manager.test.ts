@@ -391,7 +391,7 @@ test("detaching does not release a session retained by its original retainConver
   assert.equal(manager.listSessions()[0].capabilities.canResume, true);
 });
 
-test("steering an attached running session delegates to its real AgentSession", async () => {
+test("steering a running session delegates without requiring attachment", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const steered: string[] = [];
@@ -412,7 +412,6 @@ test("steering an attached running session delegates to its real AgentSession", 
   ], undefined, { dispatch: "foreground" });
   await new Promise(resolve => setTimeout(resolve, 20));
   const sessionId = manager.listSessions()[0].id;
-  manager.attachToSession(sessionId);
 
   await manager.steerSession(sessionId, "Focus on the parser");
 
@@ -421,7 +420,7 @@ test("steering an attached running session delegates to its real AgentSession", 
   await batch.resultsPromise;
 });
 
-test("attached session details project conversation messages without exposing AgentSession", async () => {
+test("session conversations are readable without attachment", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
@@ -445,9 +444,8 @@ test("attached session details project conversation messages without exposing Ag
   ], undefined, { dispatch: "foreground" });
   await new Promise(resolve => setTimeout(resolve, 20));
   const sessionId = manager.listSessions()[0].id;
-  manager.attachToSession(sessionId);
 
-  const detail = manager.attachedSessionDetail(sessionId);
+  const detail = manager.sessionConversation(sessionId);
 
   assert.equal(detail.session.id, sessionId);
   assert.deepEqual(detail.messages.map(message => [message.role, message.text, message.toolName]), [
@@ -461,7 +459,7 @@ test("attached session details project conversation messages without exposing Ag
   await batch.resultsPromise;
 });
 
-test("attached transcript projection bounds large message and tool-result content", () => {
+test("conversation projection bounds large message and tool-result content", () => {
   const agent = new Agent(
     "large-transcript",
     { name: "worker", description: "", systemPrompt: "", source: "project", retainConversation: false },
@@ -477,9 +475,8 @@ test("attached transcript projection bounds large message and tool-result conten
   } as any);
   const manager = makeManager({ agents: new Map() } as any);
   (manager as any)._agents = [agent];
-  manager.attachToSession(agent.id);
 
-  const messages = manager.attachedSessionDetail(agent.id).messages;
+  const messages = manager.sessionConversation(agent.id).messages;
 
   assert.equal(messages.length, 2);
   assert.ok(messages[0].text.length <= 1_201);

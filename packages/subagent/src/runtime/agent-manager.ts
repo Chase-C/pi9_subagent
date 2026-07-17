@@ -25,18 +25,21 @@ export interface StartRunOptions {
   parentId?: string;
 }
 
-export interface AttachedSessionMessage {
+export interface SessionConversationMessage {
   readonly role: "user" | "assistant" | "tool" | "toolResult";
   readonly text: string;
   readonly toolName?: string;
   readonly isError?: boolean;
 }
 
-export interface AttachedSessionDetail {
+export interface SessionConversationDetail {
   readonly session: AgentSnapshot;
-  readonly messages: readonly AttachedSessionMessage[];
+  readonly messages: readonly SessionConversationMessage[];
   readonly pending: { readonly steering: readonly string[]; readonly followUp: readonly string[] };
 }
+
+export type AttachedSessionMessage = SessionConversationMessage;
+export type AttachedSessionDetail = SessionConversationDetail;
 
 export interface RunHandle {
   /** Root sessions in input order, captured at handle creation. */
@@ -115,15 +118,13 @@ export class AgentManager {
     if ("error" in lookup || lookup.agent.attachmentOrder === undefined) {
       throw new Error(`Subagent session ${sessionId} is not attached.`);
     }
-    const runtime = lookup.agent.retainedSession();
-    return {
-      session: lookup.agent.snapshot(),
-      messages: projectAttachedMessages((runtime?.messages ?? []).slice(-60)),
-      pending: {
-        steering: runtime?.getSteeringMessages?.() ?? [],
-        followUp: runtime?.getFollowUpMessages?.() ?? [],
-      },
-    };
+    return this._conversationDetail(lookup.agent);
+  }
+
+  sessionConversation(sessionId: string): SessionConversationDetail {
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup) throw new Error(lookup.error);
+    return this._conversationDetail(lookup.agent);
   }
 
   async stopSession(sessionId: string): Promise<void> {
@@ -134,9 +135,6 @@ export class AgentManager {
 
   async steerSession(sessionId: string, text: string): Promise<void> {
     const lookup = this._resolveSession(sessionId);
-    if ("agent" in lookup && lookup.agent.attachmentOrder === undefined) {
-      throw new Error(`Subagent session ${sessionId} is not attached.`);
-    }
     if ("error" in lookup) throw new Error(lookup.error);
     if (lookup.agent.status.kind !== "running") {
       throw new Error(`Cannot steer subagent session ${sessionId} while it is not running.`);
@@ -337,6 +335,18 @@ export class AgentManager {
     return { ...snapshot, subagents };
   }
 
+  private _conversationDetail(agent: Agent): SessionConversationDetail {
+    const runtime = agent.retainedSession();
+    return {
+      session: agent.snapshot(),
+      messages: projectConversationMessages((runtime?.messages ?? []).slice(-60)),
+      pending: {
+        steering: runtime?.getSteeringMessages?.() ?? [],
+        followUp: runtime?.getFollowUpMessages?.() ?? [],
+      },
+    };
+  }
+
   /** Looks up an agent by sessionId or returns the standard not-found error entry. */
   private _resolveSession(id: string): { agent: Agent } | { sessionId: string; error: string } {
     const agent = this._agents.find(a => a.id === id && !this._removingSessionIds.has(a.id));
@@ -402,8 +412,8 @@ export class AgentManager {
   }
 }
 
-function projectAttachedMessages(messages: readonly unknown[]): AttachedSessionMessage[] {
-  const projected: AttachedSessionMessage[] = [];
+function projectConversationMessages(messages: readonly unknown[]): SessionConversationMessage[] {
+  const projected: SessionConversationMessage[] = [];
   for (const value of messages) {
     if (!value || typeof value !== "object") continue;
     const message = value as Record<string, unknown>;

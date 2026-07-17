@@ -78,19 +78,19 @@ Use `list` for lightweight status, `results` for full output, and `remove` for c
 
 Only a successfully completed, available conversation can resume. A failure before conversation binding preserves the prior successful conversation; errors, aborts, or interruptions after binding do not.
 
-## Retention and attachments
+## Retention and conversations
 
-Retention is centralized and reports why an agent remains cataloged: `active`, `background-result`, `conversation-policy`, and/or `attachment`. These reasons independently govern inventory, conversation availability, and capabilities.
+Retention is centralized and reports why an agent remains cataloged. Active work, background results, and `retainConversation` policy independently govern inventory, conversation availability, and capabilities.
 
-`/subagents` opens Sessions, Agents, Attached, and Settings pages. Attaching pins an available conversation (and can pin queued/sessionless rows) independently of its spawn policy. Duplicate attach keeps its order, detach clears membership, and reattach places it at the end. The Attached page is therefore derived from one attachment ordering source; a conversation has no second owner or pin list. Detaching falls back to conversation policy and background-result retention, pruning only when no source remains.
+`/subagents` opens Sessions, Agents, and Settings pages. Press Enter on a running session to replace the list and inspector with a full-width conversation pane. Its composer sends steering messages directly—no attachment step is required. Escape returns to Sessions.
 
-The inline composer steers running work or starts a tracked resume after completion. Conversations and attachments are process-local and are not restored after restart or extension reload.
+A successfully completed retained conversation uses the same pane for tracked follow-ups. Conversations are process-local and are not restored after restart or extension reload.
 
 ## Live display
 
 The tool row shows each child's state, label, tools, tokens, elapsed time, recursive children, and answer. Previous Run sections carry their own attempt kind and dispatch.
 
-The persistent widget has a **Retained** section derived from retention reasons and capabilities. It includes relevant background, conversation-policy, and attached entries; transient foreground work remains in the tool row. Configure `widgetPlacement` (`belowEditor`, `aboveEditor`, `off`) and `widgetLayout` (`auto`, `columns`, `stacked`).
+The persistent widget has a **Retained** section derived from retention reasons and capabilities. It includes relevant background and conversation-policy entries; transient foreground work remains in the tool row. Configure `widgetPlacement` (`belowEditor`, `aboveEditor`, `off`) and `widgetLayout` (`auto`, `columns`, `stacked`).
 
 ## Settings
 
@@ -126,7 +126,7 @@ A snapshot projects lifecycle state structurally:
 ```ts
 {
   attempt: { kind: "spawn" | "resume", dispatch: "foreground" | "background" },
-  conversation: { policy: "retain" | "release", available: boolean, attached: boolean },
+  conversation: { policy: "retain" | "release", available: boolean },
   retention: { catalog: "transient" | "persistent", reasons: RetentionReason[] },
   capabilities: { canResume: boolean, canRemove: boolean }
 }

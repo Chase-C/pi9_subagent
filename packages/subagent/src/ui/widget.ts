@@ -19,6 +19,24 @@ type SubagentWidgetContext = {
   };
 };
 
+type SubagentWidgetLifecyclePi = {
+  on?(event: "session_start" | "session_shutdown", handler: (event: unknown, ctx: SubagentWidgetContext) => void): void;
+};
+
+type SubagentWidgetSessionSource = {
+  listSessions(): AgentSnapshot[];
+};
+
+export function registerSubagentWidgetLifecycle(
+  pi: SubagentWidgetLifecyclePi,
+  source: SubagentWidgetSessionSource,
+  getSettings: () => SubagentSettings | SubagentUiSettings,
+): void {
+  if (typeof pi.on !== "function") return;
+  pi.on("session_shutdown", (_event, ctx) => updateSubagentWidget(ctx, [], getSettings()));
+  pi.on("session_start", (_event, ctx) => updateSubagentWidget(ctx, source.listSessions(), getSettings()));
+}
+
 export function updateSubagentWidget(
   ctx: SubagentWidgetContext,
   agents: AgentSnapshot[],

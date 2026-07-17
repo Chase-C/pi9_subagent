@@ -69,9 +69,24 @@ export function registerSubagentsCommand(
               ));
               return settings;
             },
+            onStart: (agent, prompt) => {
+              const handle = agentManager.startRun(
+                ctx,
+                undefined,
+                [{ kind: "spawn", agent, prompt }],
+                () => updateSubagentWidget(ctx, agentManager.listSessions(), settings),
+                { dispatch: "background" },
+              );
+              const session = handle.sessions[0];
+              if (!session) return undefined;
+              updateSubagentWidget(ctx, agentManager.listSessions(), settings);
+              notify(ctx, `Started ${agent} (${session.id}).`, "info");
+              void handle.resultsPromise.catch(error => notify(ctx, `Subagent ${agent} failed: ${errorMessage(error)}`, "warning"));
+              return session.id;
+            },
             onResume: (sessionId, prompt) => {
-              const session = agentManager.listAttachedSessions().find(candidate => candidate.id === sessionId);
-              if (!session) return;
+              const session = agentManager.listSessions().find(candidate => candidate.id === sessionId);
+              if (!session?.capabilities.canResume) return;
               const handle = agentManager.startRun(
                 ctx,
                 undefined,
@@ -101,7 +116,7 @@ export function registerSubagentsCommand(
             anchor: "center",
             width: "90%",
             minWidth: 56,
-            maxHeight: "85%",
+            maxHeight: "80%",
           },
         });
       } catch (error) {

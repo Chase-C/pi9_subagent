@@ -143,7 +143,7 @@ export class SubagentSettingsComponent implements Component {
     ];
     this.settingsList = new SettingsList(
       items,
-      6,
+      items.length,
       getSubagentSettingsListTheme(theme),
       (id, newValue) => {
         if (id === "widgetPlacement") onChange({ kind: "widgetPlacement", value: newValue as WidgetPlacement });

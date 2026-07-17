@@ -13,6 +13,7 @@ import { prepareSubagentRuntime } from "./runtime/prepare-subagent-runtime.js";
 import { registerSubagentMetadataPersistence } from "./runtime/session-metadata.js";
 import { registerSubagentSessionGuards } from "./runtime/session-guards.js";
 import { registerSubagentsCommand } from "./command/register.js";
+import { registerSubagentWidgetLifecycle } from "./ui/widget.js";
 import {
   formatBackgroundCompletionMessage,
   type BackgroundCompletionMessageDetails,
@@ -36,6 +37,7 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
   const getCurrentSettings = () => currentSettings;
+  registerSubagentWidgetLifecycle(pi, agentManager, getCurrentSettings);
   agentManager.runner?.setChildTool?.(parent =>
     makeChildSubagentTool({ manager: agentManager, registry: agentRegistry, parent, getCurrentSettings })
   );

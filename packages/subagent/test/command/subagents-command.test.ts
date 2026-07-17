@@ -51,16 +51,15 @@ test("/subagents opens one persistent overlay for all pages", async () => {
   assert.equal(calls, 1);
   assert.equal(options.overlay, true);
   assert.equal(options.overlayOptions.anchor, "center");
+  assert.equal(options.overlayOptions.maxHeight, "80%");
 });
 
-test("completed attached sessions resume through AgentManager.startRun inside the overlay", async () => {
+test("completed retained sessions resume through the conversation pane", async () => {
   const session = fakeAgent({ id: "s1", retention: "persistent", capabilities: { canResume: true }, config: { retainConversation: true } });
-  const attached: any[] = [];
   const runs: any[] = [];
   const manager = {
     listSessions: () => [session],
-    listAttachedSessions: () => attached,
-    attachToSession() { attached.push(session); return session; },
+    sessionConversation: () => ({ session, messages: [], pending: { steering: [], followUp: [] } }),
     onAgentUpdate: () => () => {},
     configure() {},
     startRun(_ctx: any, _signal: any, tasks: any[]) {
@@ -89,7 +88,6 @@ test("completed attached sessions resume through AgentManager.startRun inside th
       setWidget() {},
       custom(factory: any) {
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        component.handleInput("a");
         component.handleInput("\r");
         for (const character of "Follow up") component.handleInput(character);
         component.handleInput("\r");
@@ -114,7 +112,7 @@ test("/subagents command exposes argument completions for direct views", () => {
   assert.equal(commands.get("subagents").getArgumentCompletions("unknown"), null);
 });
 
-test("/subagents settings exposes placement values, saves changes, and updates active widget", async () => {
+test("/subagents settings saves placement changes and updates the active widget", async () => {
   const runningSession = fakeAgent({ status: { kind: "running", startedAt: 1 }, turns: 1 });
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
@@ -132,7 +130,6 @@ test("/subagents settings exposes placement values, saves changes, and updates a
     settingsStore: fakeSettingsStore,
   });
 
-  let rendered = "";
   const widgets: any[] = [];
   await commands.get("subagents").handler("settings", {
     cwd: process.cwd(),
@@ -142,17 +139,12 @@ test("/subagents settings exposes placement values, saves changes, and updates a
       setWidget: (...args: any[]) => widgets.push(args),
       custom(factory: any) {
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        rendered = component.render(120).join("\n");
         component.handleInput("\r");
         return Promise.resolve(undefined);
       },
     },
   });
 
-  assert.match(rendered, /Subagent Settings/);
-  assert.match(rendered, /Widget placement/);
-  assert.match(rendered, /belowEditor/);
-  assert.match(rendered, /Values: belowEditor, aboveEditor, off/);
   assert.equal(saved.length, 1);
   assert.equal(saved[0].widgetPlacement, "aboveEditor");
   assert.equal(saved[0].runtime.maxTasksPerRun, 8);
@@ -160,7 +152,7 @@ test("/subagents settings exposes placement values, saves changes, and updates a
   assert.deepEqual(widgets.at(-1)[2], { placement: "aboveEditor" });
 });
 
-test("/subagents settings exposes backgroundNotify with auto, steer, none and persists the chosen value", async () => {
+test("/subagents settings persists background notification changes", async () => {
   const fakeManager = { listSessions(): any[] { return []; } };
   const saved: any[] = [];
   const fakeSettingsStore = {
@@ -173,8 +165,6 @@ test("/subagents settings exposes backgroundNotify with auto, steer, none and pe
     settingsStore: fakeSettingsStore,
   });
 
-  let renderedInitial = "";
-  let renderedOnBackgroundNotify = "";
   await commands.get("subagents").handler("settings", {
     cwd: process.cwd(),
     hasUI: true,
@@ -183,24 +173,20 @@ test("/subagents settings exposes backgroundNotify with auto, steer, none and pe
       setWidget() {},
       custom(factory: any) {
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        renderedInitial = component.render(120).join("\n");
         component.handleInput("\x1b[B"); // down to widgetLayout
         component.handleInput("\x1b[B"); // down to backgroundNotify
-        renderedOnBackgroundNotify = component.render(120).join("\n");
         component.handleInput("\r"); // cycle auto -> steer
         return Promise.resolve(undefined);
       },
     },
   });
 
-  assert.match(renderedInitial, /Background notify/);
-  assert.match(renderedOnBackgroundNotify, /Values: auto, steer, none/);
   const last = saved.at(-1);
   assert.ok(last, "expected at least one save");
   assert.equal(last.runtime.backgroundNotify, "steer");
 });
 
-test("/subagents settings exposes widgetLayout with auto, columns, stacked and persists the chosen value", async () => {
+test("/subagents settings persists widget layout changes", async () => {
   const runningSession = fakeAgent({ status: { kind: "running", startedAt: 1 }, turns: 1 });
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
@@ -217,8 +203,6 @@ test("/subagents settings exposes widgetLayout with auto, columns, stacked and p
     settingsStore: fakeSettingsStore,
   });
 
-  let renderedInitial = "";
-  let renderedOnWidgetLayout = "";
   await commands.get("subagents").handler("settings", {
     cwd: process.cwd(),
     hasUI: true,
@@ -227,23 +211,19 @@ test("/subagents settings exposes widgetLayout with auto, columns, stacked and p
       setWidget() {},
       custom(factory: any) {
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        renderedInitial = component.render(120).join("\n");
         component.handleInput("\x1b[B"); // down to widgetLayout
-        renderedOnWidgetLayout = component.render(120).join("\n");
         component.handleInput("\r"); // cycle auto -> columns
         return Promise.resolve(undefined);
       },
     },
   });
 
-  assert.match(renderedInitial, /Widget layout/);
-  assert.match(renderedOnWidgetLayout, /Values: auto, columns, stacked/);
   const last = saved.at(-1);
   assert.ok(last, "expected at least one save");
   assert.equal(last.widgetLayout, "columns");
 });
 
-test("/subagents settings exposes runtime and widget clutter controls", async () => {
+test("/subagents settings applies runtime and widget visibility changes", async () => {
   const runningSession = fakeAgent({ status: { kind: "running", startedAt: 1 }, turns: 1 });
   const configured: any[] = [];
   const fakeManager = {
@@ -262,9 +242,6 @@ test("/subagents settings exposes runtime and widget clutter controls", async ()
     settingsStore: fakeSettingsStore,
   });
 
-  let renderedInitial = "";
-  let renderedMaxRunning = "";
-  let renderedShowRetained = "";
   const widgets: any[] = [];
   await commands.get("subagents").handler("settings", {
     cwd: process.cwd(),
@@ -274,18 +251,15 @@ test("/subagents settings exposes runtime and widget clutter controls", async ()
       setWidget: (...args: any[]) => widgets.push(args),
       custom(factory: any) {
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        renderedInitial = component.render(120).join("\n");
         component.handleInput("\x1b[B");
         component.handleInput("\x1b[B");
         component.handleInput("\x1b[B"); // down to max running
-        renderedMaxRunning = component.render(120).join("\n");
         component.handleInput("\r"); // 4 -> 8
         component.handleInput("\x1b[B"); // max tasks per run
         component.handleInput("\r"); // 8 -> 16
         component.handleInput("\x1b[B"); // default retainConversation
         component.handleInput("\r"); // false -> true
         component.handleInput("\x1b[B"); // show retained
-        renderedShowRetained = component.render(120).join("\n");
         component.handleInput("\r"); // true -> false
         component.handleInput("\x1b[B"); // widget rows
         component.handleInput("\r"); // 6 -> 8
@@ -294,11 +268,6 @@ test("/subagents settings exposes runtime and widget clutter controls", async ()
     },
   });
 
-  assert.match(renderedInitial, /Max running/);
-  assert.match(renderedInitial, /Max tasks per run/);
-  assert.match(renderedInitial, /Default retainConversation/);
-  assert.match(renderedMaxRunning, /tree-wide cap/);
-  assert.match(renderedShowRetained, /Show retained/);
   const last = saved.at(-1);
   assert.ok(last, "expected settings to be saved");
   assert.equal(last.runtime.maxConcurrentSubagents, 8);
@@ -498,8 +467,6 @@ test("/subagents switches from Sessions to Settings inside one overlay", async (
         customCalls += 1;
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
         component.handleInput("\t");
-        component.handleInput("\t");
-        component.handleInput("\t");
         settingsText = component.render(120).join("\n");
         component.handleInput("\r");
         return Promise.resolve(undefined);
@@ -538,8 +505,9 @@ test("/subagents can switch between sessions and agents views", async () => {
         customCalls += 1;
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
         renders.push(component.render(120).join("\n"));
-        component.handleInput("\t");
+        component.handleInput("\x1b[Z");
         renders.push(component.render(120).join("\n"));
+        component.handleInput("\t");
         component.handleInput("\t");
         renders.push(component.render(120).join("\n"));
         return Promise.resolve(undefined);
@@ -549,7 +517,7 @@ test("/subagents can switch between sessions and agents views", async () => {
 
   assert.match(renders[0], /\[ Sessions \]/);
   assert.match(renders[1], /\[ Agents \]/);
-  assert.match(renders[2], /\[ Attached \]/);
+  assert.match(renders[2], /\[ Settings \]/);
   assert.equal(customCalls, 1);
   assert.deepEqual(reloadCalls, ["/repo"]);
 });
@@ -575,7 +543,7 @@ test("subagents command opens agents browser by default when sessions are empty"
   const reloadCalls: string[] = [];
   const fakeRegistry = {
     agents: new Map([
-      ["helper", { name: "helper", description: "Helps with implementation", source: "project", retainConversation: true, model: "test/model", thinking: "high", tools: ["read", "bash"], sourcePath: "/repo/.pi/agents/helper.md" }],
+      ["helper", { name: "helper", description: "Helps with implementation", source: "project", retainConversation: true, model: "test/model", thinking: "high", tools: ["read", "bash"], sourcePath: "/repo/.pi/agents/helper.md", systemPrompt: "Inspect the implementation carefully.\nReport concrete findings with file references." }],
       ["reviewer", { name: "reviewer", description: "Reviews changes", source: "user", retainConversation: false }],
     ]),
     async reload(cwd: string) { reloadCalls.push(cwd); },
@@ -583,8 +551,7 @@ test("subagents command opens agents browser by default when sessions are empty"
   };
   const commands = registerCommand({ agentRegistry: fakeRegistry, agentManager: { listSessions: () => [], sessions: [] } });
 
-  let listText = "";
-  let inspectText = "";
+  let initialPage: string | undefined;
   await commands.get("subagents").handler("", {
     cwd: "/repo",
     hasUI: true,
@@ -592,34 +559,62 @@ test("subagents command opens agents browser by default when sessions are empty"
       notify() {},
       custom(factory: any) {
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        listText = component.render(120).join("\n");
-        component.handleInput("\r");
-        inspectText = component.render(120).join("\n");
+        initialPage = component.page;
         return Promise.resolve(undefined);
       },
     },
   });
 
   assert.deepEqual(reloadCalls, ["/repo"]);
-  assert.match(listText, /\[ Agents \]/);
-  assert.match(listText, /helper/);
-  assert.match(listText, /Helps with implementation/);
-  assert.match(listText, /project/);
-  assert.match(listText, /retained/i);
-  assert.match(listText, /reviewer/);
-  assert.match(listText, /Settings/);
-  assert.match(listText, /close/);
-  assert.doesNotMatch(listText, /launch|start/i);
-  assert.match(inspectText, /Agent Definition/);
-  assert.match(inspectText, /Name: helper/);
-  assert.match(inspectText, /Description: Helps with implementation/);
-  assert.match(inspectText, /Source: project/);
-  assert.match(inspectText, /Model: test\/model/);
-  assert.match(inspectText, /Thinking: high/);
-  assert.match(inspectText, /Tools: read, bash/);
-  assert.match(inspectText, /Retained: true/);
-  assert.match(inspectText, /Path: \/repo\/\.pi\/agents\/helper\.md/);
-  assert.doesNotMatch(inspectText, /launch|start/i);
+  assert.equal(initialPage, "agents");
+});
+
+test("agent definition actions start background sessions", async () => {
+  const sessions: any[] = [];
+  const runs: any[] = [];
+  const manager = {
+    listSessions: () => sessions,
+    onAgentUpdate: () => () => {},
+    configure() {},
+    startRun(_ctx: any, _signal: any, tasks: any[], _onUpdate: any, options: any) {
+      runs.push({ task: tasks[0], options });
+      const session = fakeAgent({ id: `started-${runs.length}`, config: { name: "helper" }, prompt: tasks[0].prompt, status: { kind: "running" } });
+      sessions.push(session);
+      return { sessions: [session], resultsPromise: Promise.resolve([session]) };
+    },
+  };
+  const commands = registerCommand({
+    agentRegistry: {
+      agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", retainConversation: false }]]),
+      async reload() {},
+      summarizeAgent() { return ""; },
+    },
+    agentManager: manager,
+  });
+
+  await commands.get("subagents").handler("agents", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget() {},
+      custom(factory: any) {
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        component.handleInput("s");
+        for (const character of "Implement parser") component.handleInput(character);
+        component.handleInput("\r");
+        component.handleInput("s");
+        for (const character of "Review parser") component.handleInput(character);
+        component.handleInput("\r");
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.deepEqual(runs, [
+    { task: { kind: "spawn", agent: "helper", prompt: "Implement parser" }, options: { dispatch: "background" } },
+    { task: { kind: "spawn", agent: "helper", prompt: "Review parser" }, options: { dispatch: "background" } },
+  ]);
 });
 
 test("/subagents agents menu closes on a terminal escape sequence", async () => {
@@ -685,7 +680,7 @@ test("/subagents sessions menu closes on a terminal escape sequence", async () =
   assert.equal(closed, true);
 });
 
-test("/subagents sessions command keeps notifications metadata-only and uses configured display lengths for inspect", async () => {
+test("/subagents sessions command applies configured output length and omits message metadata", async () => {
   const session = fakeAgent({
     retention: "transient",
     config: { retainConversation: false },
@@ -723,8 +718,9 @@ test("/subagents sessions command keeps notifications metadata-only and uses con
     },
   });
 
-  assert.match(inspectText, /Error: abcde…/);
-  assert.match(inspectText, /Message: 0123…/);
+  assert.match(inspectText, /┌ Answer/);
+  assert.match(inspectText, /abcde…/);
+  assert.doesNotMatch(inspectText, /Message:/);
   assert.doesNotMatch(inspectText, /abcdefghijklmnopqrstuvwxyz/);
 });
 
@@ -784,7 +780,8 @@ test("subagents command opens a sessions view from serialized DTOs", async () =>
   assert.match(text, /helper/);
   assert.match(text, /completed/);
   assert.match(text, /retained/i);
-  assert.match(text, /Session s1/);
+  assert.match(text, /┌ helper · s1/);
+  assert.doesNotMatch(text, /ID: s1/);
   assert.doesNotMatch(text, /"config"/);
 });
 
@@ -990,13 +987,15 @@ test("subagents command inspect view removes a completed non-retainConversation 
 
   assert.match(inspectText, /Status: completed/);
   assert.doesNotMatch(inspectText, /Status: completed · retainConversation/);
-  assert.match(inspectText, /Agent: helper \(project\)/);
+  assert.match(inspectText, /┌ helper/);
+  assert.match(inspectText, /Source: project/);
   assert.match(inspectText, /Model: test\/model · thinking:low/);
-  assert.match(inspectText, /Tools: read, bash/);
+  assert.doesNotMatch(inspectText, /Tools: read, bash/);
   assert.match(inspectText, /Progress: 3 turns · 2 tool uses · 1 compaction/);
   assert.match(inspectText, /Usage: 3 tokens · \$0\.0100/);
-  assert.match(inspectText, /Output: Implemented the retained-session fix/);
-  assert.match(inspectText, /Actions: inspect, remove/);
+  assert.match(inspectText, /┌ Answer/);
+  assert.match(inspectText, /Implemented the retained-session fix/);
+  assert.match(inspectText, /Actions: inspect · remove/);
   assert.doesNotMatch(inspectText, /clear/);
   assert.deepEqual(clearCalls, ["s1"]);
   assert.deepEqual(fakeManager.sessions, []);

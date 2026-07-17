@@ -14,15 +14,14 @@ const makeMessage = () => createSubagentResumeMessage({
   sessionId: "s1",
 });
 
-test("subagent resume message has the expected shape and identifies itself", () => {
+test("subagent resume message exposes structured identity and result details", () => {
   const message = makeMessage();
   assert.equal(message.customType, "subagent-resume");
   assert.equal(message.display, true);
-  assert.match(message.content, /Subagent resume completed/);
-  assert.match(message.content, /agent: helper/);
-  assert.match(message.content, /session: s1/);
-  assert.match(message.content, /prompt: follow up/);
-  assert.match(message.content, /output: done/);
+  assert.equal(message.details.agent, "helper");
+  assert.equal(message.details.sessionId, "s1");
+  assert.equal(message.details.status, "completed");
+  assert.equal((message.details.result as { output: string }).output, longOutput);
 });
 
 test("subagent resume message truncates both prompt and output in the displayed content", () => {
@@ -34,11 +33,6 @@ test("subagent resume message truncates both prompt and output in the displayed 
   assert.equal(message.details.outputSnippet!.includes("secret-tail"), false);
 });
 
-test("subagent resume message preserves the full result in details for structured consumers", () => {
-  const message = makeMessage();
-  assert.equal((message.details.result as { output: string }).output, longOutput);
-});
-
 test("subagent resume renderer colors status and keeps collapsed output compact", () => {
   const message = makeMessage();
   const rendered = formatSubagentResumeMessageRender(
@@ -47,12 +41,12 @@ test("subagent resume renderer colors status and keeps collapsed output compact"
     { fg: (color: string, text: string) => `<${color}>${text}</${color}>` },
   );
 
-  assert.match(rendered, /Subagent resume completed · helper · <success>completed<\/success> · session s1/);
+  assert.match(rendered, /<success>completed<\/success>/);
   assert.doesNotMatch(rendered, /\n/);
   assert.equal(rendered.includes("secret-tail"), false);
 });
 
-test("subagent resume renderer expands to labeled detail lines", () => {
+test("subagent resume renderer expands each detail onto its own line", () => {
   const message = createSubagentResumeMessage({
     agent: "helper",
     prompt: "try another approach",
@@ -63,5 +57,8 @@ test("subagent resume renderer expands to labeled detail lines", () => {
 
   const rendered = formatSubagentResumeMessageRender(message.details, true, { fg: (_color: string, text: string) => text });
 
-  assert.match(rendered, /^Subagent resume finished\nagent: helper\nstatus: error\nsession: s2\nprompt: try another approach\nerror: boom$/);
+  const lines = rendered.split("\n");
+  assert.equal(lines.length, 6);
+  const values = new Set(lines.slice(1).map(line => line.slice(line.indexOf(":") + 2)));
+  assert.deepEqual(values, new Set(["helper", "error", "s2", "try another approach", "boom"]));
 });

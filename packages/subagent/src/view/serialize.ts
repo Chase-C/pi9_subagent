@@ -53,7 +53,7 @@ export interface ModelInventoryEntry {
   parentSessionId?: string;
   status: SessionStatus;
   attempt: AgentSnapshot["attempt"];
-  conversation: AgentSnapshot["conversation"];
+  conversation: Pick<AgentSnapshot["conversation"], "policy" | "available">;
   retention: AgentSnapshot["retention"];
   capabilities: AgentSnapshot["capabilities"];
 }
@@ -83,7 +83,10 @@ function serializeSessionForModel(session: AgentSnapshot): ModelInventoryEntry {
     ...(session.parentSessionId !== undefined ? { parentSessionId: session.parentSessionId } : {}),
     status: serializeStatusForInventory(session.status),
     attempt: session.attempt,
-    conversation: session.conversation,
+    conversation: {
+      policy: session.conversation.policy,
+      available: session.conversation.available,
+    },
     retention: session.retention,
     capabilities: session.capabilities,
   };
