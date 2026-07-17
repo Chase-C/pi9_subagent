@@ -140,7 +140,14 @@ export class Agent {
   detach(): void {
     if (this._attachmentOrder === undefined) return;
     this._attachmentOrder = undefined;
+    this._releaseConversationIfUnused();
     this._emit("retention");
+  }
+
+  private _releaseConversationIfUnused(): void {
+    if (this._current === undefined && !this.retentionDecision.keepConversation) {
+      this._retainedSession = undefined;
+    }
   }
 
   private _resumeSucceededBefore(attempt: Attempt): boolean {
@@ -302,6 +309,7 @@ export class Agent {
     current.settle(outcome);
     this._settledAttempts.push(current);
     this._current = undefined;
+    this._releaseConversationIfUnused();
     this._emit("status");
     return this.snapshot();
   }

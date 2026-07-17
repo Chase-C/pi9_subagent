@@ -54,11 +54,18 @@ test("release-policy foreground attempts have no terminal capabilities", () => {
   assert.deepEqual(view(completed).capabilities, { canResume: false, canRemove: false });
 });
 
-test("a completed background result is removable but cannot resume", () => {
+test("a completed background result releases its conversation and cannot regain resume capability", () => {
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop, { dispatch: "background" });
   agent.bindSession(fakeSession());
   completedRun(agent, "done");
+
+  assert.equal(agent.retainedSession(), undefined);
+  assert.equal(view(agent).conversation.available, false);
   assert.deepEqual(view(agent).capabilities, { canResume: false, canRemove: true });
+
+  agent.attach(1);
+  assert.equal(view(agent).conversation.available, false);
+  assert.equal(view(agent).capabilities.canResume, false);
 });
 
 test("attachment pins a queued row and keeps a conversation only after binding", () => {
@@ -79,6 +86,34 @@ test("attachment pins a queued row and keeps a conversation only after binding",
   agent.bindSession(fakeSession());
   assert.equal(agent.retentionDecision.keepConversation, true);
   assert.equal(agent.snapshot().conversation.available, true);
+});
+
+test("detaching releases a terminal attachment-only conversation", () => {
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+  agent.attach(1);
+  agent.bindSession(fakeSession());
+  completedRun(agent, "done");
+
+  assert.notEqual(agent.retainedSession(), undefined);
+  agent.detach();
+
+  assert.equal(agent.retainedSession(), undefined);
+  assert.equal(view(agent).conversation.available, false);
+  agent.attach(2);
+  assert.equal(view(agent).capabilities.canResume, false);
+});
+
+test("detaching an active release-policy conversation defers release until settlement", () => {
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+  const session = fakeSession();
+  agent.attach(1);
+  agent.bindSession(session);
+
+  agent.detach();
+  assert.equal(agent.retainedSession(), session);
+
+  completedRun(agent, "done");
+  assert.equal(agent.retainedSession(), undefined);
 });
 
 test("terminal removal follows persistent catalog membership across outcomes", () => {

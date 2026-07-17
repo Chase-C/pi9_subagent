@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import subagentExtension from "../../src/index.js";
-import { AgentManager } from "../../src/runtime/agent-manager.js";
+import { AgentManager, type AgentRunner } from "../../src/runtime/agent-manager.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 import { renderWidgetContent } from "../helpers/render-widget.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
+import { makeSession } from "../helpers/runtime.js";
 
 const baseCtx = () => ({ cwd: process.cwd(), hasUI: false, modelRegistry: { getAll: () => [] } } as any);
 
@@ -121,8 +122,8 @@ test("tool execution returns structured failed run for unknown agents", async ()
 });
 
 test("subagent tool returns one ordered final group for mixed success, unknown, and failed children", async () => {
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+  const runner: AgentRunner = async (_ctx, agent, attempt) => { const prompt = attempt.prompt;
+    agent.bindSession(makeSession());
     if (agent.agentName === "flaky") throw new Error("flaky failed");
     return completedRun(agent, `done:${prompt}`);
   };
@@ -514,8 +515,8 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
 test("subagent action=run background:true returns view:background-started immediately with initial session views", async () => {
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+  const runner: AgentRunner = async (_ctx, agent, attempt) => { const prompt = attempt.prompt;
+    agent.bindSession(makeSession());
     await runGate;
     return completedRun(agent, `done:${prompt}`);
   };
@@ -551,8 +552,8 @@ test("subagent action=run background:true returns view:background-started immedi
 });
 
 test("background run reports preflight failures without hiding successful handles", async () => {
-  const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+  const runner: AgentRunner = async (_ctx, agent, attempt) => {
+    agent.bindSession(makeSession());
     return completedRun(agent, `done:${attempt.prompt}`);
   };
   const fakeRegistry = {
@@ -594,8 +595,8 @@ test("background run reports preflight failures without hiding successful handle
 test("subagent action=run background:true never invokes the parent onUpdate channel", async () => {
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+  const runner: AgentRunner = async (_ctx, agent, attempt) => { const prompt = attempt.prompt;
+    agent.bindSession(makeSession());
     await runGate;
     return completedRun(agent, `done:${prompt}`);
   };

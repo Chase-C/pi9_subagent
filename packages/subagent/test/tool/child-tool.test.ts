@@ -1,10 +1,9 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import type { Attempt } from "../../src/domain/agent-attempt.js";
 import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import type { AgentManager } from "../../src/runtime/agent-manager.js";
+import type { AgentManager, AgentRunner } from "../../src/runtime/agent-manager.js";
 import { makeChildSubagentTool } from "../../src/tool/child-tool.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
 import { baseCtx, makeManager, makeSession, run } from "../helpers/runtime.js";
@@ -39,9 +38,9 @@ test("makeChildSubagentTool returns a 'subagent' tool", () => {
 
 test("child subagent tool delegates action=run to the shared manager with parentId set", async () => {
   const seenParents: Array<string | undefined> = [];
-  const runner = async (_ctx: any, agent: any) => {
+  const runner: AgentRunner = async (_ctx, agent) => {
     seenParents.push(agent.parentId);
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     return completedRun(agent, "ok");
   };
   const registry = {
@@ -64,8 +63,8 @@ test("child subagent tool delegates action=run to the shared manager with parent
 });
 
 test("child subagent tool forwards list, results, and remove actions straight to the shared manager", async () => {
-  const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
+  const runner: AgentRunner = async (_ctx, agent) => {
+    agent.bindSession(makeSession());
     return completedRun(agent, "ok");
   };
   const registry = {
@@ -98,8 +97,8 @@ test("recursive foreground subagent spawn completes with a single shared queue s
   const registry = {
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
-  const runner = async (ctx: any, agent: any, attempt: Attempt) => {
-    agent.attach(makeSession());
+  const runner: AgentRunner = async (ctx, agent, attempt) => {
+    agent.bindSession(makeSession());
     if (attempt.prompt === "spawn-child") {
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
@@ -130,8 +129,8 @@ test("recursive foreground subagent chain can exceed the shared queue cap withou
   const registry = {
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
-  const runner = async (ctx: any, agent: any, attempt: Attempt) => {
-    agent.attach(makeSession());
+  const runner: AgentRunner = async (ctx, agent, attempt) => {
+    agent.bindSession(makeSession());
     if (attempt.prompt.startsWith("spawn-")) {
       const remaining = Number(attempt.prompt.slice("spawn-".length));
       const tool = captureChildTool(manager, registry, agent);
@@ -164,9 +163,9 @@ test("recursive subagent spawn: root → child → grandchild all live under one
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const recordedParents: Record<string, string | undefined> = {};
-  const runner = async (ctx: any, agent: any, attempt: Attempt) => {
+  const runner: AgentRunner = async (ctx, agent, attempt) => {
     recordedParents[agent.id] = agent.parentId;
-    agent.attach(makeSession());
+    agent.bindSession(makeSession());
     if (attempt.prompt === "spawn-child") {
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
@@ -235,7 +234,7 @@ test("child subagent tool does not reload settings or rebuild the registry on ea
     reload: async () => { registryReloads += 1; },
     summarizeAgent: () => "worker",
   };
-  const manager = makeManager(registry as any, 2, async (_c: any, a: any) => { a.attach(makeSession()); return completedRun(a, "ok"); });
+  const manager = makeManager(registry as any, 2, async (_ctx, agent) => { agent.bindSession(makeSession()); return completedRun(agent, "ok"); });
   const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
 
   const tool = makeChildSubagentTool({
