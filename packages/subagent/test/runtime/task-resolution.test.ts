@@ -3,21 +3,21 @@ import assert from "node:assert/strict";
 
 import { Agent } from "../../src/domain/agent.js";
 import { resolveTask } from "../../src/runtime/task-resolution.js";
+import type { SpawnRequest } from "../../src/schema.js";
 
 const noop = () => {};
 const allocateSessionId = () => "test-session";
 
-function assertCurrentSnapshotFields(snapshot: Record<string, unknown>): void {
-  assert.equal(Object.prototype.hasOwnProperty.call(snapshot, "resumed"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(snapshot, "previousRuns"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(snapshot, "effectiveConfig"), false);
+function assertNoLifecycleAliases(value: object): void {
+  for (const alias of ["resumable", "resumed", "canClear"])
+    assert.equal(Object.prototype.hasOwnProperty.call(value, alias), false);
 }
 
 test("task resolution reports session ID exhaustion without creating an Agent", () => {
-  const config = { name: "known", description: "", systemPrompt: "", source: "project", resumable: true };
+  const config = { name: "known", description: "", systemPrompt: "", source: "project" };
   const result = resolveTask({
     task: { kind: "spawn", agent: "known", prompt: "work" },
-    background: false,
+    dispatch: "foreground",
     groupId: "group",
     inputIndex: 0,
     registry: { agents: new Map([["known", config]]) } as any,
@@ -29,20 +29,29 @@ test("task resolution reports session ID exhaustion without creating an Agent", 
   assert.equal(result.kind, "failure");
   if (result.kind !== "failure") return;
   assert.equal("agent" in result, false);
+  assert.deepEqual(result.failure.attempt, { kind: "spawn", dispatch: "foreground" });
   assert.equal(result.failure.status.kind, "done");
-  if (result.failure.status.kind === "done") {
+  if (result.failure.status.kind === "done")
     assert.equal(result.failure.status.error, "Subagent session ID space exhausted.");
-  }
 });
 
-test("preflight failures project current snapshot fields for unknown tasks", () => {
+test("unknown preflight failures use canonical spawn and resume snapshots", () => {
   const realNow = Date.now;
   Date.now = () => 1_000;
   try {
     const registry = { agents: new Map() } as any;
     const unknownSpawn = resolveTask({
-      task: { kind: "spawn", agent: "missing", prompt: "spawn prompt", label: "spawn label", model: "m/x", thinking: "high", skills: [] },
-      background: true,
+      task: {
+        kind: "spawn",
+        agent: "missing",
+        prompt: "spawn prompt",
+        label: "spawn label",
+        model: "m/x",
+        thinking: "high",
+        skills: [],
+        retainConversation: true,
+      },
+      dispatch: "background",
       groupId: "group",
       inputIndex: 3,
       registry,
@@ -52,7 +61,7 @@ test("preflight failures project current snapshot fields for unknown tasks", () 
     });
     const unknownResume = resolveTask({
       task: { kind: "resume", sessionId: "ghost", prompt: "resume prompt" },
-      background: false,
+      dispatch: "foreground",
       groupId: "group",
       inputIndex: 4,
       registry,
@@ -71,8 +80,9 @@ test("preflight failures project current snapshot fields for unknown tasks", () 
       label: "spawn label",
       prompt: "spawn prompt",
       createdAt: 1_000,
-      dispatch: "background",
-      retention: "transient",
+      attempt: { kind: "spawn", dispatch: "background" },
+      conversation: { policy: "retain", available: false, attached: false },
+      retention: { catalog: "transient", reasons: [] },
       config: {
         name: "missing",
         description: "",
@@ -82,26 +92,25 @@ test("preflight failures project current snapshot fields for unknown tasks", () 
         thinking: "high",
         tools: undefined,
         skills: [],
-        resumable: false,
       },
       status: {
         kind: "done",
         outcome: "error",
         completedAt: 1_000,
-        resumed: false,
         error: "Unknown agent: missing. Available agents:\n",
       },
       activity: { turns: 0, compactions: 0, toolHistory: [] },
       usage: undefined,
-      capabilities: { canResume: false, canRemove: false, canClear: false },
+      capabilities: { canResume: false, canRemove: false },
     });
     assert.deepEqual(unknownResume.failure, {
       id: "group:resume-4",
       inputIndex: 4,
       prompt: "resume prompt",
       createdAt: 1_000,
-      dispatch: "foreground",
-      retention: "transient",
+      attempt: { kind: "resume", dispatch: "foreground" },
+      conversation: { policy: "release", available: false, attached: false },
+      retention: { catalog: "transient", reasons: [] },
       config: {
         name: "(unknown)",
         description: "",
@@ -110,27 +119,29 @@ test("preflight failures project current snapshot fields for unknown tasks", () 
         model: undefined,
         thinking: undefined,
         tools: undefined,
-        resumable: false,
       },
       status: {
         kind: "done",
         outcome: "error",
         completedAt: 1_000,
-        resumed: true,
-        error: "Unknown resumable subagent session: ghost",
+        error: "Unknown retained subagent session: ghost",
       },
       activity: { turns: 0, compactions: 0, toolHistory: [] },
       usage: undefined,
-      capabilities: { canResume: false, canRemove: false, canClear: false },
+      capabilities: { canResume: false, canRemove: false },
     });
-    assertCurrentSnapshotFields(unknownSpawn.failure as unknown as Record<string, unknown>);
-    assertCurrentSnapshotFields(unknownResume.failure as unknown as Record<string, unknown>);
+    for (const failure of [unknownSpawn.failure, unknownResume.failure]) {
+      assertNoLifecycleAliases(failure);
+      assertNoLifecycleAliases(failure.config);
+      assertNoLifecycleAliases(failure.status);
+      assertNoLifecycleAliases(failure.capabilities);
+    }
   } finally {
     Date.now = realNow;
   }
 });
 
-test("blocked known resumes project target config and preserve synthetic row fields", () => {
+test("a blocked known resume preserves the spawn label and resolved conversation policy", () => {
   const realNow = Date.now;
   Date.now = () => 1_000;
   try {
@@ -140,21 +151,28 @@ test("blocked known resumes project target config and preserve synthetic row fie
       systemPrompt: "system",
       source: "user" as const,
       sourcePath: "/agents/known.md",
+      retainConversation: true,
       model: "default/model",
       thinking: "low" as const,
       tools: ["read"],
       skills: ["skill-a"],
-      resumable: true,
     };
-    const target = new Agent(
-      "session-1",
-      config,
-      { kind: "spawn", agent: "known", prompt: "original", label: "original label", model: "override/model", thinking: "high", skills: ["requested-skill"] },
-      noop,
-    );
+    const spawn: SpawnRequest = {
+      kind: "spawn",
+      agent: "known",
+      prompt: "original",
+      label: "original label",
+      model: "override/model",
+      thinking: "high",
+      skills: ["requested-skill"],
+    };
+    const target = new Agent("session-1", config, spawn, noop);
+    spawn.label = "mutated label";
+    assert.equal(target.requestedConfig.conversationPolicy, "retain");
+
     const result = resolveTask({
-      task: { kind: "resume", sessionId: target.id, prompt: "blocked", label: "new label" },
-      background: true,
+      task: { kind: "resume", sessionId: target.id, prompt: "blocked" },
+      dispatch: "background",
       groupId: "group",
       inputIndex: 5,
       registry: { agents: new Map([["known", config]]) } as any,
@@ -168,11 +186,12 @@ test("blocked known resumes project target config and preserve synthetic row fie
     assert.deepEqual(result.failure, {
       id: "session-1",
       inputIndex: 5,
-      label: "new label",
+      label: "original label",
       prompt: "blocked",
       createdAt: 1_000,
-      dispatch: "background",
-      retention: "transient",
+      attempt: { kind: "resume", dispatch: "background" },
+      conversation: { policy: "retain", available: false, attached: false },
+      retention: { catalog: "transient", reasons: [] },
       config: {
         name: "known",
         description: "Known agent",
@@ -182,20 +201,17 @@ test("blocked known resumes project target config and preserve synthetic row fie
         thinking: "high",
         tools: ["read"],
         skills: ["requested-skill"],
-        resumable: true,
       },
       status: {
         kind: "done",
         outcome: "error",
         completedAt: 1_000,
-        resumed: true,
         error: "Cannot resume subagent session session-1: it is already resuming.",
       },
       activity: { turns: 0, compactions: 0, toolHistory: [] },
       usage: undefined,
-      capabilities: { canResume: false, canRemove: false, canClear: false },
+      capabilities: { canResume: false, canRemove: false },
     });
-    assertCurrentSnapshotFields(result.failure as unknown as Record<string, unknown>);
   } finally {
     Date.now = realNow;
   }

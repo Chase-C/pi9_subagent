@@ -61,7 +61,7 @@ test("results expanded renders each entry as a run-style block, with pending row
   const details = {
     view: "results",
     results: [
-      { snapshot: fakeAgent({ id: "ready-id", label: "phase 1", config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "all done" } }) },
+      { snapshot: fakeAgent({ id: "ready-id", label: "phase 1", config: { name: "helper", retainConversation: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "all done" } }) },
       { snapshot: fakeAgent({ id: "queued-id", label: "phase 2", config: { name: "helper" }, status: { kind: "queued", queuedAt: 1 } }) },
       { sessionId: "err-id", error: "Unknown subagent session: err-id" },
     ],

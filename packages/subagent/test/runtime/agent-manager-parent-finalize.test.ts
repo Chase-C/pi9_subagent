@@ -1,6 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
+import type { Attempt } from "../../src/domain/agent-attempt.js";
 import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
 import { toResult } from "../../src/domain/agent-result.js";
 import { baseCtx, makeManager } from "../helpers/runtime.js";
@@ -10,31 +11,31 @@ test("parent finalizing with error cancels its non-background child via the obse
   const childFlag = { aborted: false };
   let releaseParent!: () => void;
   const parentHold = new Promise<void>(r => { releaseParent = r; });
-  const runner = async (_ctx: any, agent: any) => {
-    if (agent.spawn.prompt === "parent") {
+  const runner = async (_ctx: any, agent: any, attempt: Attempt) => {
+    if (attempt.prompt === "parent") {
       // Parent finalizes with error only once the test releases it, so the
       // child is deterministically still running at the assertion below.
       await parentHold;
       throw new Error("parent boom");
     }
-    agent.attach({
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
-      abort: () => { aborts.push(agent.spawn.prompt); childFlag.aborted = true; },
+      abort: () => { aborts.push(attempt.prompt); childFlag.aborted = true; },
     });
     while (!childFlag.aborted) await new Promise(r => setTimeout(r, 5));
     return interruptedRun(agent, "aborted");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project" }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
   const parentBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "parent" }],
-    undefined, { background: false },
+    undefined, { dispatch: "foreground" },
   );
   // Wait for parent agent to register.
   await new Promise(r => setTimeout(r, 5));
@@ -43,7 +44,7 @@ test("parent finalizing with error cancels its non-background child via the obse
   const childBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
-    undefined, { background: false, parentId: parentId },
+    undefined, { dispatch: "foreground", parentId: parentId },
   );
   await new Promise(r => setTimeout(r, 10));
   assert.equal(
@@ -69,9 +70,9 @@ test("parent finalizing with completed leaves a running non-background child alo
   const parentHold = new Promise<void>(r => { releaseParent = r; });
   let releaseChild!: () => void;
   const childHold = new Promise<void>(r => { releaseChild = r; });
-  const runner = async (_ctx: any, agent: any) => {
-    if (agent.spawn.prompt === "parent") {
-      agent.attach({
+  const runner = async (_ctx: any, agent: any, attempt: Attempt) => {
+    if (attempt.prompt === "parent") {
+      agent.bindSession({
         messages: [],
         subscribe: () => () => { },
         prompt: async () => { },
@@ -80,7 +81,7 @@ test("parent finalizing with completed leaves a running non-background child alo
       await parentHold;
       return completedRun(agent, "ok");
     }
-    agent.attach({
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
@@ -90,14 +91,14 @@ test("parent finalizing with completed leaves a running non-background child alo
     return completedRun(agent, "child-ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project" }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
   const parentBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "parent" }],
-    undefined, { background: false },
+    undefined, { dispatch: "foreground" },
   );
   await new Promise(r => setTimeout(r, 10));
   const parentId = manager.listSessions().find(s => s.parentSessionId === undefined)!.id;
@@ -107,7 +108,7 @@ test("parent finalizing with completed leaves a running non-background child alo
   const childBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
-    undefined, { background: false, parentId: parentId },
+    undefined, { dispatch: "foreground", parentId: parentId },
   );
   await new Promise(r => setTimeout(r, 10));
   assert.equal(
@@ -135,9 +136,9 @@ test("parent aborted with running background descendant: background survives and
   let releaseBg!: () => void;
   const bgHold = new Promise<void>(r => { releaseBg = r; });
   const parentFlag = { aborted: false };
-  const runner = async (_ctx: any, agent: any) => {
-    if (agent.spawn.prompt === "parent") {
-      agent.attach({
+  const runner = async (_ctx: any, agent: any, attempt: Attempt) => {
+    if (attempt.prompt === "parent") {
+      agent.bindSession({
         messages: [],
         subscribe: () => () => { },
         prompt: async () => { },
@@ -146,7 +147,7 @@ test("parent aborted with running background descendant: background survives and
       while (!parentFlag.aborted) await new Promise(r => setTimeout(r, 5));
       return interruptedRun(agent, "aborted");
     }
-    agent.attach({
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
@@ -156,14 +157,14 @@ test("parent aborted with running background descendant: background survives and
     return completedRun(agent, "bg-ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project" }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
   const parentBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "parent" }],
-    undefined, { background: false },
+    undefined, { dispatch: "foreground" },
   );
   await new Promise(r => setTimeout(r, 10));
   const parentId = manager.listSessions().find(s => s.parentSessionId === undefined)!.id;
@@ -171,7 +172,7 @@ test("parent aborted with running background descendant: background survives and
   const bgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
-    undefined, { background: true, parentId: parentId },
+    undefined, { dispatch: "background", parentId: parentId },
   );
   await new Promise(r => setTimeout(r, 10));
 
@@ -200,9 +201,9 @@ test("background descendants form a cancellation boundary for their own children
   const bgHold = new Promise<void>(r => { releaseBg = r; });
   let releaseFg!: () => void;
   const fgHold = new Promise<void>(r => { releaseFg = r; });
-  const runner = async (_ctx: any, agent: any) => {
-    if (agent.spawn.prompt === "root") {
-      agent.attach({
+  const runner = async (_ctx: any, agent: any, attempt: Attempt) => {
+    if (attempt.prompt === "root") {
+      agent.bindSession({
         messages: [],
         subscribe: () => () => { },
         prompt: async () => { },
@@ -211,8 +212,8 @@ test("background descendants form a cancellation boundary for their own children
       await rootHold;
       throw new Error("root boom");
     }
-    if (agent.spawn.prompt === "bg") {
-      agent.attach({
+    if (attempt.prompt === "bg") {
+      agent.bindSession({
         messages: [],
         subscribe: () => () => { },
         prompt: async () => { },
@@ -221,7 +222,7 @@ test("background descendants form a cancellation boundary for their own children
       await bgHold;
       return completedRun(agent, "bg-ok");
     }
-    agent.attach({
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
@@ -231,14 +232,14 @@ test("background descendants form a cancellation boundary for their own children
     return completedRun(agent, "fg-ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project" }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
   const rootBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "root" }],
-    undefined, { background: false },
+    undefined, { dispatch: "foreground" },
   );
   await new Promise(r => setTimeout(r, 10));
   const rootId = manager.listSessions().find(s => s.prompt === "root")!.id;
@@ -246,7 +247,7 @@ test("background descendants form a cancellation boundary for their own children
   const bgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
-    undefined, { background: true, parentId: rootId },
+    undefined, { dispatch: "background", parentId: rootId },
   );
   await new Promise(r => setTimeout(r, 10));
   const bgId = manager.listSessions().find(s => s.prompt === "bg")!.id;
@@ -254,7 +255,7 @@ test("background descendants form a cancellation boundary for their own children
   const fgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "fg" }],
-    undefined, { background: false, parentId: bgId },
+    undefined, { dispatch: "foreground", parentId: bgId },
   );
   await new Promise(r => setTimeout(r, 10));
   assert.equal(manager.listSessions().find(s => s.prompt === "fg")?.status.kind, "running");
@@ -278,9 +279,9 @@ test("parent errors with mix of background and non-background children: only non
   const nonBgFlag = { aborted: false };
   let releaseBg!: () => void;
   const bgHold = new Promise<void>(r => { releaseBg = r; });
-  const runner = async (_ctx: any, agent: any) => {
-    if (agent.spawn.prompt === "parent") {
-      agent.attach({
+  const runner = async (_ctx: any, agent: any, attempt: Attempt) => {
+    if (attempt.prompt === "parent") {
+      agent.bindSession({
         messages: [],
         subscribe: () => () => { },
         prompt: async () => { },
@@ -289,8 +290,8 @@ test("parent errors with mix of background and non-background children: only non
       await new Promise(r => setTimeout(r, 20));
       throw new Error("parent boom");
     }
-    if (agent.spawn.prompt === "fg") {
-      agent.attach({
+    if (attempt.prompt === "fg") {
+      agent.bindSession({
         messages: [],
         subscribe: () => () => { },
         prompt: async () => { },
@@ -300,7 +301,7 @@ test("parent errors with mix of background and non-background children: only non
       return interruptedRun(agent, "aborted");
     }
     // bg
-    agent.attach({
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
@@ -310,14 +311,14 @@ test("parent errors with mix of background and non-background children: only non
     return completedRun(agent, "bg-ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project" }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
   const parentBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "parent" }],
-    undefined, { background: false },
+    undefined, { dispatch: "foreground" },
   );
   await new Promise(r => setTimeout(r, 5));
   const parentId = manager.listSessions().find(s => s.parentSessionId === undefined)!.id;
@@ -325,12 +326,12 @@ test("parent errors with mix of background and non-background children: only non
   const fgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "fg" }],
-    undefined, { background: false, parentId: parentId },
+    undefined, { dispatch: "foreground", parentId: parentId },
   );
   const bgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
-    undefined, { background: true, parentId: parentId },
+    undefined, { dispatch: "background", parentId: parentId },
   );
   await new Promise(r => setTimeout(r, 10));
 
@@ -353,18 +354,18 @@ test("ParentFinalizePolicy honors the background flag set at startRun time when 
   const aborts: string[] = [];
   let releaseChild!: () => void;
   const childHold = new Promise<void>(r => { releaseChild = r; });
-  const runner = async (_ctx: any, agent: any) => {
-    agent.attach({
+  const runner = async (_ctx: any, agent: any, attempt: Attempt) => {
+    agent.bindSession({
       messages: [],
       subscribe: () => () => { },
       prompt: async () => { },
-      abort: () => { aborts.push(agent.spawn.prompt); },
+      abort: () => { aborts.push(attempt.prompt); },
     });
     await childHold;
     return completedRun(agent, "ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project" }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
 
@@ -373,7 +374,7 @@ test("ParentFinalizePolicy honors the background flag set at startRun time when 
   const batch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
-    undefined, { background: true, parentId: "parent-1" },
+    undefined, { dispatch: "background", parentId: "parent-1" },
   );
   await new Promise(r => setTimeout(r, 20));
 

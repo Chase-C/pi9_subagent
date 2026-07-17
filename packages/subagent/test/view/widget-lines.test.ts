@@ -15,7 +15,7 @@ test("abbreviateTokens renders sub-1k as-is, 1k-9999 with one decimal, and 10k+ 
   assert.equal(abbreviateTokens(0), undefined);
 });
 
-test("formatWidgetLines renders Background and Resumable sections with header counts and condensed rows", () => {
+test("formatWidgetLines renders Background and Retained sections with header counts and condensed rows", () => {
   const now = 10_000;
   const agents = [
     fakeAgent({
@@ -39,7 +39,7 @@ test("formatWidgetLines renders Background and Resumable sections with header co
     fakeAgent({
       id: "res",
       retention: "persistent",
-      config: { name: "helper", resumable: true },
+      config: { name: "helper", retainConversation: true },
       createdAt: 3,
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "done" },
     }),
@@ -57,12 +57,12 @@ test("formatWidgetLines renders Background and Resumable sections with header co
   assert.equal(lines[0], "Background · 1 running · 1 ready");
   assert.match(lines[1], /^  [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scout · 1s · 3\.4k · tool:grep$/);
   assert.equal(lines[2], "  ✓ reviewer · 4s · 850");
-  assert.equal(lines[3], "Resumable · 1 ready");
+  assert.equal(lines[3], "Retained · 1 ready");
   assert.equal(lines[4], "  ✓ helper · 4s");
   assert.equal(lines[5], "+1 foreground running");
 });
 
-test("formatWidgetLines keeps active foreground-resumable agents in the Resumable section", () => {
+test("formatWidgetLines keeps active foreground-retainConversation agents in the Retained section", () => {
   const agents = [
     fakeAgent({
       id: "bg",
@@ -74,7 +74,7 @@ test("formatWidgetLines keeps active foreground-resumable agents in the Resumabl
     fakeAgent({
       id: "active-res",
       retention: "persistent",
-      config: { name: "active-helper", resumable: true },
+      config: { name: "active-helper", retainConversation: true },
       status: { kind: "running", startedAt: 4_000 },
     }),
   ];
@@ -83,7 +83,7 @@ test("formatWidgetLines keeps active foreground-resumable agents in the Resumabl
 
   assert.equal(lines[0], "Background · 1 ready");
   assert.match(lines[1], /background/);
-  assert.equal(lines[2], "Resumable · 1 running");
+  assert.equal(lines[2], "Retained · 1 running");
   assert.match(lines[3], /active-helper/);
 });
 
@@ -280,28 +280,28 @@ test("formatWidgetLines appends parent marker with immediate parent display name
   assert.equal(lines[2], "  ✓ Orchestrator · 1s");
 });
 
-test("formatWidgetLines appends parent marker on nested Resumable section rows", () => {
+test("formatWidgetLines appends parent marker on nested Retained section rows", () => {
   const agents = [
     fakeAgent({
       id: "res-parent",
       retention: "persistent",
-      capabilities: { canResume: true, canRemove: true, canClear: true },
+      capabilities: { canResume: true, canRemove: true },
       label: "Main Session",
-      config: { name: "main", resumable: true },
+      config: { name: "main", retainConversation: true },
       status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
     }),
     fakeAgent({
       id: "res-child",
       parentSessionId: "res-parent",
       retention: "persistent",
-      config: { name: "follow-up", resumable: true },
+      config: { name: "follow-up", retainConversation: true },
       status: { kind: "completed", startedAt: 3_000, completedAt: 4_000, response: "ok" },
     }),
   ];
 
   const lines = formatWidgetLines(agents, 5_000);
 
-  assert.equal(lines[0], "Resumable · 2 ready");
+  assert.equal(lines[0], "Retained · 2 ready");
   assert.equal(lines[1], "  ✓ Main Session · 1s");
   assert.match(lines[2], /^  ✓ follow-up · 1s · ↳ Main Session$/);
 });

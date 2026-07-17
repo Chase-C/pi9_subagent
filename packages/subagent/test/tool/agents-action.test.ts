@@ -18,7 +18,7 @@ test("tool agents action projects each definition with tools, default skills, an
   await mkdir(projectAgents, { recursive: true });
   await writeFile(
     join(projectAgents, "helper.md"),
-    `---\nname: helper\ndescription: Helps\nresumable: true\nmodel: test/model\ntools: read, bash\nskills: foo, bar\n---\nHelp prompt`,
+    `---\nname: helper\ndescription: Helps\nretainConversation: true\nmodel: test/model\ntools: read, bash\nskills: foo, bar\n---\nHelp prompt`,
   );
 
   const tool = registerExtension();
@@ -28,14 +28,14 @@ test("tool agents action projects each definition with tools, default skills, an
   assert.equal(result.details.view, "agents");
   const helper = result.details.agents.find((a: any) => a.name === "helper");
   assert.ok(helper);
-  assert.equal(helper.resumable, true, "renderer details keep the internal config field");
+  assert.equal(helper.retainConversation, true, "renderer details keep the internal config field");
   assert.equal(helper.sourcePath, join(projectAgents, "helper.md"));
   assert.deepEqual(helper.tools, ["read", "bash"]);
   assert.deepEqual(helper.skills, ["foo", "bar"]);
   assert.equal(Object.prototype.hasOwnProperty.call(helper, "systemPrompt"), false);
 
   const modelHelper = JSON.parse(result.content[0].text).agents.find((a: any) => a.name === "helper");
-  assert.equal(modelHelper.defaultResumable, true);
-  assert.equal(Object.prototype.hasOwnProperty.call(modelHelper, "resumable"), false);
+  assert.equal(modelHelper.defaultRetainConversation, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(modelHelper, "retainConversation"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(modelHelper, "systemPrompt"), false);
 });

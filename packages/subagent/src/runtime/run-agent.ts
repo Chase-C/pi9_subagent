@@ -59,7 +59,7 @@ export async function RunAttempt(
     if (!session) {
       throw new Error(`Cannot resume an agent without a retained session.`);
     }
-    agent.attach(session);
+    agent.bindSession(session);
     return PromptAgent(session, agent, attempt, signal);
   }
 
@@ -142,7 +142,6 @@ export async function RunAttempt(
     cwd,
     skills: requestedSkills,
     tools: activeTools,
-    resumable: requestedConfig.resumable,
   });
 
   if (signal?.aborted) {
@@ -150,7 +149,7 @@ export async function RunAttempt(
     return skippedRun(agent);
   }
 
-  agent.attach(session);
+  agent.bindSession(session);
   return PromptAgent(session, agent, attempt, signal);
 }
 

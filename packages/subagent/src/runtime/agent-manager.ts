@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
-import type { AgentUpdateKind } from "../domain/agent-lifecycle.js";
+import type { AgentDispatch, AgentUpdateKind } from "../domain/agent-lifecycle.js";
 import type { ResultEntry } from "../domain/agent-result.js";
 import { effectiveStatus } from "../domain/agent-decisions.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
@@ -21,7 +21,7 @@ export type { RunUpdate, RunUpdateListener } from "./run-group.js";
 export type { ResultEntry } from "../domain/agent-result.js";
 
 export interface StartRunOptions {
-  background: boolean;
+  dispatch: AgentDispatch;
   parentId?: string;
 }
 
@@ -54,7 +54,7 @@ export class AgentManager {
   private readonly _groups = new Map<string, RunGroup>();
   private readonly _removingSessionIds = new Set<string>();
   private readonly _acknowledgedResultIds = new Set<string>();
-  private readonly _attachedSessionIds: string[] = [];
+  private _nextAttachmentOrder = 0;
   private readonly _descendantsByAncestor = new Map<string, Map<string, AgentSnapshot>>();
   /** In-flight cancellation fanouts keyed by the finalized parent's session id. */
   private readonly _pendingFinalize = new Map<string, Promise<void>>();
@@ -74,7 +74,7 @@ export class AgentManager {
   listSessions(filter?: { status?: SessionStatus[] }): AgentSnapshot[] {
     const listed = this._agents
       .filter(agent => !this._removingSessionIds.has(agent.id))
-      .filter(agent => agent.catalogRetention.shouldRemainCataloged);
+      .filter(agent => agent.retentionDecision.cataloged);
     const views = listed.map(agent => agent.snapshot());
     if (!filter || filter.status === undefined) return views;
     const allowed = new Set(filter.status);
@@ -84,26 +84,24 @@ export class AgentManager {
   attachToSession(sessionId: string): AgentSnapshot {
     const lookup = this._resolveSession(sessionId);
     if ("error" in lookup) throw new Error(lookup.error);
-    if (!this._attachedSessionIds.includes(sessionId)) this._attachedSessionIds.push(sessionId);
-    lookup.agent.pinForAttachment();
+    if (lookup.agent.attachmentOrder === undefined) {
+      lookup.agent.attach(this._nextAttachmentOrder++);
+    }
     return lookup.agent.snapshot();
   }
 
   listAttachedSessions(): AgentSnapshot[] {
-    return this._attachedSessionIds.flatMap(id => {
-      const lookup = this._resolveSession(id);
-      return "agent" in lookup ? [lookup.agent.snapshot()] : [];
-    });
+    return this._agents
+      .filter(agent => agent.attachmentOrder !== undefined)
+      .sort((a, b) => a.attachmentOrder! - b.attachmentOrder!)
+      .map(agent => agent.snapshot());
   }
 
   detachFromSession(sessionId: string): boolean {
-    const index = this._attachedSessionIds.indexOf(sessionId);
-    if (index === -1) return false;
-    this._attachedSessionIds.splice(index, 1);
     const lookup = this._resolveSession(sessionId);
-    if ("error" in lookup) return true;
-    lookup.agent.unpinAttachment();
-    if (!lookup.agent.catalogRetention.shouldRemainCataloged) {
+    if ("error" in lookup || lookup.agent.attachmentOrder === undefined) return false;
+    lookup.agent.detach();
+    if (!lookup.agent.retentionDecision.cataloged) {
       this._agents = this._agents.filter(agent => agent.id !== sessionId);
       this._acknowledgedResultIds.delete(sessionId);
       this._descendantsByAncestor.delete(sessionId);
@@ -113,11 +111,10 @@ export class AgentManager {
   }
 
   attachedSessionDetail(sessionId: string): AttachedSessionDetail {
-    if (!this._attachedSessionIds.includes(sessionId)) {
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup || lookup.agent.attachmentOrder === undefined) {
       throw new Error(`Subagent session ${sessionId} is not attached.`);
     }
-    const lookup = this._resolveSession(sessionId);
-    if ("error" in lookup) throw new Error(lookup.error);
     const runtime = lookup.agent.retainedSession();
     return {
       session: lookup.agent.snapshot(),
@@ -136,10 +133,10 @@ export class AgentManager {
   }
 
   async steerSession(sessionId: string, text: string): Promise<void> {
-    if (!this._attachedSessionIds.includes(sessionId)) {
+    const lookup = this._resolveSession(sessionId);
+    if ("agent" in lookup && lookup.agent.attachmentOrder === undefined) {
       throw new Error(`Subagent session ${sessionId} is not attached.`);
     }
-    const lookup = this._resolveSession(sessionId);
     if ("error" in lookup) throw new Error(lookup.error);
     if (lookup.agent.status.kind !== "running") {
       throw new Error(`Cannot steer subagent session ${sessionId} while it is not running.`);
@@ -177,7 +174,7 @@ export class AgentManager {
     const { skipBackground = false, reason } = options;
     const toCancel = this._agents
       .filter(a => a.parentId === parentSessionId)
-      .filter(a => !(skipBackground && a.background));
+      .filter(a => !(skipBackground && a.snapshot().attempt.dispatch === "background"));
 
     for (const child of toCancel) {
       await this.cancelDescendantsOf(child.id, options);
@@ -227,8 +224,6 @@ export class AgentManager {
       for (const id of removedIds) {
         this._acknowledgedResultIds.delete(id);
         this._descendantsByAncestor.delete(id);
-        const attachedIndex = this._attachedSessionIds.indexOf(id);
-        if (attachedIndex !== -1) this._attachedSessionIds.splice(attachedIndex, 1);
       }
       for (const descendants of this._descendantsByAncestor.values()) {
         for (const id of removedIds) descendants.delete(id);
@@ -269,13 +264,13 @@ export class AgentManager {
     this._groups.set(groupId, group);
 
     // Background runs deliberately decouple from the caller's cancellation signal.
-    const childSignal = options.background ? undefined : signal;
+    const childSignal = options.dispatch === "background" ? undefined : signal;
     const touched = new Set<string>();
 
-    const { background, parentId } = options;
+    const { dispatch, parentId } = options;
     const results = tasks.map((task, inputIndex) => {
       const result = resolveTask({
-        task, background, groupId, inputIndex, parentId, registry: this.registry,
+        task, dispatch, groupId, inputIndex, parentId, registry: this.registry,
         findAgent: id => this._agents.find(a => a.id === id),
         allocateSessionId: () => this._sessionIdAllocator.allocate(),
         listener: (agent, update) => this._agentUpdate(agent, update),
@@ -305,7 +300,7 @@ export class AgentManager {
     const resultsPromise = Promise.all(results)
       .finally(() => {
         this._agents = this._agents.filter(
-          agent => !touched.has(agent.id) || agent.catalogRetention.shouldRemainCataloged
+          agent => !touched.has(agent.id) || agent.retentionDecision.cataloged
         );
 
         group.flush();

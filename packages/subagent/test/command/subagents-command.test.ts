@@ -54,7 +54,7 @@ test("/subagents opens one persistent overlay for all pages", async () => {
 });
 
 test("completed attached sessions resume through AgentManager.startRun inside the overlay", async () => {
-  const session = fakeAgent({ id: "s1", retention: "persistent", capabilities: { canResume: true }, config: { resumable: true } });
+  const session = fakeAgent({ id: "s1", retention: "persistent", capabilities: { canResume: true }, config: { retainConversation: true } });
   const attached: any[] = [];
   const runs: any[] = [];
   const manager = {
@@ -70,9 +70,9 @@ test("completed attached sessions resume through AgentManager.startRun inside th
         resultsPromise: Promise.resolve([fakeAgent({
           id: "s1",
           retention: "persistent",
-          config: { resumable: true },
+          config: { retainConversation: true },
           prompt: tasks[0].prompt,
-          status: { kind: "completed", response: "resumed", resumed: true },
+          status: { kind: "completed", response: "resumed" },
         })]),
       };
     },
@@ -282,7 +282,7 @@ test("/subagents settings exposes runtime and widget clutter controls", async ()
         component.handleInput("\r"); // 4 -> 8
         component.handleInput("\x1b[B"); // max tasks per run
         component.handleInput("\r"); // 8 -> 16
-        component.handleInput("\x1b[B"); // default resumable
+        component.handleInput("\x1b[B"); // default retainConversation
         component.handleInput("\r"); // false -> true
         component.handleInput("\x1b[B"); // show retained
         renderedShowRetained = component.render(120).join("\n");
@@ -296,14 +296,14 @@ test("/subagents settings exposes runtime and widget clutter controls", async ()
 
   assert.match(renderedInitial, /Max running/);
   assert.match(renderedInitial, /Max tasks per run/);
-  assert.match(renderedInitial, /Default resumable/);
+  assert.match(renderedInitial, /Default retainConversation/);
   assert.match(renderedMaxRunning, /tree-wide cap/);
   assert.match(renderedShowRetained, /Show retained/);
   const last = saved.at(-1);
   assert.ok(last, "expected settings to be saved");
   assert.equal(last.runtime.maxConcurrentSubagents, 8);
   assert.equal(last.runtime.maxTasksPerRun, 16);
-  assert.equal(last.runtime.defaultResumable, true);
+  assert.equal(last.runtime.defaultRetainConversation, true);
   assert.equal(last.display.widgetShowRetainedSessions, false);
   assert.equal(last.display.widgetMaxRowsPerSection, 8);
   assert.deepEqual(configured, [{ maxRunning: 4 }, { maxRunning: 8 }]);
@@ -351,7 +351,7 @@ test("/subagents settings backgroundNotify changes update live notifier mode imm
   agentUpdate!({
     id: "s1",
     agentName: "helper",
-    background: true,
+    dispatch: "background",
     createdAt: 1,
     status: { kind: "completed", startedAt: 1, completedAt: 2, result: { status: "completed" } },
   }, "status");
@@ -517,7 +517,7 @@ test("/subagents can switch between sessions and agents views", async () => {
   const reloadCalls: string[] = [];
   const commands = registerCommand({
     agentRegistry: {
-      agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", resumable: false }]]),
+      agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", retainConversation: false }]]),
       async reload(cwd: string) { reloadCalls.push(cwd); },
       summarizeAgent() { return ""; },
     },
@@ -556,7 +556,7 @@ test("/subagents can switch between sessions and agents views", async () => {
 
 test("/subagents command is a silent no-op without UI, regardless of whether a notify is supplied", async () => {
   const fakeRegistry = {
-    agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", resumable: false }]]),
+    agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", retainConversation: false }]]),
     async reload() {},
     summarizeAgent() { return ""; },
   };
@@ -575,8 +575,8 @@ test("subagents command opens agents browser by default when sessions are empty"
   const reloadCalls: string[] = [];
   const fakeRegistry = {
     agents: new Map([
-      ["helper", { name: "helper", description: "Helps with implementation", source: "project", resumable: true, model: "test/model", thinking: "high", tools: ["read", "bash"], sourcePath: "/repo/.pi/agents/helper.md" }],
-      ["reviewer", { name: "reviewer", description: "Reviews changes", source: "user", resumable: false }],
+      ["helper", { name: "helper", description: "Helps with implementation", source: "project", retainConversation: true, model: "test/model", thinking: "high", tools: ["read", "bash"], sourcePath: "/repo/.pi/agents/helper.md" }],
+      ["reviewer", { name: "reviewer", description: "Reviews changes", source: "user", retainConversation: false }],
     ]),
     async reload(cwd: string) { reloadCalls.push(cwd); },
     summarizeAgent() { return ""; },
@@ -605,7 +605,7 @@ test("subagents command opens agents browser by default when sessions are empty"
   assert.match(listText, /helper/);
   assert.match(listText, /Helps with implementation/);
   assert.match(listText, /project/);
-  assert.match(listText, /resumable/);
+  assert.match(listText, /retained/i);
   assert.match(listText, /reviewer/);
   assert.match(listText, /Settings/);
   assert.match(listText, /close/);
@@ -617,7 +617,7 @@ test("subagents command opens agents browser by default when sessions are empty"
   assert.match(inspectText, /Model: test\/model/);
   assert.match(inspectText, /Thinking: high/);
   assert.match(inspectText, /Tools: read, bash/);
-  assert.match(inspectText, /Resumable: true/);
+  assert.match(inspectText, /Retained: true/);
   assert.match(inspectText, /Path: \/repo\/\.pi\/agents\/helper\.md/);
   assert.doesNotMatch(inspectText, /launch|start/i);
 });
@@ -625,7 +625,7 @@ test("subagents command opens agents browser by default when sessions are empty"
 test("/subagents agents menu closes on a terminal escape sequence", async () => {
   const commands = registerCommand({
     agentRegistry: {
-      agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", resumable: false }]]),
+      agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", retainConversation: false }]]),
       async reload() {},
       summarizeAgent() { return ""; },
     },
@@ -688,7 +688,7 @@ test("/subagents sessions menu closes on a terminal escape sequence", async () =
 test("/subagents sessions command keeps notifications metadata-only and uses configured display lengths for inspect", async () => {
   const session = fakeAgent({
     retention: "transient",
-    config: { resumable: false },
+    config: { retainConversation: false },
     status: { kind: "error", startedAt: 1, completedAt: 2, error: "abcdefghijklmnopqrstuvwxyz" },
     message: "0123456789abcdefghijklmnopqrstuvwxyz",
   });
@@ -731,7 +731,7 @@ test("/subagents sessions command keeps notifications metadata-only and uses con
 test("/subagents command reports custom UI failure without throwing", async () => {
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { name: "helper", resumable: true, source: "project" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" }, turns: 1 })],
+    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true }, config: { name: "helper", retainConversation: true, source: "project" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" }, turns: 1 })],
   };
   const commands = registerCommand({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
@@ -755,7 +755,7 @@ test("/subagents command reports custom UI failure without throwing", async () =
 test("subagents command opens a sessions view from serialized DTOs", async () => {
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { resumable: true }, options: { prompt: "Fix issue by updating the API" } })],
+    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true }, config: { retainConversation: true }, options: { prompt: "Fix issue by updating the API" } })],
   };
   const commands = registerCommand({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
@@ -783,7 +783,7 @@ test("subagents command opens a sessions view from serialized DTOs", async () =>
   assert.match(text, /\[ Sessions \]/);
   assert.match(text, /helper/);
   assert.match(text, /completed/);
-  assert.match(text, /resumable/);
+  assert.match(text, /retained/i);
   assert.match(text, /Session s1/);
   assert.doesNotMatch(text, /"config"/);
 });
@@ -798,7 +798,7 @@ test("/subagents does not invoke the legacy external-editor resume flow", async 
     let runCalls = 0;
     const fakeManager = {
       listSessions(): any[] { return this.sessions; },
-      sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { resumable: true } })],
+      sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true }, config: { retainConversation: true } })],
       startRun() { runCalls += 1; throw new Error("run should not start"); },
     };
     const commands = registerCommand({
@@ -830,15 +830,15 @@ test("pressing the legacy resume key does not open a second dialog", async () =>
   const resumeCalls: any[] = [];
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { resumable: true } })],
+    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true }, config: { retainConversation: true } })],
     startRun(_ctx: any, signal: AbortSignal, tasks: any[]) {
       const task = tasks[0];
       resumeCalls.push({ signal, sessionId: task.sessionId, prompt: task.prompt });
       const resultsPromise = Promise.resolve([fakeAgent({
         id: task.sessionId,
-        config: { name: "helper", resumable: true },
+        config: { name: "helper", retainConversation: true },
         prompt: task.prompt,
-        status: { kind: "completed", response: `Result ${"z".repeat(1000)}`, resumed: true },
+        status: { kind: "completed", response: `Result ${"z".repeat(1000)}` },
       })]);
       return { sessions: [], resultsPromise };
     },
@@ -891,16 +891,16 @@ test("pressing the legacy resume key does not open a second dialog", async () =>
 test("closing the overlay does not start or cancel a legacy resume loader", async () => {
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { resumable: true } })],
+    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true }, config: { retainConversation: true } })],
     startRun(_ctx: any, signal: AbortSignal, tasks: any[]) {
       const task = tasks[0];
       const resultsPromise = new Promise<any[]>(resolve => {
         signal.addEventListener("abort", () => {
           resolve([fakeAgent({
             id: task.sessionId,
-            config: { name: "helper", resumable: true },
+            config: { name: "helper", retainConversation: true },
             prompt: task.prompt,
-            status: { kind: "interrupted", error: "Agent interrupted.", resumed: true },
+            status: { kind: "interrupted", error: "Agent interrupted." },
           })]);
         }, { once: true });
       });
@@ -944,12 +944,12 @@ test("closing the overlay does not start or cancel a legacy resume loader", asyn
   assert.deepEqual(notifications, []);
 });
 
-test("subagents command inspect view removes a completed non-resumable background result", async () => {
+test("subagents command inspect view removes a completed non-retainConversation background result", async () => {
   const backgroundSession = fakeAgent({
     dispatch: "background",
     retention: "persistent",
-    capabilities: { canResume: false, canRemove: true, canClear: true },
-    config: { resumable: false, tools: ["read", "bash"] },
+    capabilities: { canResume: false, canRemove: true },
+    config: { retainConversation: false, tools: ["read", "bash"] },
     options: { prompt: "Fix background task", model: "test/model", thinking: "low" },
     status: { kind: "completed", startedAt: 2_000, completedAt: 5_000, response: "Implemented the retained-session fix." },
     turns: 3, toolUses: 2, compactions: 1, createdAt: 1_000,
@@ -989,7 +989,7 @@ test("subagents command inspect view removes a completed non-resumable backgroun
   });
 
   assert.match(inspectText, /Status: completed/);
-  assert.doesNotMatch(inspectText, /Status: completed · resumable/);
+  assert.doesNotMatch(inspectText, /Status: completed · retainConversation/);
   assert.match(inspectText, /Agent: helper \(project\)/);
   assert.match(inspectText, /Model: test\/model · thinking:low/);
   assert.match(inspectText, /Tools: read, bash/);

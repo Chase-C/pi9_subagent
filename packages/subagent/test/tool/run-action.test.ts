@@ -48,7 +48,7 @@ test("tool run action does not expose transient foreground ids as collectable re
     startRun() {
       const resultsPromise = Promise.resolve([fakeAgent({
         id: "transient-run-id",
-        config: { name: "helper", resumable: false },
+        config: { name: "helper", retainConversation: false },
         prompt: "work",
         status: { kind: "completed", response: "done" },
       })]);
@@ -80,9 +80,9 @@ test("tool run action returns full output only once in JSON details for a resume
     startRun(_ctx: any, _signal: any, tasks: any[]) {
       const resultsPromise = Promise.resolve(tasks.map((task: any) => fakeAgent({
         id: task.sessionId ?? "s1",
-        config: { name: "helper", resumable: true },
+        config: { name: "helper", retainConversation: true },
         prompt: task.prompt,
-        status: { kind: "completed", response: fullOutput, resumed: task.kind === "resume" },
+        status: { kind: "completed", response: fullOutput },
       })));
       return { sessions: [], resultsPromise };
     },
@@ -345,7 +345,7 @@ test("background run widget updates render the full manager inventory, not only 
   const retained = fakeAgent({
     id: "retained",
     retention: "persistent",
-    config: { name: "retained", resumable: true },
+    config: { name: "retained", retainConversation: true },
     createdAt: 1,
     status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ready" },
   });
@@ -390,7 +390,7 @@ test("background run widget updates render the full manager inventory, not only 
   const widgets: any[] = [];
   const result = await tool.execute("tool-call", {
     action: "run",
-    background: true,
+    dispatch: "background",
     tasks: [{ agent: "helper", prompt: "background work", label: "background work" }],
   }, undefined, undefined, {
     cwd: process.cwd(),
@@ -403,7 +403,7 @@ test("background run widget updates render the full manager inventory, not only 
   assert.match(lines, /Background · 1 running · 1 ready/);
   assert.match(lines, /new-bg/);
   assert.match(lines, /old-bg/);
-  assert.match(lines, /Resumable · 1 ready/);
+  assert.match(lines, /Retained · 1 ready/);
   assert.match(lines, /retained/);
 });
 
@@ -419,7 +419,7 @@ test("foreground run widget updates also preserve background and retained sectio
   const retained = fakeAgent({
     id: "retained",
     retention: "persistent",
-    config: { name: "retained", resumable: true },
+    config: { name: "retained", retainConversation: true },
     createdAt: 2,
     status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ready" },
   });
@@ -463,7 +463,7 @@ test("foreground run widget updates also preserve background and retained sectio
   const liveLines = renderWidgetContent(widgets[0][1], undefined, 80).join("\n");
   assert.match(liveLines, /Background · 1 running/);
   assert.match(liveLines, /background/);
-  assert.match(liveLines, /Resumable · 1 ready/);
+  assert.match(liveLines, /Retained · 1 ready/);
   assert.match(liveLines, /retained/);
   assert.match(liveLines, /\+1 foreground running/);
 
@@ -480,9 +480,9 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
       receivedTasks = tasks;
       const resultsPromise = Promise.resolve(tasks.map((task: any) => fakeAgent({
         id: task.kind === "resume" ? task.sessionId : "spawned",
-        config: { name: task.kind === "spawn" ? task.agent : "chatty", resumable: task.kind === "resume" },
+        config: { name: task.kind === "spawn" ? task.agent : "chatty", retainConversation: task.kind === "resume" },
         prompt: task.prompt,
-        status: { kind: "completed", response: `done:${task.prompt}`, resumed: task.kind === "resume" },
+        status: { kind: "completed", response: `done:${task.prompt}` },
       })));
       return { sessions: [], resultsPromise };
     },
@@ -509,8 +509,6 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   assert.equal(result.isError, false);
   assert.deepEqual(receivedTasks.map((t: any) => t.kind), ["spawn", "resume"]);
   assert.equal(receivedTasks[1].sessionId, "s-1");
-  assert.equal(resultsJson(result)[0].result.resumed, false);
-  assert.equal(resultsJson(result)[1].result.resumed, true);
 });
 
 test("subagent action=run background:true returns view:background-started immediately with initial session views", async () => {
@@ -531,7 +529,7 @@ test("subagent action=run background:true returns view:background-started immedi
 
   const result = await tool.execute("tool-call", {
     action: "run",
-    background: true,
+    dispatch: "background",
     tasks: [{ agent: "helper", prompt: "background work", label: "background work" }],
   }, undefined, undefined, baseCtx());
 
@@ -569,7 +567,7 @@ test("background run reports preflight failures without hiding successful handle
 
   const result = await tool.execute("tool-call", {
     action: "run",
-    background: true,
+    dispatch: "background",
     tasks: [
       { agent: "helper", prompt: "successful task", label: "success" },
       { agent: "helper", prompt: "exhausted task", label: "exhausted" },
@@ -614,7 +612,7 @@ test("subagent action=run background:true never invokes the parent onUpdate chan
 
   await tool.execute("tool-call", {
     action: "run",
-    background: true,
+    dispatch: "background",
     tasks: [{ agent: "helper", prompt: "background work", label: "background work" }],
   }, undefined, onUpdate, baseCtx());
 
@@ -647,7 +645,7 @@ test("subagent action=run rejects a non-boolean batch background without dispatc
 
   assert.equal(result.isError, true);
   assert.equal(startCalls, 0);
-  assert.match(result.content[0].text, /run background must be a boolean/);
+  assert.match(result.content[0].text, /Legacy field background is not supported; use dispatch/);
 });
 
 test("subagent action=results rejects a non-boolean remove flag without fetching or removing", async () => {

@@ -59,7 +59,8 @@ export function inventoryDetails(sessions: AgentSnapshot[], filter?: InventoryFi
 
 export function backgroundStartedDetails(sessions: AgentSnapshot[]): BackgroundStartedDetails {
   const handles: BackgroundSpawnHandle[] = sessions.flatMap(session => {
-    if (session.retention !== "persistent") return [];
+    const status = session.status;
+    if (status.kind === "done" && status.startedAt === undefined) return [];
     return [{
       sessionId: session.id,
       agent: session.config.name,
@@ -68,7 +69,7 @@ export function backgroundStartedDetails(sessions: AgentSnapshot[]): BackgroundS
   });
   const errors = sessions.flatMap(session => {
     const status = session.status;
-    if (session.retention !== "transient" || status.kind !== "done" || status.outcome === "completed" || status.startedAt !== undefined) return [];
+    if (session.retention.catalog !== "transient" || status.kind !== "done" || status.outcome === "completed" || status.startedAt !== undefined) return [];
     return [{
       agent: session.config.name,
       ...(session.label !== undefined ? { label: session.label } : {}),

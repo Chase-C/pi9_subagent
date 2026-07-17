@@ -40,8 +40,8 @@ export function formatSubagentSessionSummary(agent: AgentSnapshot): string {
 
 function sessionBadges(agent: AgentSnapshot) {
   return [
-    agent.config.resumable ? "resumable" : undefined,
-    agent.dispatch === "background" ? "dispatch:background" : undefined,
+    agent.conversation.policy === "retain" ? "retained" : undefined,
+    agent.attempt.dispatch === "background" ? "dispatch:background" : undefined,
     `session:${agent.id}`,
   ].filter((badge): badge is string => Boolean(badge));
 }
@@ -58,7 +58,7 @@ export function formatSubagentSessionInspect(
 
   const lines = [
     `Session ${agent.id}`,
-    `Status: ${effectiveStatus(status)}${agent.config.resumable ? " · resumable" : ""}`,
+    `Status: ${effectiveStatus(status)}${agent.conversation.policy === "retain" ? " · retained" : ""}`,
     `Agent: ${agent.config.name}${agent.config.source ? ` (${agent.config.source})` : ""}`,
   ];
 
@@ -94,7 +94,7 @@ export function formatSubagentSessionInspect(
   return lines;
 }
 
-export type WidgetSectionTitle = "Background" | "Resumable";
+export type WidgetSectionTitle = "Background" | "Retained";
 
 export type WidgetRow = {
   glyph: string;
@@ -114,7 +114,7 @@ export function hasBackgroundAncestor(
   while (parentId !== undefined) {
     const parent = byId.get(parentId);
     if (!parent) return false;
-    if (parent.dispatch === "background") return true;
+    if (parent.attempt.dispatch === "background") return true;
     parentId = parent.parentSessionId;
   }
   return false;
@@ -147,11 +147,20 @@ export function buildWidgetModel(
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
 ): WidgetModel {
   const byId = new Map(agents.map(a => [a.id, a]));
-  const background = agents.filter(a => a.dispatch === "background");
-  const resumable = agents.filter(a => a.dispatch === "foreground" && a.retention === "persistent");
+  const background = agents.filter(a =>
+    (isActiveStatusKind(a.status.kind) && a.attempt.dispatch === "background")
+    || a.retention.reasons.includes("background-result"),
+  );
+  const backgroundIds = new Set(background.map(agent => agent.id));
+  const retained = agents.filter(a =>
+    !backgroundIds.has(a.id)
+    && (a.retention.reasons.includes("conversation-policy")
+      || a.retention.reasons.includes("attachment")
+      || a.capabilities.canResume),
+  );
   const foregroundRunning = agents.filter(
-    a => a.dispatch === "foreground"
-      && a.retention === "transient"
+    a => a.attempt.dispatch === "foreground"
+      && a.retention.catalog === "transient"
       && isActiveStatusKind(a.status.kind)
       && !hasBackgroundAncestor(a, byId),
   ).length;
@@ -159,8 +168,8 @@ export function buildWidgetModel(
   const sections: WidgetSection[] = [];
   const backgroundSection = buildSection("Background", background, display, byId);
   if (backgroundSection) sections.push(backgroundSection);
-  const resumableSection = buildSection("Resumable", resumable, display, byId);
-  if (resumableSection) sections.push(resumableSection);
+  const retainedSection = buildSection("Retained", retained, display, byId);
+  if (retainedSection) sections.push(retainedSection);
 
   if (sections.length === 0) return { sections: [], byId };
 
@@ -186,9 +195,9 @@ export function renderWidgetModelLines(
   if (!options) return renderWidgetModelStacked(model, now, formatRow);
 
   const background = model.sections.find(section => section.title === "Background");
-  const resumable = model.sections.find(section => section.title === "Resumable");
+  const retained = model.sections.find(section => section.title === "Retained");
   const leftLines = background ? renderWidgetSectionLines(background, model, now, formatRow) : [];
-  const rightLines = resumable ? renderWidgetSectionLines(resumable, model, now, formatRow) : [];
+  const rightLines = retained ? renderWidgetSectionLines(retained, model, now, formatRow) : [];
   const leftNaturalWidth = maxLineWidth(leftLines);
 
   if (resolveWidgetLayout(options.layout, options.width, hasBothColumnSections(model.sections), leftNaturalWidth) === "columns") {
@@ -263,7 +272,7 @@ function buildSection(
 ): WidgetSection | undefined {
   const counts = { running: 0, queued: 0, ready: 0, error: 0 };
   for (const agent of agents) {
-    if (!isActiveStatusKind(agent.status.kind) && agent.retention !== "persistent") continue;
+    if (!isActiveStatusKind(agent.status.kind) && agent.retention.catalog !== "persistent") continue;
 
     if (agent.status.kind === "running") counts.running++;
     else if (agent.status.kind === "queued") counts.queued++;
@@ -275,7 +284,7 @@ function buildSection(
 
   const rowAgents = agents.filter(agent => {
     if (isActiveStatusKind(agent.status.kind)) return true;
-    return agent.retention === "persistent" && display.widgetShowRetainedSessions;
+    return agent.retention.catalog === "persistent" && display.widgetShowRetainedSessions;
   });
   const sorted = sortWidgetAgents(rowAgents);
   const maxRows = display.widgetMaxRowsPerSection;
@@ -351,7 +360,7 @@ export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, 
   const parts = sessionRowSegments(row, now, applyBold(bold, row.label ?? row.config.name), { status, toolCount: true });
 
   if (row.activity.messageSnippet) parts.push(`"${compact(row.activity.messageSnippet, display.messageSnippetLength)}"`);
-  if (row.dispatch === "background") parts.push("dispatch:background");
+  if (row.attempt.dispatch === "background") parts.push("dispatch:background");
 
   if (!isActiveStatusKind(status)) {
     const rawTail = getSnippet(row.status);
@@ -383,7 +392,7 @@ export function formatSessionIdentityLine(row: AgentSnapshot, now: number, bold?
 export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold, staticRunning = false): DisplayLine {
   const line = formatSessionIdentityLine(row, now, bold, staticRunning);
   const metadata = [
-    ...(row.resumed ? ["resumed"] : []),
+    ...(row.attempt.kind === "resume" ? ["attempt:resume"] : []),
     plural(getToolUseCount(row), "tool call"),
     plural(row.usage?.totalTokens ?? 0, "token"),
     rowElapsed(row, now),
@@ -403,7 +412,7 @@ function sessionRowSegments(
 ) {
   const parts = [
     name,
-    ...(row.resumed ? ["resumed"] : []),
+    ...(row.attempt.kind === "resume" ? ["attempt:resume"] : []),
     ...(options.status ? [options.status] : []),
     plural(row.activity.turns, "turn"),
     ...(options.toolCount ? [plural(getToolUseCount(row), "tool")] : []),

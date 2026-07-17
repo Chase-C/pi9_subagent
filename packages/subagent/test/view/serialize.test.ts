@@ -15,7 +15,6 @@ function snapshot(overrides: Partial<AgentSnapshot> = {}): AgentSnapshot {
       model: undefined,
       thinking: undefined,
       tools: [],
-      resumable: true,
     },
     status: { kind: "queued", queuedAt: 1_100 },
     activity: {
@@ -25,24 +24,25 @@ function snapshot(overrides: Partial<AgentSnapshot> = {}): AgentSnapshot {
       toolHistory: [{ id: "tool-1", name: "read", startedAt: 1_150, inputSummary: "private input" }],
     },
     usage: undefined,
-    dispatch: "background",
-    retention: "persistent",
+    attempt: { kind: "spawn", dispatch: "background" },
+    conversation: { policy: "retain", available: true, attached: false },
+    retention: { catalog: "persistent", reasons: ["conversation-policy"] },
     effectiveConfig: {
       model: "private/model",
       thinking: "high",
       cwd: "/private",
       skills: ["private-skill"],
       tools: ["read"],
-      resumable: true,
     },
     previousRuns: [{
       prompt: "private previous prompt",
       status: { kind: "done", outcome: "completed", startedAt: 500, completedAt: 900, output: "private previous output" },
       activity: { messageSnippet: "private previous activity", turns: 1, compactions: 0, toolHistory: [] },
       usage: undefined,
+      attempt: { kind: "spawn", dispatch: "foreground" },
     }],
     prompt: "private prompt",
-    capabilities: { canResume: true, canRemove: true, canClear: true },
+    capabilities: { canResume: true, canRemove: true },
     ...overrides,
   };
 }
@@ -61,11 +61,12 @@ test("serializes a clean lightweight inventory contract with normalized statuses
   const sessions = [
     snapshot({
       id: "queued-session",
-      config: { ...snapshot().config, name: "queued-agent", resumable: false },
+      config: { ...snapshot().config, name: "queued-agent" },
       status: { kind: "queued", queuedAt: 1_200 },
-      dispatch: "foreground",
-      retention: "transient",
-      capabilities: { canResume: false, canRemove: false, canClear: false },
+      attempt: { kind: "spawn", dispatch: "foreground" },
+      conversation: { policy: "release", available: false, attached: false },
+      retention: { catalog: "transient", reasons: [] },
+      capabilities: { canResume: false, canRemove: false },
     }),
     snapshot({
       id: "created-session",
@@ -100,21 +101,27 @@ test("serializes a clean lightweight inventory contract with normalized statuses
     sessionId: "queued-session",
     agent: "queued-agent",
     status: "queued",
-    dispatch: "foreground",
+    attempt: { kind: "spawn", dispatch: "foreground" },
+    conversation: { policy: "release", available: false, attached: false },
+    retention: { catalog: "transient", reasons: [] },
     capabilities: { canResume: false, canRemove: false },
   });
   assert.deepEqual(inventory.sessions[1], {
     sessionId: "created-session",
     agent: "created-agent",
     status: "queued",
-    dispatch: "background",
+    attempt: { kind: "spawn", dispatch: "background" },
+    conversation: { policy: "retain", available: true, attached: false },
+    retention: { catalog: "persistent", reasons: ["conversation-policy"] },
     capabilities: { canResume: true, canRemove: true },
   });
   assert.deepEqual(inventory.sessions[2], {
     sessionId: "running-session",
     agent: "running-agent",
     status: "running",
-    dispatch: "background",
+    attempt: { kind: "spawn", dispatch: "background" },
+    conversation: { policy: "retain", available: true, attached: false },
+    retention: { catalog: "persistent", reasons: ["conversation-policy"] },
     capabilities: { canResume: true, canRemove: true },
   });
   assert.deepEqual(inventory.sessions[3], {
@@ -123,14 +130,16 @@ test("serializes a clean lightweight inventory contract with normalized statuses
     label: "labeled",
     parentSessionId: "parent-session",
     status: "completed",
-    dispatch: "background",
+    attempt: { kind: "spawn", dispatch: "background" },
+    conversation: { policy: "retain", available: true, attached: false },
+    retention: { catalog: "persistent", reasons: ["conversation-policy"] },
     capabilities: { canResume: true, canRemove: true },
   });
 
   const forbidden = [
     "id", "prompt", "output", "error", "messageSnippet", "activity", "toolHistory", "usage", "cost",
     "previousRuns", "config", "effectiveConfig", "createdAt", "startedAt", "queuedAt", "completedAt",
-    "resumed", "inputIndex", "retention", "elapsedMs",
+    "inputIndex", "elapsedMs",
   ];
   for (const entry of inventory.sessions) {
     for (const field of forbidden) assert.equal(field in entry, false, `${field} leaked into inventory entry`);

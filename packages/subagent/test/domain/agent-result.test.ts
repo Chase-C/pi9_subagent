@@ -14,11 +14,11 @@ function doneStatus(agent: Agent): Extract<AgentViewStatus, { kind: "done" }> {
 }
 
 const baseConfig = {
+  retainConversation: false,
   name: "helper",
   description: "d",
   systemPrompt: "s",
   source: "project" as const,
-  resumable: false,
 };
 
 test("finalize returns a terminal snapshot that projects the agent label across outcomes", () => {
@@ -40,35 +40,40 @@ test("the terminal snapshot carries parentSessionId when the agent has one and o
   const session = { subscribe: () => () => {}, abort: () => {} };
 
   const child = new Agent("c1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop, { parentId: "root-1" });
-  child.attach(session as any);
+  child.bindSession(session as any);
   assert.equal(completedRun(child, "done").parentSessionId, "root-1");
 
   const root = new Agent("r1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  root.attach(session as any);
+  root.bindSession(session as any);
   assert.equal(Object.prototype.hasOwnProperty.call(completedRun(root, "done"), "parentSessionId"), false);
 });
 
-test("the projected result reflects the per-task resumable override and exposes the sessionId", () => {
-  const config = { ...baseConfig, resumable: false };
+test("the projected result reflects the per-task retainConversation override and exposes the sessionId", () => {
+  const config = { ...baseConfig };
   const session = { subscribe: () => () => {}, abort: () => {} };
 
-  const agent = new Agent("id1", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: true }, noop);
-  agent.attach(session as any);
+  const agent = new Agent("id1", config, { kind: "spawn", agent: "helper", prompt: "work", retainConversation: true }, noop);
+  agent.bindSession(session as any);
   const result = toResult(completedRun(agent, "done"));
 
-  assert.equal(result.resumable, true);
+  assert.equal(result.canResume, true);
   assert.equal(result.sessionId, "id1");
+  assert.equal(result.kind, "spawn");
+  assert.equal(result.dispatch, "foreground");
+  assert.deepEqual(result.retentionReasons, ["conversation-policy"]);
+  for (const alias of ["resumable", "resumed", "canClear"])
+    assert.equal(Object.prototype.hasOwnProperty.call(result, alias), false);
 });
 
 test("agent transitions through start, finalize, and is idempotent on second finalize", () => {
-  const config = { name: "agent", description: "desc", systemPrompt: "prompt", source: "project" as const, resumable: false };
+  const config = { name: "agent", description: "desc", systemPrompt: "prompt", source: "project" as const, retainConversation: false };
   const spawn = { kind: "spawn" as const, agent: "agent", prompt: "do work" };
   const session = { subscribe: () => () => {}, abort: () => {} };
 
   const running = new Agent("id", config, spawn, noop);
-  running.attach(session as any);
+  running.bindSession(session as any);
   assert.equal(running.status.kind, "running");
-  assert.throws(() => running.attach(session as any), /Cannot attach/);
+  assert.throws(() => running.bindSession(session as any), /Cannot bind/);
 
   completedRun(running, "done");
   const firstDone = doneStatus(running);
@@ -88,7 +93,7 @@ test("agent transitions through start, finalize, and is idempotent on second fin
 
 test("finalize is idempotent and returns the existing terminal snapshot when already done", () => {
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
-  agent.attach({ subscribe: () => () => {}, abort: () => {} } as any);
+  agent.bindSession({ subscribe: () => () => {}, abort: () => {} } as any);
   const first = completedRun(agent, "done");
 
   const second = errorRun(agent, "late");

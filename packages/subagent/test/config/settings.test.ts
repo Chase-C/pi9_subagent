@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createDefaultSubagentSettings, SubagentSettingsStore } from "../../src/config/settings.js";
+import { createDefaultSubagentSettings, normalizeSettings, SubagentSettingsStore } from "../../src/config/settings.js";
 
 test("subagent default settings are fresh at every construction", () => {
   const first = createDefaultSubagentSettings();
@@ -32,7 +32,7 @@ test("subagent UI settings default to below editor when file is missing", async 
   assert.equal(result.settings.widgetPlacement, "belowEditor");
   assert.equal(result.settings.runtime.maxTasksPerRun, 8);
   assert.equal(result.settings.runtime.maxConcurrentSubagents, 4);
-  assert.equal(result.settings.runtime.defaultResumable, false);
+  assert.equal(result.settings.runtime.defaultRetainConversation, false);
   assert.equal(result.settings.runtime.backgroundNotify, "auto");
   assert.deepEqual(result.settings.agentDiscovery.agentFileExtensions, [".md"]);
   assert.equal(result.settings.display.outputSnippetLength, 400);
@@ -154,6 +154,12 @@ test("subagent settings reject invalid widgetShowForeground and widgetMaxRowsPer
   assert.match(result.warning!, /widgetMaxRowsPerSection/);
 });
 
+test("subagent settings do not migrate the legacy defaultResumable key", () => {
+  const result = normalizeSettings({ runtime: { defaultResumable: true } });
+  assert.equal(result.settings.runtime.defaultRetainConversation, false);
+  assert.equal("defaultResumable" in result.settings.runtime, false);
+});
+
 test("subagent settings load runtime, discovery, and display overrides", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-settings-overrides-"));
   const settingsPath = join(root, "subagent", "settings.json");
@@ -162,7 +168,7 @@ test("subagent settings load runtime, discovery, and display overrides", async (
     settingsPath,
     JSON.stringify({
       widgetPlacement: "off",
-      runtime: { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultResumable: true, backgroundNotify: "steer" },
+      runtime: { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultRetainConversation: true, backgroundNotify: "steer" },
       agentDiscovery: { includeProjectAgents: false, agentFileExtensions: [".md", ".agent.md"] },
       display: { outputSnippetLength: 42, toolInputSummaryLength: 50, widgetShowRetainedSessions: false },
     }),
@@ -171,7 +177,7 @@ test("subagent settings load runtime, discovery, and display overrides", async (
   const result = await new SubagentSettingsStore(settingsPath).load();
 
   assert.equal(result.settings.widgetPlacement, "off");
-  assert.deepEqual(result.settings.runtime, { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultResumable: true, backgroundNotify: "steer" });
+  assert.deepEqual(result.settings.runtime, { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultRetainConversation: true, backgroundNotify: "steer" });
   assert.equal(result.settings.agentDiscovery.includeProjectAgents, false);
   assert.deepEqual(result.settings.agentDiscovery.agentFileExtensions, [".md", ".agent.md"]);
   assert.equal(result.settings.display.outputSnippetLength, 42);

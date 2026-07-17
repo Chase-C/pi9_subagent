@@ -47,11 +47,11 @@ test("zipWidgetColumns aligns gutter after the widest natural left line", () => 
 test("zipWidgetColumns keeps a single aligned gutter close to the left content", () => {
   const lines = zipWidgetColumns(
     ["Background · 1 running", "  ⠋ scout · 1s"],
-    ["Resumable · 1 ready", "  ✓ helper · 4s"],
+    ["Retained · 1 ready", "  ✓ helper · 4s"],
     80,
     " │ ",
   );
-  assert.match(lines[0], /^Background · 1 running\s+│ Resumable · 1 ready$/);
+  assert.match(lines[0], /^Background · 1 running\s+│ Retained · 1 ready$/);
   assert.match(lines[1], /^  ⠋ scout · 1s\s+│   ✓ helper · 4s$/);
   assert.equal(lines[0].indexOf("│"), lines[1].indexOf("│"));
   assert.ok(visibleWidth(lines[0]) < 80);
@@ -71,7 +71,7 @@ test("renderWidgetModelLines renders side-by-side columns with full-width footer
     fakeAgent({
       id: "res",
       retention: "persistent",
-      config: { name: "helper", resumable: true },
+      config: { name: "helper", retainConversation: true },
       createdAt: 2,
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
     }),
@@ -90,11 +90,11 @@ test("renderWidgetModelLines renders side-by-side columns with full-width footer
   const stacked = renderWidgetModelLines(model, now, formatRow, { layout: "stacked", width });
   assert.equal(stacked.length, 5);
   assert.equal(stacked[0], "Background · 1 running");
-  assert.equal(stacked[2], "Resumable · 1 ready");
+  assert.equal(stacked[2], "Retained · 1 ready");
 
   const columns = renderWidgetModelLines(model, now, formatRow, { layout: "columns", width });
   assert.equal(columns.length, 3);
-  assert.match(columns[0], /Background · 1 running\s+│ Resumable · 1 ready/);
+  assert.match(columns[0], /Background · 1 running\s+│ Retained · 1 ready/);
   assert.match(columns[1], /scout · 1s/);
   assert.match(columns[1], /helper · 4s/);
   assert.match(columns[2], /^\+1 foreground running\s*$/);
@@ -146,7 +146,7 @@ test("renderWidgetModelLines auto layout uses columns when content fits side by 
     fakeAgent({
       id: "res",
       retention: "persistent",
-      config: { name: "helper", resumable: true },
+      config: { name: "helper", retainConversation: true },
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
     }),
   ];
@@ -154,7 +154,7 @@ test("renderWidgetModelLines auto layout uses columns when content fits side by 
   const formatRow = (row: Parameters<typeof formatThemedWidgetRow>[0]) => formatThemedWidgetRow(row, mockTheme());
 
   const narrow = renderWidgetModelLines(model, now, formatRow, { layout: "auto", width: 60 });
-  assert.match(narrow[0], /Background · 1 running\s+│ Resumable · 1 ready/);
+  assert.match(narrow[0], /Background · 1 running\s+│ Retained · 1 ready/);
   assert.match(narrow[1], /scout · 1s/);
   assert.match(narrow[1], /helper · 4s/);
 });
@@ -171,7 +171,7 @@ test("renderWidgetModelLines auto layout falls back to stacked when gutter canno
     fakeAgent({
       id: "res",
       retention: "persistent",
-      config: { name: "helper", resumable: true },
+      config: { name: "helper", retainConversation: true },
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
     }),
   ];
@@ -182,7 +182,7 @@ test("renderWidgetModelLines auto layout falls back to stacked when gutter canno
 
   const stacked = renderWidgetModelLines(model, now, formatRow, { layout: "auto", width: tooNarrow });
   assert.equal(stacked[0], "Background · 1 running");
-  assert.equal(stacked[2], "Resumable · 1 ready");
+  assert.equal(stacked[2], "Retained · 1 ready");
 });
 
 test("renderWidgetModelLines truncates wide glyphs per column without breaking alignment", () => {
@@ -209,7 +209,7 @@ test("renderWidgetModelLines truncates wide glyphs per column without breaking a
     fakeAgent({
       id: "res",
       retention: "persistent",
-      config: { name: "helper-with-a-long-resumable-name-too", resumable: true },
+      config: { name: "helper-with-a-long-retainConversation-name-too", retainConversation: true },
       createdAt: 3,
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
     }),
@@ -236,7 +236,7 @@ test("SubagentWidgetComponent threads widgetLayout into column rendering", () =>
     fakeAgent({
       id: "res",
       retention: "persistent",
-      config: { name: "helper", resumable: true },
+      config: { name: "helper", retainConversation: true },
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
     }),
   ];
@@ -245,5 +245,5 @@ test("SubagentWidgetComponent threads widgetLayout into column rendering", () =>
   assert.equal(stacked[0], "Background · 1 running");
 
   const columns = new SubagentWidgetComponent(model, mockTheme(), "columns").render(80);
-  assert.match(columns[0], /Background · 1 running\s+│ Resumable · 1 ready/);
+  assert.match(columns[0], /Background · 1 running\s+│ Retained · 1 ready/);
 });

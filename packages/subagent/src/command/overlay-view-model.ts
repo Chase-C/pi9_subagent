@@ -64,8 +64,9 @@ function sessionMatches(session: AgentSnapshot, query: string): boolean {
     session.config.description,
     session.id,
     session.parentSessionId,
-    session.dispatch,
-    session.retention,
+    session.attempt.dispatch,
+    session.retention.catalog,
+    ...session.retention.reasons,
     status,
   ]
     .some(value => value?.toLowerCase().includes(normalized));

@@ -12,7 +12,7 @@ export interface AgentConfig {
   thinking?: ModelThinkingLevel;
   tools?: string[];
   skills?: string[];
-  resumable: boolean;
+  retainConversation: boolean;
   systemPrompt: string;
   source: AgentSource;
   sourcePath?: string;
@@ -23,10 +23,13 @@ const requiredFields = [ "name" ];
 export function BuildAgentConfig(
   content: string,
   source: AgentSource,
-  options: { defaultResumable?: boolean } = {},
+  options: { defaultRetainConversation?: boolean } = {},
 ): AgentConfig | { error: Error } {
   try {
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
+    if (frontmatter.resumable !== undefined) {
+      throw new Error('Legacy field "resumable" is not supported; use "retainConversation".');
+    }
     const result = {
       name: parseString(frontmatter.name, "name"),
       description: parseRequiredString(frontmatter.description, "description"),
@@ -34,7 +37,7 @@ export function BuildAgentConfig(
       thinking: parseThinkingLevel(frontmatter.thinking),
       tools: parseCSVStrings(frontmatter.tools, "tools"),
       skills: parseCSVStrings(frontmatter.skills, "skills"),
-      resumable: parseBoolean(frontmatter.resumable, "resumable") ?? options.defaultResumable ?? false,
+      retainConversation: parseBoolean(frontmatter.retainConversation, "retainConversation") ?? options.defaultRetainConversation ?? false,
       systemPrompt: body.trim(),
       source,
       sourcePath: undefined,

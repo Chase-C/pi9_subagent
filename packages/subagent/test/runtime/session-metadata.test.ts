@@ -46,7 +46,7 @@ test("subagent metadata persistence appends one custom entry per terminal attemp
     label: "audit",
     status: "completed",
     dispatch: "foreground",
-    retention: "transient",
+    retention: { catalog: "transient", reasons: [] },
     completedAt: 30,
     startedAt: 10,
     elapsedMs: 20,

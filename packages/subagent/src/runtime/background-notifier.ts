@@ -95,12 +95,13 @@ export class BackgroundNotifier {
 
   private _handleAgentUpdate = (agent: Agent, kind: AgentUpdateKind): void => {
     if (kind !== "status") return;
-    if (!agent.background) return;
     const status = agent.status;
     if (status.kind !== "done") {
+      this._queue = this._queue.filter(entry => entry.sessionId !== agent.id);
       this._notifiedTerminalSessionIds.delete(agent.id);
-      return;
     }
+    if (agent.snapshot().attempt.dispatch !== "background") return;
+    if (status.kind !== "done") return;
     if (this._notifiedTerminalSessionIds.has(agent.id)) return;
     this._notifiedTerminalSessionIds.add(agent.id);
     const startedAt = status.startedAt ?? agent.createdAt;

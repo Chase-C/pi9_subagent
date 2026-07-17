@@ -10,14 +10,14 @@ const noop: AgentUpdateListener = () => {};
 const view = (agent: Agent) => agent.snapshot();
 
 const baseConfig = {
+  retainConversation: false,
   name: "helper",
   description: "d",
   systemPrompt: "s",
   source: "project" as const,
-  resumable: false,
 };
 
-const resumableConfig = { ...baseConfig, resumable: true };
+const retainConversationConfig = { ...baseConfig, retainConversation: true };
 
 function fakeSession() {
   return { messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} } as any;
@@ -28,113 +28,134 @@ function resumeAgent(agent: Agent, prompt: string): void {
   const registry = { agents: new Map([[agent.agentName, agent.config]]) } as any;
   const result = resolveTask({
     task: { kind: "resume", sessionId: agent.id, prompt },
-    background: false, groupId: "g", inputIndex: 0,
+    dispatch: "foreground", groupId: "g", inputIndex: 0,
     registry, findAgent: id => (id === agent.id ? agent : undefined),
     allocateSessionId: () => "test-session", listener: noop,
   });
   if (result.kind !== "resume") throw new Error(`expected resume, got ${result.kind}`);
 }
 
-test("projectAgentView capabilities: resumable in-flight (queued or running) reports neither flag", () => {
-  const queued = new Agent("id1", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  assert.deepEqual(view(queued).capabilities, { canResume: false, canRemove: false, canClear: false });
+test("active retain-policy attempts cannot resume or be removed", () => {
+  const queued = new Agent("id1", retainConversationConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+  assert.deepEqual(view(queued).capabilities, { canResume: false, canRemove: false });
 
-  const running = new Agent("id2", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  running.attach(fakeSession());
-  assert.deepEqual(view(running).capabilities, { canResume: false, canRemove: false, canClear: false });
+  const running = new Agent("id2", retainConversationConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+  running.bindSession(fakeSession());
+  assert.deepEqual(view(running).capabilities, { canResume: false, canRemove: false });
 });
 
-test("projectAgentView capabilities: non-resumable reports both flags false in every state", () => {
+test("release-policy foreground attempts have no terminal capabilities", () => {
   const queued = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  assert.deepEqual(view(queued).capabilities, { canResume: false, canRemove: false, canClear: false });
+  assert.deepEqual(view(queued).capabilities, { canResume: false, canRemove: false });
 
   const completed = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  completed.attach(fakeSession());
+  completed.bindSession(fakeSession());
   completedRun(completed, "done");
-  assert.deepEqual(view(completed).capabilities, { canResume: false, canRemove: false, canClear: false });
+  assert.deepEqual(view(completed).capabilities, { canResume: false, canRemove: false });
 });
 
-test("projectAgentView capabilities: completed non-resumable background agent is removable", () => {
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop, { background: true });
-  agent.attach(fakeSession());
+test("a completed background result is removable but cannot resume", () => {
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop, { dispatch: "background" });
+  agent.bindSession(fakeSession());
   completedRun(agent, "done");
-  assert.equal(view(agent).capabilities.canRemove, true);
+  assert.deepEqual(view(agent).capabilities, { canResume: false, canRemove: true });
 });
 
-test("projectAgentView capabilities: safe removal follows catalog membership across terminal outcomes", () => {
+test("attachment pins a queued row and keeps a conversation only after binding", () => {
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+  agent.attach(7);
+
+  assert.equal(agent.attachmentOrder, 7);
+  assert.deepEqual(agent.retentionDecision, {
+    cataloged: true,
+    catalog: "persistent",
+    keepConversation: false,
+    conversationAvailable: false,
+    canResume: false,
+    canRemove: false,
+    reasons: ["active", "attachment"],
+  });
+
+  agent.bindSession(fakeSession());
+  assert.equal(agent.retentionDecision.keepConversation, true);
+  assert.equal(agent.snapshot().conversation.available, true);
+});
+
+test("terminal removal follows persistent catalog membership across outcomes", () => {
   const outcomes = ["completed", "error", "interrupted", "aborted", "skipped"] as const;
   for (const outcome of outcomes) {
-    const persistentForeground = new Agent(`fg-${outcome}`, resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-    persistentForeground.attach(fakeSession());
+    const persistentForeground = new Agent(`fg-${outcome}`, retainConversationConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+    persistentForeground.bindSession(fakeSession());
     persistentForeground.settle(outcome === "completed" ? { status: outcome, output: "done" } : { status: outcome, error: outcome });
     assert.equal(view(persistentForeground).capabilities.canRemove, true, `persistent foreground ${outcome}`);
-    assert.equal(view(persistentForeground).capabilities.canClear, true, `foreground alias ${outcome}`);
 
-    const persistentBackground = new Agent(`bg-${outcome}`, baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop, { background: true });
-    persistentBackground.attach(fakeSession());
+    const persistentBackground = new Agent(`bg-${outcome}`, baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop, { dispatch: "background" });
+    persistentBackground.bindSession(fakeSession());
     persistentBackground.settle(outcome === "completed" ? { status: outcome, output: "done" } : { status: outcome, error: outcome });
     assert.equal(view(persistentBackground).capabilities.canRemove, true, `background ${outcome}`);
-    assert.equal(view(persistentBackground).capabilities.canClear, true, `background alias ${outcome}`);
 
     const transientForeground = new Agent(`transient-${outcome}`, baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-    transientForeground.attach(fakeSession());
+    transientForeground.bindSession(fakeSession());
     transientForeground.settle(outcome === "completed" ? { status: outcome, output: "done" } : { status: outcome, error: outcome });
     assert.equal(view(transientForeground).capabilities.canRemove, false, `transient foreground ${outcome}`);
-    assert.equal(view(transientForeground).capabilities.canClear, false, `transient alias ${outcome}`);
   }
 });
 
-test("projectAgentView capabilities: completed resumable agent can both resume and clear", () => {
-  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  agent.attach(fakeSession());
+test("a successfully completed retained conversation can resume and be removed", () => {
+  const agent = new Agent("id", retainConversationConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+  agent.bindSession(fakeSession());
   completedRun(agent, "done");
-  assert.deepEqual(view(agent).capabilities, { canResume: true, canRemove: true, canClear: true });
+  assert.deepEqual(view(agent).capabilities, { canResume: true, canRemove: true });
 });
 
-test("projectAgentView capabilities: errored resumable agent is clearable but not resumable", () => {
-  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  agent.attach(fakeSession());
+test("a post-bind error remains removable but cannot resume", () => {
+  const agent = new Agent("id", retainConversationConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+  agent.bindSession(fakeSession());
   errorRun(agent, "boom");
-  assert.deepEqual(view(agent).capabilities, { canResume: false, canRemove: true, canClear: true });
+  assert.deepEqual(view(agent).capabilities, { canResume: false, canRemove: true });
 });
 
-test("projectAgentView capabilities: pre-attach failure on resumable agent remains resumable", () => {
-  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+test("a pre-bind resume failure preserves resume capability", () => {
+  const agent = new Agent("id", retainConversationConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
   // Seed a retained session via a completed first attempt, then simulate a follow-up that fails before attach.
-  agent.attach(fakeSession());
+  agent.bindSession(fakeSession());
   completedRun(agent, "first");
   resumeAgent(agent, "follow");
   errorRun(agent, "setup failed");
-  assert.deepEqual(view(agent).capabilities, { canResume: true, canRemove: true, canClear: true });
+  assert.deepEqual(view(agent).capabilities, { canResume: true, canRemove: true });
+
+  resumeAgent(agent, "retry");
+  errorRun(agent, "setup failed again");
+  assert.deepEqual(view(agent).capabilities, { canResume: true, canRemove: true });
 });
 
-test("projectAgentView capabilities: resume attempt in flight cannot resume or clear", () => {
-  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  agent.attach(fakeSession());
+test("an active resume cannot resume again or be removed", () => {
+  const agent = new Agent("id", retainConversationConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
+  agent.bindSession(fakeSession());
   completedRun(agent, "first");
   resumeAgent(agent, "follow");
-  agent.attach(fakeSession());
-  assert.deepEqual(view(agent).capabilities, { canResume: false, canRemove: false, canClear: false });
+  agent.bindSession(fakeSession());
+  assert.deepEqual(view(agent).capabilities, { canResume: false, canRemove: false });
 });
 
-test("preflight failure views report capabilities false for both spawn and resume", () => {
+test("preflight failure snapshots have no capabilities for spawn or resume", () => {
   const spawn = preflightFailure(
     {
       groupId: "g", inputIndex: 0,
       task: { kind: "spawn", agent: "missing", prompt: "p" },
-      background: false,
+      dispatch: "foreground",
     },
     { error: "Unknown agent" },
   );
-  assert.deepEqual(spawn.capabilities, { canResume: false, canRemove: false, canClear: false });
+  assert.deepEqual(spawn.capabilities, { canResume: false, canRemove: false });
 
   const resume = preflightFailure(
     {
       groupId: "g", inputIndex: 0,
       task: { kind: "resume", sessionId: "unknown", prompt: "p" },
-      background: false,
+      dispatch: "foreground",
     },
-    { error: "Unknown resumable subagent session" },
+    { error: "Unknown retained subagent session" },
   );
-  assert.deepEqual(resume.capabilities, { canResume: false, canRemove: false, canClear: false });
+  assert.deepEqual(resume.capabilities, { canResume: false, canRemove: false });
 });

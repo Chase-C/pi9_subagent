@@ -4,15 +4,28 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Replace the lifecycle contract with immutable spawn-time conversation policy (`retainConversation`), attempt-scoped foreground/background `dispatch`, and attempt-scoped history.
+- Replace lifecycle snapshot and result fields with structured attempt, conversation, retention, and capability projections. No migration code, compatibility aliases, or compatibility projections are provided; legacy task/frontmatter fields are rejected and the old settings key is ignored.
+- Make spawn policy and label immutable: resume tasks accept only a session handle and prompt.
+
 ### Added
 
-- Add process-local session attachments that pin child conversations for live steering and later resume, including originally non-resumable agents.
+- Add process-local session attachments that retain child conversations for live steering and later resume, including agents spawned with release policy.
 - Add filterable flat/tree session projections, with running descendants nested under their parents and retained terminal sessions kept at the root.
 
 ### Changed
 
+- Centralize catalog, conversation, result, resume/remove, and widget decisions around retention reasons and capabilities.
+- Use one attachment-order source: duplicate attach preserves order, detach clears it, and reattach receives a new order.
 - Replace the separate `/subagents` dialogs with one balanced master-detail overlay for Sessions, Agents, Attached, and Settings.
+- Rename the widget section to Retained and derive membership from retention reasons and capabilities.
 - Move steering and tracked resume into the Attached page's unified inline composer.
+
+### Fixed
+
+- Drop queued background completion notifications when a later foreground or background attempt supersedes them.
 
 ## [0.5.1] - 2026-07-16
 

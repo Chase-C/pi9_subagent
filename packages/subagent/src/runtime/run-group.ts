@@ -93,12 +93,9 @@ export class RunGroup {
 
   private _project(entry: Entry): AgentSnapshot {
     if (entry.kind === "agent") {
-      return entry.agent.snapshot({ inputIndex: entry.inputIndex, includeResumed: true });
+      return entry.agent.snapshot({ inputIndex: entry.inputIndex });
     }
-    return {
-      ...entry.view,
-      resumed: entry.view.status.kind === "done" && entry.view.status.resumed === true,
-    };
+    return entry.view;
   }
 
   /**

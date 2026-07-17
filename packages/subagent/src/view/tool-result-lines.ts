@@ -37,7 +37,7 @@ import {
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
 
 export function formatAgentConfigSummary(config: AgentListingEntry | AgentConfig): string {
-  const badges = [config.source, config.resumable ? "resumable" : undefined].filter(Boolean);
+  const badges = [config.source, config.retainConversation ? "retained" : undefined].filter(Boolean);
   return [config.name, ...badges, config.description].join(" · ");
 }
 
@@ -56,7 +56,7 @@ function agentConfigMetadataLines(config: AgentListingEntry | AgentConfig): stri
     `Thinking: ${config.thinking ?? "default"}`,
     `Tools: ${config.tools?.length ? config.tools.join(", ") : "default"}`,
     `Skills: ${config.skills?.length ? config.skills.join(", ") : "none"}`,
-    `Resumable: ${config.resumable}`,
+    `Retained: ${config.retainConversation}`,
   ];
   if (config.sourcePath) lines.push(`Path: ${config.sourcePath}`);
   return lines;
@@ -279,11 +279,11 @@ function formatInventoryLines(
     const lines: DisplayLine[] = [
       row,
       { text: `${metadataIndent}session:${entry.agent.id}`, color: "muted", hangingIndent: metadataIndent.length },
-      { text: `${metadataIndent}dispatch:${entry.agent.dispatch}`, color: "muted", hangingIndent: metadataIndent.length },
+      { text: `${metadataIndent}dispatch:${entry.agent.attempt.dispatch}`, color: "muted", hangingIndent: metadataIndent.length },
       ...(entry.agent.parentSessionId
         ? [{ text: `${metadataIndent}parent:${entry.agent.parentSessionId}`, color: "muted" as const, hangingIndent: metadataIndent.length }]
         : []),
-      { text: `${metadataIndent}resumable:${entry.agent.config.resumable}`, color: "muted", hangingIndent: metadataIndent.length },
+      { text: `${metadataIndent}retained:${entry.agent.retention.catalog === "persistent"}`, color: "muted", hangingIndent: metadataIndent.length },
     ];
     if (index < ordered.length - 1) lines.push({ text: "" });
     return lines;

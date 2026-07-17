@@ -77,7 +77,7 @@ export function registerSubagentsCommand(
                 undefined,
                 [{ kind: "resume", sessionId, prompt }],
                 () => updateSubagentWidget(ctx, agentManager.listSessions(), settings),
-                { background: false },
+                { dispatch: "foreground" },
               );
               void handle.resultsPromise.then(
                 results => {

@@ -220,7 +220,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const status = statusLabel(session);
       const title = `${marker} ${indent}${statusIcon(session)} ${session.config.name}${session.label ? `  ${session.label}` : ""}`;
       const task = session.prompt || session.config.description || "No task description";
-      const meta = `${status} · ${session.activity.turns} turns · ${session.activity.toolHistory.length} tools · ${session.dispatch}`;
+      const meta = `${status} · ${session.activity.turns} turns · ${session.activity.toolHistory.length} tools · ${session.attempt.dispatch}`;
       const style = chosen ? (text: string) => this.theme.fg?.("accent", text) ?? text : (text: string) => text;
       lines.push(style(truncateToWidth(title, width, "…")));
       lines.push(row.contextOnly
@@ -238,7 +238,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     return agents.slice(start, start + 6).flatMap((agent, offset) => {
       const index = start + offset;
       const chosen = index === this.selected.agents;
-      const title = `${chosen ? "▶" : " "} ${agent.name}  ${agent.source}${agent.model ? ` · ${agent.model}` : ""}${agent.resumable ? " · resumable" : ""}`;
+      const title = `${chosen ? "▶" : " "} ${agent.name}  ${agent.source}${agent.model ? ` · ${agent.model}` : ""}${agent.retainConversation ? " · retained" : ""}`;
       const description = `   ${agent.description}`;
       return [
         chosen ? this.theme.fg?.("accent", truncateToWidth(title, width, "…")) ?? title : truncateToWidth(title, width, "…"),

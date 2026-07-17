@@ -22,11 +22,11 @@ afterEach(() => {
 });
 
 const baseConfig = {
+  retainConversation: false,
   name: "helper",
   description: "d",
   systemPrompt: "s",
   source: "project" as const,
-  resumable: false,
 };
 
 const baseCtx = (cwd: string = process.cwd()) => ({ cwd, modelRegistry: { getAll: () => [] } } as any);
@@ -159,7 +159,6 @@ test("run-agent records the complete resolved effective config in snapshots and 
       thinking: "high",
       cwd: "nested",
       skills: [],
-      resumable: true,
     },
     noop,
   );
@@ -173,7 +172,6 @@ test("run-agent records the complete resolved effective config in snapshots and 
     cwd: join(root, "nested"),
     skills: [],
     tools: ["read", "subagent"],
-    resumable: true,
   };
   assert.deepEqual(result.effectiveConfig, effectiveConfig);
   assert.deepEqual(agent.snapshot().effectiveConfig, effectiveConfig);

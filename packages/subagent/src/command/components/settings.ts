@@ -13,7 +13,7 @@ export type SubagentSettingsChange =
   | { kind: "backgroundNotify"; value: BackgroundNotifyMode }
   | { kind: "maxConcurrentSubagents"; value: number }
   | { kind: "maxTasksPerRun"; value: number }
-  | { kind: "defaultResumable"; value: boolean }
+  | { kind: "defaultRetainConversation"; value: boolean }
   | { kind: "widgetShowRetainedSessions"; value: boolean }
   | { kind: "widgetMaxRowsPerSection"; value: number };
 
@@ -52,10 +52,10 @@ export function applySubagentSettingsChange(
         settings: { ...settings, runtime: { ...settings.runtime, maxTasksPerRun: change.value } },
         confirmation: `Subagent max tasks per run set to ${change.value}.`,
       };
-    case "defaultResumable":
+    case "defaultRetainConversation":
       return {
-        settings: { ...settings, runtime: { ...settings.runtime, defaultResumable: change.value } },
-        confirmation: `Subagent default resumable set to ${change.value}.`,
+        settings: { ...settings, runtime: { ...settings.runtime, defaultRetainConversation: change.value } },
+        confirmation: `Subagent default retainConversation set to ${change.value}.`,
       };
     case "widgetShowRetainedSessions":
       return {
@@ -120,9 +120,9 @@ export class SubagentSettingsComponent implements Component {
         description: "Maximum tasks accepted in one subagent run call. This limits single-call fanout before tasks enter the queue.",
       },
       {
-        id: "defaultResumable",
-        label: "Default resumable",
-        currentValue: String(settings.runtime.defaultResumable),
+        id: "defaultRetainConversation",
+        label: "Default retainConversation",
+        currentValue: String(settings.runtime.defaultRetainConversation),
         values: ["false", "true"],
         description: "Default conversation resumability when agent frontmatter omits it. Per-task overrides still win.",
       },
@@ -131,14 +131,14 @@ export class SubagentSettingsComponent implements Component {
         label: "Show retained",
         currentValue: String(settings.display.widgetShowRetainedSessions),
         values: ["true", "false"],
-        description: "Whether the progress widget includes completed resumable sessions. Disable to reduce widget clutter.",
+        description: "Whether the progress widget includes completed retainConversation sessions. Disable to reduce widget clutter.",
       },
       {
         id: "widgetMaxRowsPerSection",
         label: "Widget rows",
         currentValue: String(settings.display.widgetMaxRowsPerSection),
         values: numericSettingValues(settings.display.widgetMaxRowsPerSection, ROW_SETTING_VALUES),
-        description: "Maximum visible rows per Background or Resumable widget section before showing a +N more overflow line.",
+        description: "Maximum visible rows per Background or Retained widget section before showing a +N more overflow line.",
       },
     ];
     this.settingsList = new SettingsList(
@@ -151,7 +151,7 @@ export class SubagentSettingsComponent implements Component {
         else if (id === "backgroundNotify") onChange({ kind: "backgroundNotify", value: newValue as BackgroundNotifyMode });
         else if (id === "maxConcurrentSubagents") onChange({ kind: "maxConcurrentSubagents", value: Number(newValue) });
         else if (id === "maxTasksPerRun") onChange({ kind: "maxTasksPerRun", value: Number(newValue) });
-        else if (id === "defaultResumable") onChange({ kind: "defaultResumable", value: newValue === "true" });
+        else if (id === "defaultRetainConversation") onChange({ kind: "defaultRetainConversation", value: newValue === "true" });
         else if (id === "widgetShowRetainedSessions") onChange({ kind: "widgetShowRetainedSessions", value: newValue === "true" });
         else if (id === "widgetMaxRowsPerSection") onChange({ kind: "widgetMaxRowsPerSection", value: Number(newValue) });
       },

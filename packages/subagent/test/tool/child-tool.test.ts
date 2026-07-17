@@ -1,6 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
+import type { Attempt } from "../../src/domain/agent-attempt.js";
 import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import type { AgentManager } from "../../src/runtime/agent-manager.js";
@@ -11,7 +12,7 @@ import { baseCtx, makeManager, makeSession, run } from "../helpers/runtime.js";
 type FakeRegistry = { agents: Map<string, any>; reload?: () => Promise<void>; summarizeAgent?: () => string };
 
 const noop: AgentUpdateListener = () => {};
-const baseAgentConfig = { name: "helper", description: "d", systemPrompt: "s", source: "project" as const, resumable: false };
+const baseAgentConfig = { name: "helper", description: "d", systemPrompt: "s", source: "project" as const, retainConversation: false };
 
 function captureChildTool(
   manager: AgentManager,
@@ -68,7 +69,7 @@ test("child subagent tool forwards list, results, and remove actions straight to
     return completedRun(agent, "ok");
   };
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
   await run(manager,baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "seed" }]);
@@ -95,11 +96,11 @@ test("child subagent tool forwards list, results, and remove actions straight to
 
 test("recursive foreground subagent spawn completes with a single shared queue slot", async () => {
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
-  const runner = async (ctx: any, agent: any) => {
+  const runner = async (ctx: any, agent: any, attempt: Attempt) => {
     agent.attach(makeSession());
-    if (agent.spawn.prompt === "spawn-child") {
+    if (attempt.prompt === "spawn-child") {
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         "child-call",
@@ -127,12 +128,12 @@ test("recursive foreground subagent spawn completes with a single shared queue s
 
 test("recursive foreground subagent chain can exceed the shared queue cap without deadlocking", async () => {
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
-  const runner = async (ctx: any, agent: any) => {
+  const runner = async (ctx: any, agent: any, attempt: Attempt) => {
     agent.attach(makeSession());
-    if (agent.spawn.prompt.startsWith("spawn-")) {
-      const remaining = Number(agent.spawn.prompt.slice("spawn-".length));
+    if (attempt.prompt.startsWith("spawn-")) {
+      const remaining = Number(attempt.prompt.slice("spawn-".length));
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         `child-${remaining}`,
@@ -143,7 +144,7 @@ test("recursive foreground subagent chain can exceed the shared queue cap withou
       );
       assert.equal(result.isError, false);
     }
-    return completedRun(agent, `done:${agent.spawn.prompt}`);
+    return completedRun(agent, `done:${attempt.prompt}`);
   };
 
   const manager = makeManager(registry as any, 1, runner);
@@ -160,13 +161,13 @@ test("recursive foreground subagent chain can exceed the shared queue cap withou
 test("recursive subagent spawn: root → child → grandchild all live under one shared manager with correct parent links", async () => {
   // Custom runner that simulates each Agent spawning through its child-session tool.
   const registry = {
-    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
   };
   const recordedParents: Record<string, string | undefined> = {};
-  const runner = async (ctx: any, agent: any) => {
+  const runner = async (ctx: any, agent: any, attempt: Attempt) => {
     recordedParents[agent.id] = agent.parentId;
     agent.attach(makeSession());
-    if (agent.spawn.prompt === "spawn-child") {
+    if (attempt.prompt === "spawn-child") {
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         "c-call",
@@ -178,7 +179,7 @@ test("recursive subagent spawn: root → child → grandchild all live under one
       assert.equal(result.isError, false);
       return completedRun(agent, "child-done");
     }
-    if (agent.spawn.prompt === "spawn-grandchild") {
+    if (attempt.prompt === "spawn-grandchild") {
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         "g-call",

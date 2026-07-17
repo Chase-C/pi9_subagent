@@ -28,7 +28,7 @@ export function run(
   onUpdate?: RunUpdateListener,
   options: { parentId?: string } = {},
 ): Promise<AgentResult[]> {
-  return manager.startRun(ctx, signal, tasks, onUpdate, { background: false, ...options })
+  return manager.startRun(ctx, signal, tasks, onUpdate, { dispatch: "foreground", ...options })
     .resultsPromise.then(snapshots => snapshots.map(toResult));
 }
 

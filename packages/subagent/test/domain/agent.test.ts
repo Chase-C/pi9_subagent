@@ -6,6 +6,7 @@ import type { AgentViewStatus } from "../../src/domain/agent-snapshot.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import { toResult } from "../../src/domain/agent-result.js";
 import { resolveTask } from "../../src/runtime/task-resolution.js";
+import type { SpawnRequest } from "../../src/schema.js";
 
 const noop: AgentUpdateListener = () => {};
 const fakeSession = { subscribe: () => () => {}, abort: () => {} };
@@ -17,11 +18,11 @@ function doneStatus(agent: Agent): Extract<AgentViewStatus, { kind: "done" }> {
 }
 
 const baseConfig = {
+  retainConversation: false,
   name: "helper",
   description: "d",
   systemPrompt: "s",
   source: "project" as const,
-  resumable: false,
 };
 
 /**
@@ -37,9 +38,13 @@ function resolveScenario(opts: { config?: any } = {}) {
   let nextSessionId = 0;
   const allocateSessionId = () => `test-session-${++nextSessionId}`;
   const findAgent = (id: string) => tracked.find(a => a.id === id);
-  function resolve(task: any, listener: AgentUpdateListener = noop, background = false) {
+  function resolve(
+    task: any,
+    listener: AgentUpdateListener = noop,
+    dispatch: "foreground" | "background" = "foreground",
+  ) {
     const result = resolveTask({
-      task, background, groupId: "g", inputIndex: 0,
+      task, dispatch, groupId: "g", inputIndex: 0,
       registry, findAgent, allocateSessionId, listener,
     });
     if (result.kind === "spawn") tracked.push(result.agent);
@@ -48,10 +53,19 @@ function resolveScenario(opts: { config?: any } = {}) {
   return { registry, tracked, resolve };
 }
 
-test("Agent label surfaces through both the getter and projectAgentView, including the absent case", () => {
-  const labeled = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" }, noop);
+test("Agent copies its immutable label independently from the mutable spawn request", () => {
+  const spawn: SpawnRequest = {
+    kind: "spawn",
+    agent: "helper",
+    prompt: "work",
+    label: "researcher",
+  };
+  const labeled = new Agent("id1", baseConfig, spawn, noop);
+  spawn.label = "mutated";
+
   assert.equal(labeled.label, "researcher");
   assert.equal(view(labeled).label, "researcher");
+  assert.equal("spawn" in labeled, false);
 
   const unlabeled = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
   assert.equal(unlabeled.label, undefined);
@@ -74,14 +88,12 @@ test("projectAgentView surfaces parentSessionId when set and omits it when absen
   assert.equal(Object.prototype.hasOwnProperty.call(view(orphan), "parentSessionId"), false);
 });
 
-test("Agent constructor optional background flag controls projected dispatch", () => {
+test("Agent constructor dispatch controls projected attempt dispatch", () => {
   const defaultAgent = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  assert.equal(defaultAgent.background, false);
-  assert.equal(view(defaultAgent).dispatch, "foreground");
+  assert.equal(view(defaultAgent).attempt.dispatch, "foreground");
 
-  const backgroundAgent = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop, { background: true });
-  assert.equal(backgroundAgent.background, true);
-  assert.equal(view(backgroundAgent).dispatch, "background");
+  const backgroundAgent = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop, { dispatch: "background" });
+  assert.equal(view(backgroundAgent).attempt.dispatch, "background");
 });
 
 test("snapshot uses configured defaults when no task override is provided", () => {
@@ -93,12 +105,17 @@ test("snapshot uses configured defaults when no task override is provided", () =
   assert.equal(view(noSkills).config.skills, undefined);
 });
 
-test("Agent per-task resumable beats the config default in both directions", () => {
+test("spawn retainConversation overrides the definition in both directions", () => {
   for (const [configDefault, override] of [[true, false], [false, true]] as const) {
-    const config = { ...baseConfig, resumable: configDefault };
-    const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: override }, noop);
-    assert.equal(agent.shouldRetainConversation, override);
-    assert.equal(view(agent).config.resumable, override);
+    const config = { ...baseConfig, retainConversation: configDefault };
+    const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work", retainConversation: override }, noop);
+
+    assert.equal(agent.requestedConfig.conversationPolicy, override ? "retain" : "release");
+    assert.equal(view(agent).conversation.policy, override ? "retain" : "release");
+    assert.equal(agent.retentionDecision.keepConversation, false, "queued attempts have no bound session");
+
+    agent.bindSession(fakeSession as any);
+    assert.equal(agent.retentionDecision.keepConversation, override);
   }
 });
 
@@ -109,7 +126,6 @@ test("snapshot projects requested skills for defaults, overrides, and explicit d
     thinking: "low" as const,
     tools: ["read", "grep"],
     skills: ["definition-skill"],
-    resumable: false,
   };
   const defaults = new Agent("defaults", config, {
     kind: "spawn",
@@ -127,7 +143,6 @@ test("snapshot projects requested skills for defaults, overrides, and explicit d
     thinking: "high",
     skills: ["requested-skill"],
     cwd: "nested",
-    resumable: true,
   }, noop);
   assert.deepEqual(override.requestedConfig, {
     model: "spawn/model",
@@ -135,11 +150,11 @@ test("snapshot projects requested skills for defaults, overrides, and explicit d
     skills: ["requested-skill"],
     tools: ["read", "grep"],
     cwd: "nested",
-    resumable: true,
+    conversationPolicy: "release",
   });
   assert.equal(override.snapshot().status.kind, "queued");
   assert.deepEqual(override.snapshot().config.skills, ["requested-skill"]);
-  override.attach(fakeSession as any);
+  override.bindSession(fakeSession as any);
   assert.equal(override.snapshot().status.kind, "running");
   assert.deepEqual(override.snapshot().config.skills, ["requested-skill"]);
   completedRun(override, "done");
@@ -156,58 +171,9 @@ test("snapshot projects requested skills for defaults, overrides, and explicit d
   assert.deepEqual(disabled.snapshot().config.skills, []);
 });
 
-test("post-attach resumable overrides update the canonical policy and effective config", () => {
-  const agent = new Agent("id", { ...baseConfig, resumable: true }, {
-    kind: "spawn", agent: "helper", prompt: "first",
-  }, noop);
-  agent.setEffectiveConfig({ cwd: "/tmp", skills: [], tools: [], resumable: true });
-  agent.attach(fakeSession as any);
-  completedRun(agent, "first");
 
-  agent.beginResume("follow-up", false, false);
-  assert.equal(agent.requestedConfig.resumable, true, "queued override is not applied before attach");
-  agent.attach(fakeSession as any);
 
-  assert.equal(agent.requestedConfig.resumable, false);
-  assert.equal(agent.resumableEnabled, false);
-  assert.equal(agent.snapshot().effectiveConfig?.resumable, false);
-  assert.equal(agent.snapshot().config.resumable, false);
-});
 
-test("task resolution keeps the stored label when omitted on resume and overwrites it when provided", () => {
-  const session = { subscribe: () => () => { }, abort: () => { } };
-  const updates: string[] = [];
-  const { resolve } = resolveScenario({ config: { ...baseConfig, resumable: true } });
-
-  const spawn = resolve(
-    { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" },
-    (_a, kind) => updates.push(kind),
-  );
-  if (spawn.kind !== "spawn") throw new Error("expected spawn");
-  spawn.agent.attach(session as any);
-  completedRun(spawn.agent, "done");
-  assert.equal(spawn.agent.label, "researcher");
-
-  // Resume with no label: existing label is preserved.
-  const r1 = resolve(
-    { kind: "resume", sessionId: spawn.agent.id, prompt: "follow-up" },
-    (_a, kind) => updates.push(kind),
-  );
-  if (r1.kind !== "resume") throw new Error("expected resume");
-  assert.equal(r1.agent.label, "researcher");
-  completedRun(r1.agent, "done again");
-
-  // Resume with an explicit label and a per-attempt resumable override.
-  const r2 = resolve(
-    { kind: "resume", sessionId: spawn.agent.id, prompt: "follow-up", label: "renamed", resumable: false },
-    (_a, kind) => updates.push(kind),
-  );
-  if (r2.kind !== "resume") throw new Error("expected resume");
-  assert.equal(r2.agent.label, "renamed");
-  assert.equal(r2.agent.resumableOverride, false);
-  // Spawn settle + each resume emits a "status" update at minimum.
-  assert.ok(updates.filter(k => k === "status").length >= 4, `expected several status updates, got ${updates.join(",")}`);
-});
 
 test("task resolution re-subscribes the session on resume so events during a resumed cycle update its state", () => {
   let emit: ((event: any) => void) | undefined;
@@ -217,12 +183,12 @@ test("task resolution re-subscribes the session on resume so events during a res
     prompt: async () => { },
     abort: () => { },
   };
-  const { resolve } = resolveScenario({ config: { ...baseConfig, resumable: true, name: "a" } });
+  const { resolve } = resolveScenario({ config: { ...baseConfig, name: "a", retainConversation: true } });
   const spawn = resolve({ kind: "spawn", agent: "a", prompt: "p" });
   if (spawn.kind !== "spawn") throw new Error("expected spawn");
   const agent = spawn.agent;
 
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   const firstEmit = emit;
   assert.ok(firstEmit);
   firstEmit({ type: "turn_end" });
@@ -232,7 +198,7 @@ test("task resolution re-subscribes the session on resume so events during a res
 
   const resumed = resolve({ kind: "resume", sessionId: agent.id, prompt: "p2" });
   if (resumed.kind !== "resume") throw new Error("expected resume");
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   const resumedEmit = emit as ((event: any) => void) | undefined;
   assert.ok(resumedEmit, "resume should re-subscribe");
   resumedEmit({ type: "turn_end" });
@@ -240,9 +206,11 @@ test("task resolution re-subscribes the session on resume so events during a res
   // Each attempt now carries isolated activity: the resume's current activity reflects only its
   // own events, while the completed spawn attempt is retained as a previous run section.
   const resumedSnapshot = view(agent);
+  assert.deepEqual(resumedSnapshot.attempt, { kind: "resume", dispatch: "foreground" });
   assert.equal(resumedSnapshot.activity.turns, 1);
   assert.equal(resumedSnapshot.activity.toolHistory.length, 1);
   assert.equal(resumedSnapshot.previousRuns?.length, 1);
+  assert.deepEqual(resumedSnapshot.previousRuns?.[0].attempt, { kind: "spawn", dispatch: "foreground" });
   assert.equal(resumedSnapshot.previousRuns?.[0].activity.turns, 1);
   completedRun(agent, "done2");
   assert.equal(emit, undefined, "subscription should be torn down on complete after resume");
@@ -256,19 +224,19 @@ test("snapshot exposes a completed prior attempt as an isolated previous run sec
     prompt: async () => { },
     abort: () => { },
   };
-  const { resolve } = resolveScenario({ config: { ...baseConfig, resumable: true, name: "a" } });
+  const { resolve } = resolveScenario({ config: { ...baseConfig, name: "a", retainConversation: true } });
   const spawn = resolve({ kind: "spawn", agent: "a", prompt: "first prompt" });
   if (spawn.kind !== "spawn") throw new Error("expected spawn");
   const agent = spawn.agent;
 
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   emit!({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "a.ts" } });
   emit!({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read", isError: false });
   completedRun(agent, "first output");
 
   const resumed = resolve({ kind: "resume", sessionId: agent.id, prompt: "second prompt" });
   if (resumed.kind !== "resume") throw new Error("expected resume");
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   emit!({ type: "tool_execution_start", toolCallId: "edit-1", toolName: "edit", args: { path: "b.ts" } });
 
   const snap = view(agent);
@@ -279,6 +247,8 @@ test("snapshot exposes a completed prior attempt as an isolated previous run sec
   // The completed spawn attempt is preserved as a single previous run section.
   assert.equal(snap.previousRuns?.length, 1);
   const prev = snap.previousRuns![0];
+  assert.deepEqual(snap.attempt, { kind: "resume", dispatch: "foreground" });
+  assert.deepEqual(prev.attempt, { kind: "spawn", dispatch: "foreground" });
   assert.equal(prev.prompt, "first prompt");
   assert.equal(prev.status.kind, "done");
   if (prev.status.kind === "done") {
@@ -294,7 +264,7 @@ test("a single-run agent omits previousRuns from its snapshot", () => {
 
   // Queued, then running, then completed: none of these states should expose a previous run.
   assert.equal(view(agent).previousRuns, undefined);
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   assert.equal(view(agent).previousRuns, undefined);
   completedRun(agent, "done");
   assert.equal(Object.prototype.hasOwnProperty.call(view(agent), "previousRuns"), false);
@@ -307,25 +277,27 @@ test("multiple resumes accumulate previous run sections in chronological order a
     prompt: async () => { },
     abort: () => { },
   };
-  const { resolve } = resolveScenario({ config: { ...baseConfig, resumable: true, name: "a" } });
+  const { resolve } = resolveScenario({ config: { ...baseConfig, name: "a", retainConversation: true } });
   const spawn = resolve({ kind: "spawn", agent: "a", prompt: "run one" });
   if (spawn.kind !== "spawn") throw new Error("expected spawn");
   const agent = spawn.agent;
 
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   completedRun(agent, "output one");
 
   const r1 = resolve({ kind: "resume", sessionId: agent.id, prompt: "run two" });
   if (r1.kind !== "resume") throw new Error("expected resume");
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   completedRun(agent, "output two");
 
   const r2 = resolve({ kind: "resume", sessionId: agent.id, prompt: "run three" });
   if (r2.kind !== "resume") throw new Error("expected resume");
-  agent.attach(session as any);
+  agent.bindSession(session as any);
 
   const snap = view(agent);
   assert.equal(snap.prompt, "run three");
+  assert.equal(snap.attempt.kind, "resume");
+  assert.deepEqual(snap.previousRuns?.map(run => run.attempt.kind), ["spawn", "resume"]);
   assert.deepEqual(snap.previousRuns?.map(run => run.prompt), ["run one", "run two"]);
   assert.deepEqual(
     snap.previousRuns?.map(run => (run.status.kind === "done" ? run.status.output : undefined)),
@@ -346,7 +318,7 @@ test("agent stores tool-use history and keeps active tool correct for overlappin
   const activeNames = () =>
     view(agent).activity.toolHistory.filter(t => t.completedAt === undefined).map(t => t.name);
 
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   assert.ok(sessionEmit);
   sessionEmit({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read" });
   sessionEmit({ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash" });
@@ -375,7 +347,7 @@ test("agent stores compact input summaries for known tool starts", () => {
   };
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "a", prompt: "p" }, noop);
 
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   assert.ok(sessionEmit);
   sessionEmit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "src/index.ts", offset: 10, limit: 5 } });
   sessionEmit({ type: "tool_execution_start", toolCallId: "edit", toolName: "edit", args: { path: "src/index.ts", edits: [{}, {}] } });
@@ -400,7 +372,7 @@ test("input summaries cover path/pattern tools and fall back to scalar args for 
   };
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "a", prompt: "p" }, noop);
 
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   assert.ok(sessionEmit);
   sessionEmit({ type: "tool_execution_start", toolCallId: "write", toolName: "write", args: { path: "out.ts", content: "x" } });
   sessionEmit({ type: "tool_execution_start", toolCallId: "ls", toolName: "ls", args: { path: "packages/subagent" } });
@@ -423,7 +395,7 @@ test("Agent.abort on a running agent aborts the underlying session and finalizes
   let abortCalls = 0;
   const session = { messages: [], subscribe: () => () => { }, prompt: async () => { }, abort: () => { abortCalls += 1; } };
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  agent.attach(session as any);
+  agent.bindSession(session as any);
 
   await agent.abort();
 
@@ -444,7 +416,7 @@ test("Agent.abort on a terminal agent is a no-op and does not re-finalize", asyn
   let abortCalls = 0;
   const session = { messages: [], subscribe: () => () => { }, prompt: async () => { }, abort: () => { abortCalls += 1; } };
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  agent.attach(session as any);
+  agent.bindSession(session as any);
   completedRun(agent, "done");
   const settled = doneStatus(agent);
 
@@ -458,7 +430,7 @@ test("task resolution for an unknown agent returns a preflight failure with a he
   const registry = { agents: new Map() } as any;
   const result = resolveTask({
     task: { kind: "spawn", agent: "missing", prompt: "p" },
-    background: false,
+    dispatch: "foreground",
     groupId: "g",
     inputIndex: 0,
     registry,
@@ -474,23 +446,23 @@ test("task resolution for an unknown agent returns a preflight failure with a he
   assert.equal(result.failure.status.kind, "done");
 });
 
-test("task resolution explains that a completed non-resumable session cannot accept follow-ups", () => {
+test("task resolution rejects a completed release-policy conversation", () => {
   const { resolve } = resolveScenario();
   const spawn = resolve({ kind: "spawn", agent: "helper", prompt: "work" });
   if (spawn.kind !== "spawn") throw new Error("expected spawn");
-  spawn.agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} } as any);
+  spawn.agent.bindSession({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} } as any);
   completedRun(spawn.agent, "done");
 
   const resumed = resolve({ kind: "resume", sessionId: spawn.agent.id, prompt: "follow up" });
 
   assert.equal(resumed.kind, "failure");
   if (resumed.kind === "failure") {
-    assert.match(toResult(resumed.failure).error ?? "", /created with resumable: false/);
+    assert.match(toResult(resumed.failure).error ?? "", /while it is completed/);
   }
 });
 
-test("task resolution rejects sessions that are mid-attempt or non-resumable, leaving the existing attempt intact", () => {
-  const { resolve, tracked } = resolveScenario({ config: { ...baseConfig, source: "user", resumable: true } });
+test("task resolution rejects sessions that are mid-attempt or non-retainConversation, leaving the existing attempt intact", () => {
+  const { resolve, tracked } = resolveScenario({ config: { ...baseConfig, source: "user" } });
   const spawn = resolve({ kind: "spawn", agent: "helper", prompt: "work" });
   if (spawn.kind !== "spawn") throw new Error("expected spawn");
 
@@ -505,7 +477,7 @@ test("task resolution rejects sessions that are mid-attempt or non-resumable, le
   // Unknown session id surfaces a dedicated message.
   const unknown = resolve({ kind: "resume", sessionId: "no-such-id", prompt: "ghost" });
   assert.equal(unknown.kind, "failure");
-  if (unknown.kind === "failure") assert.match(toResult(unknown.failure).error ?? "", /Unknown resumable subagent session/);
+  if (unknown.kind === "failure") assert.match(toResult(unknown.failure).error ?? "", /Unknown retained subagent session/);
 
   // Original agent is unchanged: still has its original (queued) attempt.
   assert.equal(tracked.length, 1);

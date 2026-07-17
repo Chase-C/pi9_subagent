@@ -10,11 +10,11 @@ test("TaskSchema keeps label optional for the flat provider schema and rejects n
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", label: 42 }), false);
 });
 
-test("TaskSchema accepts an optional resumable boolean and rejects non-boolean values", () => {
+test("TaskSchema accepts an optional retainConversation boolean and rejects non-boolean values", () => {
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work" }), true);
-  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", resumable: true }), true);
-  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", resumable: false }), true);
-  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", resumable: "true" }), false);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", retainConversation: true }), true);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", retainConversation: false }), true);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", retainConversation: "true" }), false);
 });
 
 test("TaskSchema accepts an optional skills string array and rejects non-string-array values", () => {
@@ -43,7 +43,7 @@ test("parseTask classifies spawn vs resume by which key is present and preserves
     prompt: "do work",
     label: "researcher",
     skills: ["tdd"],
-    resumable: true,
+    retainConversation: true,
     model: "m",
     thinking: "max",
     cwd: "sub",
@@ -54,7 +54,7 @@ test("parseTask classifies spawn vs resume by which key is present and preserves
     prompt: "do work",
     label: "researcher",
     skills: ["tdd"],
-    resumable: true,
+    retainConversation: true,
     model: "m",
     thinking: "max",
     cwd: "sub",
@@ -63,15 +63,11 @@ test("parseTask classifies spawn vs resume by which key is present and preserves
   const resume = parseTask({
     sessionId: "sess-1",
     prompt: "follow up",
-    label: "phase 2",
-    resumable: false,
   });
   assert.deepEqual(resume, {
     kind: "resume",
     sessionId: "sess-1",
     prompt: "follow up",
-    label: "phase 2",
-    resumable: false,
   });
 });
 
@@ -137,11 +133,11 @@ test("parseTask rejects blank spawn-only string overrides", () => {
 test("parseTask rejects skills entries that are not non-empty strings", () => {
   const result = parseTask({ agent: "helper", skills: ["", "x"], prompt: "p", label: "work" });
   assert.ok("error" in result);
-  assert.match(result.error, /skills entries/);
+  assert.match(result.error, /skills.*non-empty/);
 
   const notArray = parseTask({ agent: "helper", prompt: "p", label: "work", skills: "tdd" });
   assert.ok("error" in notArray);
-  assert.match(notArray.error, /skills must be an array/);
+  assert.match(notArray.error, /skills.*non-empty/);
 });
 
 test("parseTask rejects unsupported thinking levels", () => {
@@ -214,10 +210,14 @@ test("parseSubagentInvocation centralizes action field validation", () => {
   assert.match(removeBlank.error, /non-empty strings/);
 });
 
-test("parseSubagentInvocation requires current boolean fields", () => {
+test("parseSubagentInvocation rejects legacy background and validates dispatch", () => {
   assert.deepEqual(
-    parseSubagentInvocation({ action: "run", tasks: [{ agent: "helper", prompt: "work" }], background: "false" }),
-    { error: "run background must be a boolean.", action: "run" },
+    parseSubagentInvocation({ action: "run", tasks: [{ agent: "helper", prompt: "work" }], background: false }),
+    { error: "Legacy field background is not supported; use dispatch.", action: "run" },
+  );
+  assert.deepEqual(
+    parseSubagentInvocation({ action: "run", tasks: [{ agent: "helper", prompt: "work" }], dispatch: "later" }),
+    { error: "run dispatch must be foreground or background.", action: "run" },
   );
   assert.deepEqual(
     parseSubagentInvocation({ action: "results", sessionIds: ["s1"], remove: "false" }),
@@ -244,7 +244,7 @@ test("SubagentParams rejects results action when remove is not a boolean", () =>
 test("schema describes labels, inventory filters, and result cleanup", () => {
   assert.equal(
     (TaskSchema.properties.label as any).description,
-    "Display label for distinguishing tasks; required for new session.",
+    "New session only: display label; required for new sessions.",
   );
   assert.equal(
     (SubagentParams.properties.status as any).description,
@@ -256,14 +256,14 @@ test("schema describes labels, inventory filters, and result cleanup", () => {
   );
 });
 
-test("schema concisely distinguishes foreground waiting, background retrieval, and resumability", () => {
+test("schema concisely distinguishes foreground waiting, background retrieval, and retention", () => {
   assert.equal(
-    (TaskSchema.properties.resumable as any).description,
-    "true keeps child context for follow-ups; false releases it after this attempt.",
+    (TaskSchema.properties.retainConversation as any).description,
+    "New session only: retain child context for follow-ups.",
   );
   assert.equal(
-    (SubagentParams.properties.background as any).description,
-    "run only: true returns handles immediately; false (default) waits for results. Background results remain available until removed.",
+    (SubagentParams.properties.dispatch as any).description,
+    "run only: foreground (default) waits; background returns handles immediately.",
   );
 });
 

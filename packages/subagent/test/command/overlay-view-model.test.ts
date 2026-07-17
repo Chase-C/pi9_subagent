@@ -6,8 +6,8 @@ import { fakeAgent } from "../helpers/fake-agent.js";
 
 test("agent filtering searches purpose and configuration metadata", () => {
   const agents = [
-    { name: "reviewer", description: "Review authorization", source: "project", sourcePath: "/agents/reviewer.md", model: "sonnet", thinking: "high", tools: ["read"], skills: ["review"], resumable: true, systemPrompt: "" },
-    { name: "builder", description: "Implement features", source: "user", tools: ["bash"], resumable: false, systemPrompt: "" },
+    { name: "reviewer", description: "Review authorization", source: "project", sourcePath: "/agents/reviewer.md", model: "sonnet", thinking: "high", tools: ["read"], skills: ["review"], retainConversation: true, systemPrompt: "" },
+    { name: "builder", description: "Implement features", source: "user", tools: ["bash"], retainConversation: false, systemPrompt: "" },
   ] as any[];
 
   for (const query of ["authorization", "project", "sonnet", "read", "review"]) {

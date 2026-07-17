@@ -106,7 +106,7 @@ test("subagent tool result renderer falls back to simple text when themed render
           view: "inventory",
           sessions: [{
             id: "s1", inputIndex: 0, createdAt: 1,
-            config: { name: "helper", description: "Helper", source: "project", model: undefined, thinking: undefined, tools: undefined, resumable: false },
+            config: { name: "helper", description: "Helper", source: "project", model: undefined, thinking: undefined, tools: undefined, retainConversation: false },
             status: { kind: "done", outcome: "completed", completedAt: 2 },
             activity: { turns: 1, compactions: 0, toolHistory: [] },
             usage: undefined,
