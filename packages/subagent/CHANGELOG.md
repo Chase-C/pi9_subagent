@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-17
+
 ### Breaking
 
 - Replace the lifecycle contract with immutable spawn-time conversation policy (`retainConversation`), attempt-scoped foreground/background `dispatch`, and attempt-scoped history.
@@ -135,7 +137,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.5.1...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.6.0...HEAD
+[0.6.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.5.1...subagent-v0.6.0
 [0.5.1]: https://github.com/Chase-C/pi9/compare/subagent-v0.5.0...subagent-v0.5.1
 [0.5.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.4.0...subagent-v0.5.0
 [0.4.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.3.1...subagent-v0.4.0

@@ -1,6 +1,6 @@
 {
   "name": "@pi9/subagent",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Retained-conversation, background, and recursive subagents for Pi with live progress and tree-wide concurrency limits.",
   "license": "MIT",
   "author": "Chase Cummings <chaseecummings@gmail.com>",
