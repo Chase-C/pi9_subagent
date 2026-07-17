@@ -46,7 +46,7 @@ describe("todo renderer", () => {
     expect(text).toContain("<muted>  1. Planning · 0/1</muted>");
     expect(text).toContain("<muted>    󰄰 Plan release announcement</muted>");
     expect(text).toContain("<toolTitle><bold>  2. Build</bold></toolTitle> <muted>· 1/2</muted>");
-    expect(text).toContain("<muted>    󰝥</muted> <text>Implement renderer</text>");
+    expect(text).toContain("<text>    󰄰 Implement renderer</text>");
     expect(text).toContain("<success>    󰄴 Publish package</success>");
     expect(text).not.toContain("Todos");
     expect(text).not.toContain("[task-");
@@ -92,7 +92,7 @@ describe("todo renderer", () => {
     } }, { expanded: true }, themed, { fallbackGlyphs: true }).render(80).join("\n");
     expect(text).toContain("<toolTitle>  1. Tasks</toolTitle> <muted>· 2/4</muted>");
     expect(text).toContain("<muted>    ○ Pending</muted>");
-    expect(text).toContain("<muted>    ▶</muted> <text>Active</text>");
+    expect(text).toContain("<text>    ○ Active</text>");
     expect(text).toContain("<success>    ✓ ~Done~</success>");
     expect(text).toContain("<muted>    × ~Cancelled~</muted>");
   });

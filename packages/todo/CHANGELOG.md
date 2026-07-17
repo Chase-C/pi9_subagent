@@ -4,6 +4,11 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Use the pending empty-circle glyph and normal text color for active tasks in expanded tool calls and the widget.
+- Slow the widget's `workingOn` spinner to 200 milliseconds per frame.
+
 ## [0.3.3] - 2026-07-17
 
 ### Changed

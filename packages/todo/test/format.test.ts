@@ -22,7 +22,7 @@ describe("todo formatting", () => {
     const summary = formatTodoSummary(state);
     expect(summary).toMatch(/○ Plan release/);
     expect(summary).toMatch(/× Cancel old approach/);
-    expect(summary).toMatch(/▶ Build feature/);
+    expect(summary).toMatch(/○ Build feature/);
     expect(summary).toMatch(/✓ Ship release/);
     expect(summary).not.toContain("Detailed description");
     expect(formatTodoSummary(state, true)).toContain("Build feature — Detailed description for Build feature.");

@@ -27,7 +27,7 @@ test("todo widget nests numbered phases and shows tasks only under the active ph
   const lines = renderTodoWidgetLines(state, { bold: (text: string) => `<bold>${text}</bold>` } as never, 80, { maxVisible: 2, fallbackGlyphs: true });
   assert.equal(lines[0], " <bold>Todos</bold>");
   assert.equal(lines[1], " <bold>  1. Plan</bold> · 2/4");
-  assert.equal(lines[2], "     ▶ Active task");
+  assert.equal(lines[2], "     ○ Active task");
   assert.match(lines[3], /     ○ First pending task/);
   assert.match(lines[4], /1 complete task · 1 cancelled task/);
   assert.equal(lines[5], "   2. Build · 0/1");
@@ -43,9 +43,9 @@ test("todo widget summarizes terminal tasks beneath the selected phase", () => {
   } as never, 80, { maxVisible: 10, fallbackGlyphs: true }).join("\n");
   assert.match(themed, /<toolTitle><bold>Todos<\/bold><\/toolTitle>\n/);
   assert.match(themed, /<toolTitle><bold>  1\. Plan<\/bold><\/toolTitle> <muted>· 2\/4<\/muted>/);
-  assert.match(themed, /<muted>    ▶<\/muted> <text>Active task<\/text>/);
+  assert.match(themed, /<text>    ○ Active task<\/text>/);
   assert.match(themed, /<muted>    ○ First pending task<\/muted>/);
-  assert.doesNotMatch(themed, /<text>    ▶<\/text>|<bold>    ▶ Active task<\/bold>/);
+  assert.doesNotMatch(themed, /<muted>    ○ Active task<\/muted>|<bold>    ○ Active task<\/bold>/);
   assert.match(themed, /<muted>    \+ 1 complete task · 1 cancelled task<\/muted>/);
   assert.match(themed, /<muted>  2\. Build · 0\/1<\/muted>/);
   assert.match(themed, /  <muted>∼ Updating the todo widget<\/muted>/);
@@ -107,13 +107,13 @@ test("todo widget keeps active markers static and animates the working line with
   const component = new TodoWidgetComponent(state, undefined, {}, { requestRender } as never);
 
   const initial = component.render(80).join("\n");
-  assert.match(initial, /󰝥 Active task/);
+  assert.match(initial, /󰄰 Active task/);
   assert.match(initial, /\n\n   ∼ Updating the todo widget/);
-  vi.advanceTimersByTime(119);
+  vi.advanceTimersByTime(199);
   assert.equal(requestRender.mock.calls.length, 0);
   vi.advanceTimersByTime(1);
   const next = component.render(80).join("\n");
-  assert.match(next, /󰝥 Active task/);
+  assert.match(next, /󰄰 Active task/);
   assert.match(next, /\n\n   ≈ Updating the todo widget/);
   assert.equal(requestRender.mock.calls.length, 1);
 
@@ -141,9 +141,9 @@ test("fallback glyphs do not change the working-line spinner", () => {
   const component = new TodoWidgetComponent(state, undefined, { fallbackGlyphs: true }, { requestRender } as never);
 
   const initial = component.render(80).join("\n");
-  assert.match(initial, /▶ Active task/);
+  assert.match(initial, /○ Active task/);
   assert.match(initial, /  ∼ Updating the todo widget/);
-  vi.advanceTimersByTime(120);
+  vi.advanceTimersByTime(200);
   assert.match(component.render(80).join("\n"), /  ≈ Updating the todo widget/);
   assert.equal(requestRender.mock.calls.length, 1);
   component.dispose();
@@ -162,7 +162,7 @@ test("updateTodoWidget animates only while the agent is active", () => {
     }, state);
     const component = (calls[0][1] as (tui: never, theme: never) => TodoWidgetComponent)({ requestRender } as never, undefined as never);
 
-    vi.advanceTimersByTime(120);
+    vi.advanceTimersByTime(200);
     assert.equal(requestRender.mock.calls.length, expectedRenders);
     component.dispose();
   }
