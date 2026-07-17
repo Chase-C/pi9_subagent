@@ -4,6 +4,10 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Replace the working-line spinner with font-independent wave characters and update the in-progress Nerd Font task glyph.
+
 ## [0.3.2] - 2026-07-16
 
 ### Changed
