@@ -6,9 +6,11 @@ import { SubagentParams, TaskSchema, parseSubagentInvocation, parseTask, SUBAGEN
 const conversationId = "amber-acorn";
 const runId = "adapt-ably";
 
-test("public schema exposes only redesigned actions and fields", () => {
+test("public schema is flat and exposes only redesigned actions and fields", () => {
   assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "run", "join", "remove"]);
+  assert.doesNotMatch(JSON.stringify(SubagentParams), /"anyOf"/);
   assert.equal(Check(SubagentParams, { action: "agents" }), true);
+  assert.equal(Check(SubagentParams, { action: "run", tasks: [{ agent: "helper", prompt: "work" }] }), true);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "work" }), true);
   assert.equal(Check(TaskSchema, { conversationId, prompt: "continue" }), true);
 });
@@ -51,19 +53,29 @@ test("whole invocation validation covers limits, IDs, status, and required batch
   assert.ok("error" in parseSubagentInvocation({ action: "remove" }));
 });
 
-test("schema and parser reject extra and action-inappropriate fields", () => {
+test("flat schema admits action fields while the parser enforces their associations", () => {
   for (const raw of [
     { action: "agents", status: ["running"] },
     { action: "list", tasks: [{ agent: "a", prompt: "x" }] },
-    { action: "run", tasks: [{ agent: "a", prompt: "x", surprise: true }] },
     { action: "join", runIds: [runId], conversationIds: [conversationId] },
-    { action: "remove", conversationIds: [conversationId], extra: true },
   ]) {
-    assert.equal(Check(SubagentParams, raw), false);
+    assert.equal(Check(SubagentParams, raw), true);
     assert.ok("error" in parseSubagentInvocation(raw));
   }
-  assert.equal(Check(TaskSchema, { agent: "a", prompt: "x", extra: true }), false);
-  assert.equal(Check(TaskSchema, { conversationId, prompt: "x", label: "no" }), false);
+
+  const mixedTask = { conversationId, prompt: "x", label: "no" };
+  assert.equal(Check(TaskSchema, mixedTask), true);
+  assert.ok("error" in parseTask(mixedTask));
+});
+
+test("schema and parser reject unknown properties", () => {
+  const invocation = { action: "remove", conversationIds: [conversationId], extra: true };
+  assert.equal(Check(SubagentParams, invocation), false);
+  assert.ok("error" in parseSubagentInvocation(invocation));
+
+  const task = { agent: "a", prompt: "x", extra: true };
+  assert.equal(Check(TaskSchema, task), false);
+  assert.ok("error" in parseTask(task));
 });
 
 test("removed session, retention, background, dispatch, wait, results, and remove forms give migrations", () => {

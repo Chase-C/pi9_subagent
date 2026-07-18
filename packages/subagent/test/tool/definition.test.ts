@@ -5,6 +5,22 @@ import { defineSubagentTool } from "../../src/tool/define-subagent-tool.js";
 const settings = { runtime: { maxTasksPerRun: 1 }, display: {} } as any;
 const registry = { agents: new Map(), summarizeAgent: () => "helper" } as any;
 
+test("description associates flat-schema properties with actions and task kinds", () => {
+  const tool = defineSubagentTool({
+    agentManager: {} as any,
+    agentRegistry: registry,
+    getCurrentSettings: () => settings,
+    prepareInvocation: async () => settings,
+  });
+  const description = tool.description;
+  assert.match(description, /list\(status\?\)/);
+  assert.match(description, /run\(tasks\)/);
+  assert.match(description, /join\(runIds\)/);
+  assert.match(description, /remove\(conversationIds\)/);
+  assert.match(description, /Spawn: \{ agent, prompt/);
+  assert.match(description, /Resume: \{ conversationId, prompt \}/);
+});
+
 test("tool prepares settings, applies task limits, and renders simple typed content", async () => {
   let prepared = 0;
   const tool: any = defineSubagentTool({ agentManager: {} as any, agentRegistry: registry, getCurrentSettings: () => settings, prepareInvocation: async () => { prepared++; return settings; } });

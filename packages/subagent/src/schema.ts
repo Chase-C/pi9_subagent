@@ -6,109 +6,341 @@ import { isRunId, type RunId } from "./domain/run-id.js";
 
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./domain/model-thinking-level.js";
 
-const NonBlankString = (description: string) => Type.String({ minLength: 1, pattern: ".*\\S.*", description });
-const SpawnTaskSchema = Type.Object({
-  agent: NonBlankString("Agent name."),
-  prompt: NonBlankString("Delegated task."),
-  label: Type.Optional(NonBlankString("Display label.")),
-  skills: Type.Optional(Type.Array(NonBlankString("Skill name."), { description: "Skills override." })),
-  model: Type.Optional(NonBlankString("Model override.")),
+const NonBlankString = (description: string) =>
+  Type.String({ minLength: 1, pattern: ".*\\S.*", description });
+
+export const TaskSchema = Type.Object({
+  agent: Type.Optional(NonBlankString("Agent name for a spawn task.")),
+  conversationId: Type.Optional(NonBlankString("Conversation ID for a resume task.")),
+  prompt: NonBlankString("Delegated task or follow-up prompt."),
+  label: Type.Optional(NonBlankString("Display label for a spawn task.")),
+  skills: Type.Optional(Type.Array(
+    NonBlankString("Skill name."),
+    { description: "Skills override for a spawn task." },
+  )),
+  model: Type.Optional(NonBlankString("Model override for a spawn task.")),
   thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
-  cwd: Type.Optional(NonBlankString("Working directory.")),
+  cwd: Type.Optional(NonBlankString("Working directory for a spawn task.")),
 }, { additionalProperties: false });
-const ResumeTaskSchema = Type.Object({
-  conversationId: NonBlankString("Conversation ID."),
-  prompt: NonBlankString("Follow-up prompt."),
-}, { additionalProperties: false });
-export const TaskSchema = Type.Union([SpawnTaskSchema, ResumeTaskSchema]);
+
 export const SUBAGENT_ACTIONS = ["agents", "list", "run", "join", "remove"] as const;
-export const RUN_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
-export const SubagentParams = Type.Union([
-  Type.Object({ action: Type.Literal("agents") }, { additionalProperties: false }),
-  Type.Object({ action: Type.Literal("list"), status: Type.Optional(Type.Array(StringEnum(RUN_STATUSES), { minItems: 1 })) }, { additionalProperties: false }),
-  Type.Object({ action: Type.Literal("run"), tasks: Type.Array(TaskSchema, { minItems: 1 }) }, { additionalProperties: false }),
-  Type.Object({ action: Type.Literal("join"), runIds: Type.Array(Type.String(), { minItems: 1 }) }, { additionalProperties: false }),
-  Type.Object({ action: Type.Literal("remove"), conversationIds: Type.Array(Type.String(), { minItems: 1 }) }, { additionalProperties: false }),
-]);
+export const RUN_STATUSES = [
+  "queued", "running", "completed", "error", "aborted", "interrupted", "skipped",
+] as const;
+
+export const SubagentParams = Type.Object({
+  action: StringEnum(SUBAGENT_ACTIONS),
+  status: Type.Optional(Type.Array(StringEnum(RUN_STATUSES), { minItems: 1 })),
+  tasks: Type.Optional(Type.Array(TaskSchema, { minItems: 1 })),
+  runIds: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+  conversationIds: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+}, { additionalProperties: false });
+
 export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 export type RunStatus = (typeof RUN_STATUSES)[number];
-export const isRunStatus = (v: unknown): v is RunStatus => typeof v === "string" && (RUN_STATUSES as readonly string[]).includes(v);
-export type SpawnRequest = { kind: "spawn"; agent: string; prompt: string; label?: string; skills?: string[]; model?: string; thinking?: ModelThinkingLevel; cwd?: string };
-export type ResumeRequest = { kind: "resume"; conversationId: ConversationId; prompt: string };
+
+export const isRunStatus = (value: unknown): value is RunStatus =>
+  typeof value === "string" && (RUN_STATUSES as readonly string[]).includes(value);
+
+export type SpawnRequest = {
+  kind: "spawn";
+  agent: string;
+  prompt: string;
+  label?: string;
+  skills?: string[];
+  model?: string;
+  thinking?: ModelThinkingLevel;
+  cwd?: string;
+};
+
+export type ResumeRequest = {
+  kind: "resume";
+  conversationId: ConversationId;
+  prompt: string;
+};
+
 export type TaskRequest = SpawnRequest | ResumeRequest;
 export type ParsedTask = TaskRequest | { error: string };
+
 export type SubagentInvocation =
- | { action: "agents" }
- | { action: "list"; status?: RunStatus[] }
- | { action: "run"; tasks: TaskRequest[] }
- | { action: "join"; runIds: RunId[] }
- | { action: "remove"; conversationIds: ConversationId[] };
-export type SubagentInvocationParseError = { error: string; action?: SubagentAction; errors?: string[]; missingAction?: boolean; taskCountError?: boolean };
-export type ParsedSubagentInvocation = SubagentInvocation | SubagentInvocationParseError;
-export interface ParseSubagentInvocationOptions { maxTasks?: number }
+  | { action: "agents" }
+  | { action: "list"; status?: RunStatus[] }
+  | { action: "run"; tasks: TaskRequest[] }
+  | { action: "join"; runIds: RunId[] }
+  | { action: "remove"; conversationIds: ConversationId[] };
+
+export type SubagentInvocationParseError = {
+  error: string;
+  action?: SubagentAction;
+  errors?: string[];
+  missingAction?: boolean;
+  taskCountError?: boolean;
+};
+
+export type ParsedSubagentInvocation =
+  | SubagentInvocation
+  | SubagentInvocationParseError;
+
+export interface ParseSubagentInvocationOptions {
+  maxTasks?: number;
+}
 
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
- agents: ["action"], list: ["action", "status"], run: ["action", "tasks"], join: ["action", "runIds"], remove: ["action", "conversationIds"],
+  agents: ["action"],
+  list: ["action", "status"],
+  run: ["action", "tasks"],
+  join: ["action", "runIds"],
+  remove: ["action", "conversationIds"],
 };
 const removedFieldMigration: Record<string, string> = {
- background: "Runs are asynchronous by default; use action=run.",
- dispatch: "Use action=run with tasks.",
- wait: "Use action=join with runIds.",
- results: "Use action=join with runIds.",
- remove: "Use action=remove with conversationIds.",
- sessionId: "Use conversationId inside a resume task.",
- retainConversation: "Conversations are retained by default and removed with action=remove.",
+  background: "Runs are asynchronous by default; use action=run.",
+  dispatch: "Use action=run with tasks.",
+  wait: "Use action=join with runIds.",
+  results: "Use action=join with runIds.",
+  remove: "Use action=remove with conversationIds.",
+  sessionId: "Use conversationId inside a resume task.",
+  retainConversation: "Conversations are retained by default and removed with action=remove.",
 };
-export function parseSubagentInvocation(raw: unknown, options: ParseSubagentInvocationOptions = {}): ParsedSubagentInvocation {
- const p = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
- const action = p.action;
- if (!action) return { error: 'Provide an action: "agents", "list", "run", "join", or "remove".', missingAction: true };
- if (action === "results") return { error: "The results action was removed. Use action=join with runIds." };
- if (typeof action !== "string" || !(SUBAGENT_ACTIONS as readonly string[]).includes(action)) return { error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "join", or "remove".` };
- const a = action as SubagentAction;
- for (const [field, migration] of Object.entries(removedFieldMigration)) if (p[field] !== undefined) return { error: `Field ${field} was removed. ${migration}`, action: a };
- const extra = Object.keys(p).find(key => !allowedInvocationKeys[a].includes(key));
- if (extra) return { error: `Property ${extra} is not allowed for action=${a}. Allowed properties: ${allowedInvocationKeys[a].join(", ")}.`, action: a };
- if (a === "agents") return { action: a };
- if (a === "list") {
-   if (p.status !== undefined && (!Array.isArray(p.status) || !p.status.length || !p.status.every(isRunStatus))) return { error: "list status must be a non-empty array of valid run statuses.", action: a };
-   return { action: a, ...(p.status ? { status: p.status as RunStatus[] } : {}) };
- }
- if (a === "run") {
-   if (!Array.isArray(p.tasks) || !p.tasks.length) return { error: "Provide at least one task.", action: a, taskCountError: true };
-   if (options.maxTasks !== undefined && p.tasks.length > options.maxTasks) return { error: `Too many tasks (${p.tasks.length}). Max is ${options.maxTasks}.`, action: a, taskCountError: true };
-   const parsed = p.tasks.map(parseTask); const errors = parsed.flatMap((x, i) => "error" in x ? [`task[${i}]: ${x.error}`] : []);
-   return errors.length ? { error: errors.join("\n"), errors, action: a } : { action: a, tasks: parsed as TaskRequest[] };
- }
- if (a === "join") { const ids = parseIds(p.runIds, "join", isRunId, "runId", "conversation ID"); return "error" in ids ? { ...ids, action: a } : { action: a, runIds: ids }; }
- const ids = parseIds(p.conversationIds, "remove", isConversationId, "conversationId", "run ID");
- return "error" in ids ? { ...ids, action: a } : { action: a, conversationIds: ids };
+
+export function parseSubagentInvocation(
+  raw: unknown,
+  options: ParseSubagentInvocationOptions = {},
+): ParsedSubagentInvocation {
+  const params = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const action = params.action;
+
+  if (!action) {
+    return {
+      error: 'Provide an action: "agents", "list", "run", "join", or "remove".',
+      missingAction: true,
+    };
+  }
+
+  if (action === "results") {
+    return { error: "The results action was removed. Use action=join with runIds." };
+  }
+
+  if (typeof action !== "string" || !SUBAGENT_ACTIONS.includes(action as SubagentAction)) {
+    return {
+      error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "join", or "remove".`,
+    };
+  }
+
+  const parsedAction = action as SubagentAction;
+
+  for (const [field, migration] of Object.entries(removedFieldMigration)) {
+    if (params[field] !== undefined) {
+      return {
+        error: `Field ${field} was removed. ${migration}`,
+        action: parsedAction,
+      };
+    }
+  }
+
+  const extra = Object.keys(params).find(
+    key => !allowedInvocationKeys[parsedAction].includes(key),
+  );
+  if (extra) {
+    const allowed = allowedInvocationKeys[parsedAction].join(", ");
+    return {
+      error: `Property ${extra} is not allowed for action=${parsedAction}. Allowed properties: ${allowed}.`,
+      action: parsedAction,
+    };
+  }
+
+  switch (parsedAction) {
+    case "agents":
+      return { action: parsedAction };
+
+    case "list": {
+      const invalidStatus = params.status !== undefined && (
+        !Array.isArray(params.status)
+        || params.status.length === 0
+        || !params.status.every(isRunStatus)
+      );
+      if (invalidStatus) {
+        return {
+          error: "list status must be a non-empty array of valid run statuses.",
+          action: parsedAction,
+        };
+      }
+
+      return {
+        action: parsedAction,
+        ...(params.status ? { status: params.status as RunStatus[] } : {}),
+      };
+    }
+
+    case "run": {
+      if (!Array.isArray(params.tasks) || params.tasks.length === 0) {
+        return {
+          error: "Provide at least one task.",
+          action: parsedAction,
+          taskCountError: true,
+        };
+      }
+
+      if (options.maxTasks !== undefined && params.tasks.length > options.maxTasks) {
+        return {
+          error: `Too many tasks (${params.tasks.length}). Max is ${options.maxTasks}.`,
+          action: parsedAction,
+          taskCountError: true,
+        };
+      }
+
+      const tasks = params.tasks.map(parseTask);
+      const errors = tasks.flatMap((task, index) =>
+        "error" in task ? [`task[${index}]: ${task.error}`] : [],
+      );
+
+      return errors.length > 0
+        ? { error: errors.join("\n"), errors, action: parsedAction }
+        : { action: parsedAction, tasks: tasks as TaskRequest[] };
+    }
+
+    case "join": {
+      const ids = parseIds(params.runIds, "join", isRunId, "runId", "conversation ID");
+      return "error" in ids
+        ? { ...ids, action: parsedAction }
+        : { action: parsedAction, runIds: ids };
+    }
+
+    case "remove": {
+      const ids = parseIds(
+        params.conversationIds,
+        "remove",
+        isConversationId,
+        "conversationId",
+        "run ID",
+      );
+      return "error" in ids
+        ? { ...ids, action: parsedAction }
+        : { action: parsedAction, conversationIds: ids };
+    }
+  }
 }
-function parseIds<T extends string>(v: unknown, action: string, guard: (x: unknown) => x is T, name: string, wrong: string): T[] | { error: string } {
- if (!Array.isArray(v) || !v.length || !v.every(x => typeof x === "string" && x.trim())) return { error: `${action} requires a non-empty ${name}s array.` };
- const bad = v.find(x => !guard(x)); if (bad !== undefined) return { error: `${action} received invalid ${name} '${bad}' (a ${wrong} is not accepted).` };
- return v as T[];
+
+function parseIds<T extends string>(
+  value: unknown,
+  action: string,
+  guard: (value: unknown) => value is T,
+  name: string,
+  wrongId: string,
+): T[] | { error: string } {
+  const invalidArray = !Array.isArray(value)
+    || value.length === 0
+    || !value.every(item => typeof item === "string" && item.trim());
+  if (invalidArray) {
+    return { error: `${action} requires a non-empty ${name}s array.` };
+  }
+
+  const invalidId = value.find(item => !guard(item));
+  if (invalidId !== undefined) {
+    return {
+      error: `${action} received invalid ${name} '${invalidId}' (a ${wrongId} is not accepted).`,
+    };
+  }
+
+  return value as T[];
 }
+
 export function parseTask(raw: unknown): ParsedTask {
- if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "Task must be an object." }; const t = raw as Record<string, unknown>;
- if (t.sessionId !== undefined) return { error: "Task field sessionId was removed. Use conversationId to resume a conversation." };
- if (t.retainConversation !== undefined) return { error: "Task field retainConversation was removed. Conversations are retained by default and removed with action=remove." };
- const spawn = t.agent !== undefined, resume = t.conversationId !== undefined;
- const allowed = resume ? ["conversationId", "prompt"] : ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"];
- const extra = Object.keys(t).find(key => !allowed.includes(key));
- if (extra) return { error: resume ? `Task with conversationId rejects ${extra}; that field belongs to a spawn task.` : `Task property ${extra} is not allowed for a spawn task.` };
- if (spawn === resume) return { error: "Task must carry exactly one of agent (spawn) or conversationId (resume)." };
- if (typeof t.prompt !== "string" || !t.prompt.trim()) return { error: "Task prompt must be a non-empty string." };
- if (resume) {
-   if (!isConversationId(t.conversationId)) return { error: `Task conversationId '${String(t.conversationId)}' is invalid (a run ID is not accepted).` };
-   for (const f of ["label", "skills", "model", "thinking", "cwd"] as const) if (t[f] !== undefined) return { error: `Task with conversationId rejects ${f}; that field belongs to a spawn task.` };
-   return { kind: "resume", conversationId: t.conversationId, prompt: t.prompt };
- }
- if (typeof t.agent !== "string" || !t.agent.trim()) return { error: "Task agent must be a non-empty string." };
- if (t.label !== undefined && (typeof t.label !== "string" || !t.label.trim())) return { error: "Task label must be a non-empty string when present." };
- if (t.skills !== undefined && (!Array.isArray(t.skills) || !t.skills.every(x => typeof x === "string" && x.trim()))) return { error: "Task skills must contain only non-empty strings." };
- for (const f of ["model", "cwd"] as const) if (t[f] !== undefined && (typeof t[f] !== "string" || !(t[f] as string).trim())) return { error: `Task ${f} must be a non-empty string when present.` };
- if (t.thinking !== undefined && !isModelThinkingLevel(t.thinking)) return { error: `Task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.` };
- return { kind: "spawn", agent: t.agent, prompt: t.prompt, ...(t.label !== undefined ? { label: t.label as string } : {}), ...(t.skills !== undefined ? { skills: t.skills as string[] } : {}), ...(t.model !== undefined ? { model: t.model as string } : {}), ...(t.thinking !== undefined ? { thinking: t.thinking as ModelThinkingLevel } : {}), ...(t.cwd !== undefined ? { cwd: t.cwd as string } : {}) };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { error: "Task must be an object." };
+  }
+
+  const task = raw as Record<string, unknown>;
+
+  if (task.sessionId !== undefined) {
+    return {
+      error: "Task field sessionId was removed. Use conversationId to resume a conversation.",
+    };
+  }
+
+  if (task.retainConversation !== undefined) {
+    return {
+      error: "Task field retainConversation was removed. Conversations are retained by default and removed with action=remove.",
+    };
+  }
+
+  const isSpawn = task.agent !== undefined;
+  const isResume = task.conversationId !== undefined;
+  const allowed = isResume
+    ? ["conversationId", "prompt"]
+    : ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"];
+  const extra = Object.keys(task).find(key => !allowed.includes(key));
+
+  if (extra) {
+    return {
+      error: isResume
+        ? `Task with conversationId rejects ${extra}; that field belongs to a spawn task.`
+        : `Task property ${extra} is not allowed for a spawn task.`,
+    };
+  }
+
+  if (isSpawn === isResume) {
+    return {
+      error: "Task must carry exactly one of agent (spawn) or conversationId (resume).",
+    };
+  }
+
+  if (typeof task.prompt !== "string" || !task.prompt.trim()) {
+    return { error: "Task prompt must be a non-empty string." };
+  }
+
+  if (isResume) {
+    if (!isConversationId(task.conversationId)) {
+      return {
+        error: `Task conversationId '${String(task.conversationId)}' is invalid (a run ID is not accepted).`,
+      };
+    }
+
+    return {
+      kind: "resume",
+      conversationId: task.conversationId,
+      prompt: task.prompt,
+    };
+  }
+
+  if (typeof task.agent !== "string" || !task.agent.trim()) {
+    return { error: "Task agent must be a non-empty string." };
+  }
+
+  if (task.label !== undefined && (typeof task.label !== "string" || !task.label.trim())) {
+    return { error: "Task label must be a non-empty string when present." };
+  }
+
+  if (task.skills !== undefined && (
+    !Array.isArray(task.skills)
+    || !task.skills.every(skill => typeof skill === "string" && skill.trim())
+  )) {
+    return { error: "Task skills must contain only non-empty strings." };
+  }
+
+  for (const field of ["model", "cwd"] as const) {
+    const value = task[field];
+    if (value !== undefined && (typeof value !== "string" || !value.trim())) {
+      return { error: `Task ${field} must be a non-empty string when present.` };
+    }
+  }
+
+  if (task.thinking !== undefined && !isModelThinkingLevel(task.thinking)) {
+    return {
+      error: `Task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.`,
+    };
+  }
+
+  return {
+    kind: "spawn",
+    agent: task.agent,
+    prompt: task.prompt,
+    ...(task.label !== undefined ? { label: task.label as string } : {}),
+    ...(task.skills !== undefined ? { skills: task.skills as string[] } : {}),
+    ...(task.model !== undefined ? { model: task.model as string } : {}),
+    ...(task.thinking !== undefined ? { thinking: task.thinking as ModelThinkingLevel } : {}),
+    ...(task.cwd !== undefined ? { cwd: task.cwd as string } : {}),
+  };
 }
