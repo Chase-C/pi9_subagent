@@ -1,11 +1,11 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type {
-  AgentRunSnapshot,
-  AgentSnapshot,
-  AgentToolUse,
-  AgentViewStatus,
-} from "../../src/domain/agent-snapshot.js";
-import type { AgentRunStatus, RunKind } from "../../src/domain/agent-lifecycle.js";
+  RunSnapshot,
+  ConversationSnapshot,
+  RunToolUse,
+  RunViewStatus,
+} from "../../src/conversation.js";
+import type { RunOutcomeStatus, RunKind } from "../../src/conversation.js";
 
 export const ZERO_USAGE: Usage = {
   input: 0,
@@ -27,13 +27,13 @@ type StatusInput =
   | { kind: "queued"; queuedAt?: number }
   | { kind: "running"; startedAt?: number }
   | {
-      kind: AgentRunStatus;
+      kind: RunOutcomeStatus;
       startedAt?: number;
       completedAt?: number;
       response?: string;
       error?: string;
     }
-  | Extract<AgentViewStatus, { kind: "done" }>;
+  | Extract<RunViewStatus, { kind: "done" }>;
 
 export interface FakeAgentOptions {
   conversationId?: string;
@@ -43,15 +43,15 @@ export interface FakeAgentOptions {
   prompt?: string;
   createdAt?: number;
   kind?: RunKind;
-  config?: Partial<AgentSnapshot["config"]>;
+  config?: Partial<ConversationSnapshot["config"]>;
   options?: {
     agent?: string;
     prompt?: string;
     model?: string;
-    thinking?: AgentSnapshot["config"]["thinking"];
+    thinking?: ConversationSnapshot["config"]["thinking"];
   };
   status?: StatusInput;
-  activity?: { toolHistory?: AgentToolUse[] };
+  activity?: { toolHistory?: RunToolUse[] };
   message?: string;
   messageSnippet?: string;
   turns?: number;
@@ -60,11 +60,11 @@ export interface FakeAgentOptions {
   usage?: Usage;
   totalUsage?: Usage;
   canResume?: boolean;
-  previousRuns?: AgentRunSnapshot[];
-  runs?: AgentRunSnapshot[];
+  previousRuns?: RunSnapshot[];
+  runs?: RunSnapshot[];
 }
 
-function makeStatus(input: StatusInput | undefined): AgentViewStatus {
+function makeStatus(input: StatusInput | undefined): RunViewStatus {
   const status = input ?? {
     kind: "completed",
     startedAt: 1,
@@ -85,7 +85,7 @@ function makeStatus(input: StatusInput | undefined): AgentViewStatus {
   };
 }
 
-export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
+export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot {
   const status = makeStatus(options.status);
   const config = options.config ?? {};
   const tools = options.activity?.toolHistory
@@ -95,8 +95,8 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
       startedAt: 1,
     }))
     ?? [];
-  const run: AgentRunSnapshot = {
-    runId: (options.runId ?? "r1") as AgentRunSnapshot["runId"],
+  const run: RunSnapshot = {
+    runId: (options.runId ?? "r1") as RunSnapshot["runId"],
     kind: options.kind ?? "spawn",
     prompt: options.prompt ?? options.options?.prompt ?? "Fix issue",
     createdAt: options.createdAt ?? 1,
@@ -113,12 +113,12 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
   };
   const runs = options.runs ?? [...(options.previousRuns ?? []), run];
   return {
-    conversationId: (options.conversationId ?? "c1") as AgentSnapshot["conversationId"],
+    conversationId: (options.conversationId ?? "c1") as ConversationSnapshot["conversationId"],
     ...(options.parent
       ? {
           parent: {
-            conversationId: options.parent.conversationId as AgentSnapshot["conversationId"],
-            runId: options.parent.runId as AgentRunSnapshot["runId"],
+            conversationId: options.parent.conversationId as ConversationSnapshot["conversationId"],
+            runId: options.parent.runId as RunSnapshot["runId"],
           },
         }
       : {}),
@@ -140,7 +140,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
   };
 }
 
-export function fakeRunSection(options: FakeAgentOptions = {}): AgentRunSnapshot {
+export function fakeRunSection(options: FakeAgentOptions = {}): RunSnapshot {
   return fakeAgent(options).runs.at(-1)!;
 }
 

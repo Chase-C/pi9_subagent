@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { joinAction, listAction, removeAction, runAction } from "../../src/tool/actions.js";
+import { joinAction, listAction, removeAction, runAction } from "../../src/tool.js";
 
 const conversationId = "amber-acorn" as any;
 const runId = "adapt-ably" as any;
@@ -23,7 +23,7 @@ const snapshot = (status: any = { kind: "running", startedAt: 1 }) => ({
   canResume: false,
 });
 const deps = (manager: any) => ({
-  agentManager: manager,
+  runtime: manager,
   agentRegistry: { agents: new Map(), summarizeAgent: () => "" },
 }) as any;
 const json = (result: any) => JSON.parse(result.content[0].text);
@@ -105,7 +105,7 @@ test("join returns projected child errors as successful tool results", async () 
         acknowledge: () => { acknowledged++; },
       });
     },
-    onAgentUpdate: () => () => {},
+    onConversationUpdate: () => () => {},
     runner: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
   };
   const result = await joinAction(
@@ -135,7 +135,7 @@ test("join streams updates and preserves binding order", async () => {
   ];
   const manager = {
     bindJoin: () => joinBinding(entries),
-    onAgentUpdate: (fn: any) => {
+    onConversationUpdate: (fn: any) => {
       listener = fn;
       return () => {};
     },
@@ -160,7 +160,7 @@ test("caller cancellation releases join without cancelling child work", async ()
     bindJoin: () => joinBinding([], new Promise(() => {}), {
       release: () => { released++; },
     }),
-    onAgentUpdate: () => () => {},
+    onConversationUpdate: () => () => {},
     runner: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
   };
   const promise = joinAction(
@@ -179,8 +179,8 @@ test("child join suspends the parent queue slot", async () => {
   let suspended: any;
   const manager = {
     bindJoin: () => joinBinding([]),
-    onAgentUpdate: () => () => {},
-    runner: {
+    onConversationUpdate: () => () => {},
+    scheduler: {
       suspendAgentSlotDuring: async (id: any, fn: any) => {
         suspended = id;
         return fn();
@@ -212,7 +212,7 @@ test("a bound join acknowledges an aborted outcome after removal", async () => {
   });
   const manager = {
     bindJoin: () => binding,
-    onAgentUpdate: () => () => {},
+    onConversationUpdate: () => () => {},
     runner: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
   };
   const pending = joinAction(
@@ -235,7 +235,7 @@ test("whole-batch bind errors return before update subscription", async () => {
   let subscribed = false;
   const manager = {
     bindJoin: () => { throw new Error("Unknown or removed run"); },
-    onAgentUpdate: () => {
+    onConversationUpdate: () => {
       subscribed = true;
       return () => {};
     },

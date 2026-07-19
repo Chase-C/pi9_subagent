@@ -114,7 +114,9 @@ There is no compatibility layer for the previous lifecycle API.
 
 ## Architecture
 
-- `src/domain/` owns agents, conversations, runs, lifecycle state, and capabilities.
-- `src/runtime/` owns orchestration, queues, limits, notifications, and child execution.
-- `src/tool/` owns action handlers and child tool injection.
-- `src/command/`, `src/ui/`, and `src/view/` own the overlay, persistent display, and rendering.
+- `src/agents.ts` owns agent definitions, discovery, parsing, and requested configuration.
+- `src/conversation.ts` and `src/activity.ts` own persistent conversations, exact runs, lifecycle state, and live SDK activity.
+- `src/runtime.ts` owns the conversation catalog, joining, scheduling, queue limits, and retained run results; `src/execute.ts` owns child SDK session execution.
+- `src/schema.ts` and `src/tool.ts` own provider-facing validation and tool actions.
+- `src/notifications.ts`, `src/widget.ts`, and `src/command/` own the three user-facing presentation surfaces.
+- `src/settings.ts`, `src/identifiers.ts`, and `src/index.ts` own configuration, runtime-local identifiers, and Pi extension composition respectively.

@@ -1,10 +1,10 @@
 import { StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./domain/model-thinking-level.js";
-import { isConversationId, type ConversationId } from "./domain/conversation-id.js";
-import { isRunId, type RunId } from "./domain/run-id.js";
+import { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
+import { isConversationId, type ConversationId } from "./identifiers.js";
+import { isRunId, type RunId } from "./identifiers.js";
 
-export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./domain/model-thinking-level.js";
+export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 
 const NonBlankString = (description: string) =>
   Type.String({ minLength: 1, pattern: ".*\\S.*", description });
