@@ -17,18 +17,12 @@ export interface AgentConfig {
   sourcePath?: string;
 }
 
-const AGENT_FIELDS = new Set(["name", "description", "model", "thinking", "tools", "skills"]);
-
 export function BuildAgentConfig(
   content: string,
   source: AgentSource,
 ): AgentConfig | { error: Error } {
   try {
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
-    const unsupported = Object.keys(frontmatter).filter(field => !AGENT_FIELDS.has(field));
-    if (unsupported.length > 0) {
-      throw new Error(`Unsupported fields: ${unsupported.join(", ")}.`);
-    }
     const result = {
       name: parseRequiredString(frontmatter.name, "name"),
       description: parseRequiredString(frontmatter.description, "description"),

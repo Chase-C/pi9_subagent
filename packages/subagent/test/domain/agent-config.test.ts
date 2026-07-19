@@ -89,11 +89,15 @@ test("BuildAgentConfig rejects non-string CSV fields with a type error naming th
   }
 });
 
-test("BuildAgentConfig rejects unsupported frontmatter fields", () => {
-  for (const field of ["resumable", "retainConversation", "unknown"]) {
-    const err = fail(BuildAgentConfig(`---\nname: helper\ndescription: d\n${field}: true\n---\nbody`, "project"));
-    assert.equal(err.message, `Unsupported fields: ${field}.`);
-  }
+test("BuildAgentConfig ignores unknown frontmatter fields", () => {
+  const config = ok(BuildAgentConfig(
+    `---\nname: helper\ndescription: d\nretainConversation: true\nsystemPromptMode: replace\ninheritProjectContext: true\nunknown: value\n---\nbody`,
+    "project",
+  ));
+  assert.equal(config.name, "helper");
+  assert.equal(config.systemPrompt, "body");
+  assert.equal("retainConversation" in config, false);
+  assert.equal("unknown" in config, false);
 });
 
 test("BuildAgentConfig CSV parsing treats 'none' and empty values as undefined and trims items", () => {

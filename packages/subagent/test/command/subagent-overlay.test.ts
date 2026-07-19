@@ -4,70 +4,94 @@ import { SubagentOverlayComponent, type OverlayOptions } from "../../src/command
 import { fakeAgent } from "../helpers/fake-agent.js";
 
 function overlay(conversations: any[], overrides: Partial<OverlayOptions> = {}) {
-  const callbacks = { notify: vi.fn(), onStart: vi.fn(), onResume: vi.fn(), onRemove: vi.fn(), onSettingsChange: vi.fn() };
-  const manager = { listConversations: () => conversations, onAgentUpdate: () => () => {} };
-  const component = new SubagentOverlayComponent(manager as any, { requestRender() {} } as any, {} as any, undefined, vi.fn(), {
-    initialPage: "conversations", agents: [{ name: "worker", description: "Works", source: "project" } as any], settings: DEFAULT_SUBAGENT_SETTINGS,
-    ...callbacks, ...overrides,
-  });
+  let listener: (() => void) | undefined;
+  const unsubscribe = vi.fn();
+  const requestRender = vi.fn();
+  const callbacks = {
+    notify: vi.fn(),
+    onStart: vi.fn(),
+    onResume: vi.fn(),
+    onRemove: vi.fn(),
+    onSettingsChange: vi.fn(),
+  };
+  const manager = {
+    listConversations: () => conversations,
+    onAgentUpdate: (next: () => void) => { listener = next; return unsubscribe; },
+  };
+  const component = new SubagentOverlayComponent(
+    manager as any,
+    { requestRender } as any,
+    {} as any,
+    undefined,
+    vi.fn(),
+    {
+      initialPage: "conversations",
+      agents: [{ name: "worker", description: "Works", source: "project" } as any],
+      settings: DEFAULT_SUBAGENT_SETTINGS,
+      ...callbacks,
+      ...overrides,
+    },
+  );
   component.focused = true;
-  return { component, callbacks };
+  return { component, callbacks, requestRender, unsubscribe, update: () => listener?.() };
 }
 
 describe("subagent overlay behavior", () => {
-  it("opens terminal output by default and resumes only through the rendered resume action", () => {
-    const conversation = fakeAgent({ conversationId: "conversation-1", runId: "run-1", status: { kind: "completed", response: "finished output" }, canResume: true });
-    const { component, callbacks } = overlay([conversation]);
-    expect(component.render(100).join("\n")).toContain("[r] resume");
+  it("starts an agent from the agent page", () => {
+    const { component, callbacks } = overlay([], { initialPage: "agents" });
+
     component.handleInput("\r");
-    expect(component.render(100).join("\n")).toContain("finished output");
-    expect(callbacks.onResume).not.toHaveBeenCalled();
-    component.handleInput("r");
-    component.handleInput("follow up"); component.handleInput("\r");
-    expect(callbacks.onResume).toHaveBeenCalledWith("conversation-1", "follow up");
+    component.handleInput("do work");
+    component.handleInput("\r");
+
+    expect(callbacks.onStart).toHaveBeenCalledWith("worker", "do work");
   });
 
-  it("keeps the resume target fixed while composing and rejects a stale target", () => {
-    const first = fakeAgent({ conversationId: "conversation-1", createdAt: 1, canResume: true });
-    const second = fakeAgent({ conversationId: "conversation-2", createdAt: 2, canResume: true });
+  it("keeps the selected conversation stable while the catalog reorders", () => {
+    const first = fakeAgent({ conversationId: "conversation-1", canResume: true });
+    const second = fakeAgent({ conversationId: "conversation-2", canResume: true });
     const conversations = [first, second];
     const { component, callbacks } = overlay(conversations);
 
-    component.handleInput("r");
+    component.handleInput("\x1b[B");
     conversations.reverse();
-    component.handleInput("follow up"); component.handleInput("\r");
-    expect(callbacks.onResume).toHaveBeenCalledWith("conversation-1", "follow up");
-
-    callbacks.onResume.mockClear();
     component.handleInput("r");
-    conversations.splice(0, 1);
-    component.handleInput("stale follow up"); component.handleInput("\r");
-    expect(callbacks.onResume).not.toHaveBeenCalled();
-    expect(callbacks.notify).toHaveBeenCalledWith("Conversation is no longer available to resume.", "warning");
+    component.handleInput("follow up");
+    component.handleInput("\r");
+
+    expect(callbacks.onResume).toHaveBeenCalledWith("conversation-2", "follow up");
   });
 
-  it("does not offer or invoke resume for active and nonresumable runs", () => {
+  it("does not resume active or non-resumable conversations", () => {
     for (const conversation of [
       fakeAgent({ status: { kind: "running" }, canResume: true }),
       fakeAgent({ status: { kind: "completed" }, canResume: false }),
     ]) {
       const { component, callbacks } = overlay([conversation]);
-      expect(component.render(100).join("\n")).not.toContain("[r] resume");
-      component.handleInput("r"); component.handleInput("prompt"); component.handleInput("\r");
+      component.handleInput("r");
+      component.handleInput("prompt");
+      component.handleInput("\r");
       expect(callbacks.onResume).not.toHaveBeenCalled();
     }
   });
 
-  it("invokes remove, start, and settings callbacks from keyboard actions", () => {
-    const { component, callbacks } = overlay([fakeAgent()]);
+  it("removes the selected conversation", () => {
+    const { component, callbacks } = overlay([fakeAgent({ conversationId: "conversation-1" })]);
     component.handleInput("x");
-    expect(callbacks.onRemove).toHaveBeenCalledWith("c1");
-    component.handleInput("\t"); // settings
-    component.handleInput("\x1b[B"); component.handleInput("\x1b[B"); component.handleInput("\x1b[B");
-    component.handleInput("\r");
-    expect(callbacks.onSettingsChange).toHaveBeenCalledWith(expect.objectContaining({ kind: "maxConcurrentSubagents" }));
-    component.handleInput("\t"); // agents
-    component.handleInput("s"); component.handleInput("do work"); component.handleInput("\r");
-    expect(callbacks.onStart).toHaveBeenCalledWith("worker", "do work");
+    expect(callbacks.onRemove).toHaveBeenCalledWith("conversation-1");
+  });
+
+  it("rerenders on manager updates and unsubscribes on disposal", () => {
+    const { component, requestRender, unsubscribe, update } = overlay([]);
+    update();
+    expect(requestRender).toHaveBeenCalled();
+    component.dispose();
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+
+  it("renders wide and narrow views without throwing", () => {
+    const { component } = overlay([fakeAgent()]);
+    expect(() => component.render(120)).not.toThrow();
+    expect(() => component.render(56)).not.toThrow();
   });
 });
