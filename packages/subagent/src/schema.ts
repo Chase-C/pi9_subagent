@@ -70,8 +70,8 @@ export type SubagentInvocation =
 export type SubagentInvocationParseError = {
   error: string;
   action?: SubagentAction;
-  errors?: string[];
   missingAction?: boolean;
+  errors?: string[];
   taskCountError?: boolean;
 };
 
@@ -172,7 +172,14 @@ export function parseSubagentInvocation(
         : { action: parsedAction, tasks: tasks as TaskRequest[] };
     }
     case "join": {
-      const ids = parseIds(params.runIds, "join", isRunId, "runId", "conversation ID");
+      const ids = parseIds(
+        params.runIds,
+        "join",
+        isRunId,
+        isConversationId,
+        "runId",
+        "conversation ID",
+      );
       return "error" in ids
         ? { ...ids, action: parsedAction }
         : { action: parsedAction, runIds: ids };
@@ -182,6 +189,7 @@ export function parseSubagentInvocation(
         params.conversationIds,
         "remove",
         isConversationId,
+        isRunId,
         "conversationId",
         "run ID",
       );
@@ -196,20 +204,21 @@ function parseIds<T extends string>(
   value: unknown,
   action: string,
   guard: (value: unknown) => value is T,
+  wrongIdGuard: (value: unknown) => boolean,
   name: string,
   wrongId: string,
 ): T[] | { error: string } {
-  const invalidArray = !Array.isArray(value)
-    || value.length === 0
-    || !value.every(item => typeof item === "string" && item.trim());
-  if (invalidArray) {
+  if (!Array.isArray(value) || value.length === 0) {
     return { error: `${action} requires a non-empty ${name}s array.` };
   }
 
-  const invalidId = value.find(item => !guard(item));
-  if (invalidId !== undefined) {
+  const invalidIndex = value.findIndex(item => !guard(item));
+  if (invalidIndex >= 0) {
+    const invalidId = value[invalidIndex];
     return {
-      error: `${action} received invalid ${name} '${invalidId}' (a ${wrongId} is not accepted).`,
+      error: wrongIdGuard(invalidId)
+        ? `${action} received invalid ${name} '${String(invalidId)}' (a ${wrongId} is not accepted).`
+        : `${action} received invalid ${name} format '${String(invalidId)}'.`,
     };
   }
 
@@ -247,7 +256,11 @@ export function parseTask(raw: unknown): ParsedTask {
 
   if (isResume) {
     if (!isConversationId(task.conversationId)) {
-      return { error: `Task conversationId '${String(task.conversationId)}' is invalid (a run ID is not accepted).` };
+      return {
+        error: isRunId(task.conversationId)
+          ? `Task conversationId '${task.conversationId}' is invalid (a run ID is not accepted).`
+          : `Task received invalid conversationId format '${String(task.conversationId)}'.`,
+      };
     }
 
     return {

@@ -1,5 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { defineSubagentTool } from "../../src/tool/define-subagent-tool.js";
 
 const settings = { runtime: { maxTasksPerRun: 1 }, display: {} } as any;
@@ -18,6 +19,46 @@ test("description associates flat-schema properties with actions and task kinds"
   assert.match(description, /remove\(conversationIds\)/);
   assert.match(description, /Spawn: \{ agent, prompt/);
   assert.match(description, /Resume: \{ conversationId, prompt \}/);
+  const taskProperties = (tool.parameters as any).properties.tasks.items.properties;
+  assert.ok(taskProperties.agent);
+  assert.ok(taskProperties.conversationId);
+  assert.ok(taskProperties.prompt);
+});
+
+const toolCall = (arguments_: Record<string, any>) => ({
+  type: "toolCall" as const,
+  id: "call",
+  name: "subagent",
+  arguments: arguments_,
+});
+
+test("SDK validation rejects a whole batch containing a malformed task", () => {
+  const tool: any = defineSubagentTool({
+    agentManager: {} as any,
+    agentRegistry: registry,
+    prepareInvocation: async () => ({ runtime: { maxTasksPerRun: 2 }, display: {} }) as any,
+  });
+  const raw = {
+    action: "run",
+    tasks: [
+      { agent: "helper", prompt: "malformed", extra: true },
+      { agent: "helper", prompt: "valid" },
+    ],
+  };
+
+  assert.throws(() => validateToolArguments(tool, toolCall(raw)), /Validation failed/);
+});
+
+test("SDK validation enforces the task-array minimum", () => {
+  const tool: any = defineSubagentTool({
+    agentManager: {} as any,
+    agentRegistry: registry,
+    prepareInvocation: async () => settings,
+  });
+  assert.throws(
+    () => validateToolArguments(tool, toolCall({ action: "run", tasks: [] })),
+    /Validation failed/,
+  );
 });
 
 test("tool prepares settings, applies task limits, and renders simple typed content", async () => {

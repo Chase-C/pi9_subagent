@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import type { Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -67,7 +67,13 @@ export async function RunAttempt(
 
   const runData = { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parent?.conversationId };
   const requestedConfig = agent.requestedConfig;
-  const cwd = ResolveTaskCwd(ctx.cwd, requestedConfig.cwd);
+  const cwdResolution = ResolveTaskCwd(ctx.cwd, requestedConfig.cwd);
+  if (!cwdResolution.ok) return errorRun(agent, attempt.runId, cwdResolution.error);
+  const modelResolution = ResolveModel(requestedConfig.model, ctx.model, ctx.modelRegistry);
+  if (!modelResolution.ok) return errorRun(agent, attempt.runId, modelResolution.error);
+
+  const cwd = cwdResolution.value;
+  const selectedModel = modelResolution.value;
   const agentDir = dependencies.getAgentDir();
 
   const requestedSkills = requestedConfig.skills ?? [];
@@ -115,7 +121,6 @@ export async function RunAttempt(
   await timingAsync("runAgent.resourceLoader.reload", { ...runData, cwd }, () => resourceLoader.reload());
   if (signal?.aborted) return skippedRun(agent, attempt.runId);
 
-  const selectedModel = SelectModel(requestedConfig.model, ctx.model, ctx.modelRegistry);
   const requestedThinking = requestedConfig.thinking;
   const sessionManager = dependencies.sessionManager(cwd);
   const settingsManager = dependencies.settingsManager(cwd, agentDir);
@@ -194,43 +199,64 @@ async function AbortSession(session: AgentSession) {
   await Promise.resolve(session.abort()).catch(() => undefined);
 }
 
-function ResolveTaskCwd(ctxCwd: string, taskCwd: string | undefined) {
-  if (!taskCwd) return ctxCwd;
-  return path.isAbsolute(taskCwd) ? taskCwd : path.resolve(ctxCwd, taskCwd);
+export type RunAgentResolution<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: string };
+
+export function ResolveTaskCwd(
+  parentCwd: string,
+  requestedCwd: string | undefined,
+): RunAgentResolution<string> {
+  if (requestedCwd === undefined) return { ok: true, value: parentCwd };
+
+  const cwd = path.resolve(parentCwd, requestedCwd);
+  try {
+    if (!statSync(cwd).isDirectory()) {
+      return { ok: false, error: `Working directory is not a directory: ${cwd}` };
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { ok: false, error: `Working directory does not exist: ${cwd}` };
+    if (code === "ENOTDIR") return { ok: false, error: `Working directory is not a directory: ${cwd}` };
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `Could not access working directory ${cwd}: ${message}` };
+  }
+
+  return { ok: true, value: cwd };
 }
 
-function SelectModel(
-  agentModel: string | undefined,
+export function ResolveModel(
+  requestedModel: string | undefined,
   parentModel: Model<any> | undefined,
   registry: ModelRegistry,
-): Model<any> | undefined {
-  if (!agentModel) return parentModel;
+): RunAgentResolution<Model<any> | undefined> {
+  if (requestedModel === undefined) return { ok: true, value: parentModel };
 
-  let modelId: string;
-  let provider: string | undefined;
-
-  const parts = agentModel.split("/");
-  if (parts.length == 1) {
-    modelId = parts[0];
-  } else if (parts.length == 2) {
-    provider = parts[0];
-    modelId = parts[1];
-  } else {
-    return parentModel;
+  const parts = requestedModel.split("/");
+  if (parts.some(part => part.trim().length === 0)) {
+    return {
+      ok: false,
+      error: `Invalid model "${requestedModel}": model references cannot be blank or contain empty slash-delimited parts.`,
+    };
   }
 
-  if (provider) {
-    for (const model of registry.getAll()) {
-      if (model.provider == provider && model.id == modelId) return model;
-    }
-  } else {
-    const candidates = registry.getAll().filter((model) => model.id == modelId);
-    // Prefer, but do not require, the same provider as the default model
-    const sameProvider = candidates.find((model) => model.provider === parentModel?.provider);
-    return sameProvider ?? candidates[0] ?? parentModel;
+  const models = registry.getAll();
+  const canonical = models.find(model => `${model.provider}/${model.id}` === requestedModel);
+  if (canonical) return { ok: true, value: canonical };
+
+  const candidates = models.filter(model => model.id === requestedModel);
+  const sameProvider = candidates.find(model => model.provider === parentModel?.provider);
+  if (sameProvider) return { ok: true, value: sameProvider };
+  if (candidates.length === 1) return { ok: true, value: candidates[0] };
+  if (candidates.length > 1) {
+    const matches = candidates.map(model => `${model.provider}/${model.id}`).join(", ");
+    return {
+      ok: false,
+      error: `Ambiguous model "${requestedModel}": matches ${matches}. Use a provider-qualified model reference.`,
+    };
   }
 
-  return parentModel;
+  return { ok: false, error: `Unknown model: ${requestedModel}` };
 }
 
 function GetFinalAssistantMessage(

@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Agent, type RunBinding } from "../domain/agent.js";
+import { Agent } from "../domain/agent.js";
 import type { AgentUpdateKind } from "../domain/agent-lifecycle.js";
+import { resolveRequestedConfig } from "../domain/agent-requested-config.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { ConversationId } from "../domain/conversation-id.js";
 import type { ParentRun } from "../domain/parent-run.js";
@@ -10,6 +11,7 @@ import type { TaskRequest } from "../schema.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
 import { ConversationIdAllocator } from "./conversation-id-allocator.js";
 import { RunIdAllocator } from "./run-id-allocator.js";
+import { ResolveModel, ResolveTaskCwd } from "./run-agent.js";
 
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
 export type { AgentRunner } from "./attempt-runner.js";
@@ -22,10 +24,17 @@ export interface JoinProjection { readonly conversationId: ConversationId; reado
 export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; acknowledge(): void; release(): void }
 export interface RemoveResult { removed: number; aborted: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
 
-/** Owns the conversation catalog and the exact-run index. */
+type JoinStatus = AgentSnapshot["runs"][number]["status"];
+type RunRecord =
+  | { readonly kind: "live"; readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly agent: Agent }
+  | { readonly kind: "detached"; readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly status: JoinStatus };
+interface BoundRun { readonly runId: RunId; snapshot(): { readonly status: JoinStatus }; acknowledge(): void; release(): void }
+interface BoundRecord { readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly binding: BoundRun }
+
+/** Owns resumable conversations and compact exact-run records that outlive them. */
 export class AgentManager {
   private readonly conversations = new Map<ConversationId, Agent>();
-  private readonly runs = new Map<RunId, Agent>();
+  private readonly runs = new Map<RunId, RunRecord>();
   private readonly listeners = new Set<AgentUpdateListener>();
   private readonly conversationIds = new ConversationIdAllocator();
   private readonly runIds = new RunIdAllocator();
@@ -57,11 +66,18 @@ export class AgentManager {
       if (task.kind === "spawn") {
         const config = this.registry.agents.get(task.agent);
         if (!config) error = `Unknown agent: ${task.agent}.`;
-        else if (reserved >= this.maxConversations) error = this.capacityError();
         else {
-          const conversationId = this.conversationIds.allocate(); runId = this.runIds.allocate();
-          if (!conversationId || !runId) error = "Conversation or run ID space exhausted.";
-          else { agent = new Agent(conversationId, runId, config, task, (a, k) => this.updated(a, k), options); this.conversations.set(conversationId, agent); reserved++; }
+          const requested = resolveRequestedConfig(config, task);
+          const model = ResolveModel(requested.model, ctx.model, ctx.modelRegistry);
+          const cwd = ResolveTaskCwd(ctx.cwd, requested.cwd);
+          if (!model.ok) error = model.error;
+          else if (!cwd.ok) error = cwd.error;
+          else if (reserved >= this.maxConversations) error = this.capacityError();
+          else {
+            const conversationId = this.conversationIds.allocate(); runId = this.runIds.allocate();
+            if (!conversationId || !runId) error = "Conversation or run ID space exhausted.";
+            else { agent = new Agent(conversationId, runId, config, task, (a, k) => this.updated(a, k), options); this.conversations.set(conversationId, agent); reserved++; }
+          }
         }
       } else {
         agent = this.conversations.get(task.conversationId);
@@ -70,7 +86,10 @@ export class AgentManager {
         else { runId = this.runIds.allocate(); if (!runId) error = "Run ID space exhausted."; else agent.beginResume(runId, task.prompt); }
       }
       if (!agent || !runId || error) { starts.push({ ok: false, inputIndex, error: error ?? "Could not start run." }); continue; }
-      this.runs.set(runId, agent);
+      this.runs.set(runId, {
+        kind: "live", runId, conversationId: agent.conversationId, agent,
+        ...(task.kind === "spawn" && options.parent ? { parentRunId: options.parent.runId } : {}),
+      });
       // Publish queued only after both indexes can resolve the event identities.
       this.updated(agent, "status");
       starts.push({ ok: true, inputIndex, conversationId: agent.conversationId, runId });
@@ -81,28 +100,38 @@ export class AgentManager {
 
   /** Manager-owned, event-driven binding of exact roots and their exact-run spawn subtree. */
   bindJoin(runIds: readonly RunId[]): JoinBinding {
-    const roots = runIds.map(id => { const agent = this.runs.get(id); if (!agent) throw new Error(`Unknown or removed run: ${id}.`); return { id, agent }; });
-    const bindings = new Map<RunId, { agent: Agent; binding: RunBinding }>();
+    const roots = runIds.map(id => { const record = this.runs.get(id); if (!record) throw new Error(`Unknown run: ${id}.`); return record; });
+    const bindings = new Map<RunId, BoundRecord>();
     let released = false; let checking = true; let resolve!: () => void;
     const completion = new Promise<void>(done => { resolve = done; });
-    const add = (id: RunId, agent: Agent) => { if (!bindings.has(id)) bindings.set(id, { agent, binding: agent.bindRun(id) }); };
+    const add = (record: RunRecord) => {
+      if (bindings.has(record.runId)) return;
+      const binding: BoundRun = record.kind === "live" ? record.agent.bindRun(record.runId) : {
+        runId: record.runId,
+        snapshot: () => ({ status: record.status }),
+        acknowledge: () => {},
+        release: () => {},
+      };
+      bindings.set(record.runId, {
+        conversationId: record.conversationId, binding,
+        ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}),
+      });
+    };
     const discover = () => {
       let changed: boolean;
       do {
         changed = false;
-        for (const agent of this.conversations.values()) {
-          if (!agent.parent || !bindings.has(agent.parent.runId)) continue;
-          // A spawn conversation contributes its initial run only. Resumes are not descendants
-          // of the spawning run; their own children are linked to their exact run independently.
-          const run = agent.runHistory[0];
-          if (run && !bindings.has(run.runId)) { add(run.runId, agent); changed = true; }
+        for (const record of this.runs.values()) {
+          if (!record.parentRunId || !bindings.has(record.parentRunId) || bindings.has(record.runId)) continue;
+          // Only initial spawn runs have a parentRunId; resumes do not implicitly join the spawn subtree.
+          add(record); changed = true;
         }
       } while (changed);
     };
     const ordered = () => {
-      const result: Array<{ agent: Agent; binding: RunBinding }> = []; const emitted = new Set<RunId>();
-      const visit = (id: RunId) => { const item = bindings.get(id); if (!item || emitted.has(id)) return; emitted.add(id); result.push(item); for (const [childId, child] of bindings) if (child.agent.parent?.runId === id) visit(childId); };
-      for (const root of roots) visit(root.id);
+      const result: BoundRecord[] = []; const emitted = new Set<RunId>();
+      const visit = (id: RunId) => { const item = bindings.get(id); if (!item || emitted.has(id)) return; emitted.add(id); result.push(item); for (const [childId, child] of bindings) if (child.parentRunId === id) visit(childId); };
+      for (const root of roots) visit(root.runId);
       return result;
     };
     const check = () => {
@@ -112,11 +141,11 @@ export class AgentManager {
     };
     // Subscribe before initial discovery so a spawn/terminal event cannot fall in the bind race.
     const unsubscribe = this.onAgentUpdate(() => check());
-    for (const root of roots) add(root.id, root.agent); checking = false; check();
+    for (const root of roots) add(root); checking = false; check();
     const release = () => { if (released) return; released = true; unsubscribe(); for (const item of bindings.values()) item.binding.release(); };
     return {
       get runIds() { return ordered().map(item => item.binding.runId); }, completion,
-      project: () => ordered().map(item => ({ conversationId: item.agent.conversationId, runId: item.binding.runId, status: item.binding.snapshot().status })),
+      project: () => ordered().map(item => ({ conversationId: item.conversationId, runId: item.binding.runId, status: item.binding.snapshot().status })),
       acknowledge: () => { for (const item of ordered()) if (item.binding.snapshot().status.kind === "done") item.binding.acknowledge(); },
       release,
     };
@@ -129,9 +158,16 @@ export class AgentManager {
       const agent = this.conversations.get(id as ConversationId);
       if (!agent) { errors.push({ conversationId: id, error: `Unknown conversation: ${id}.` }); continue; }
       if (agent.hasCurrentAttempt) aborted++;
-      const runIds = agent.runHistory.map(r => r.runId);
       void agent.abort("Conversation removed.");
-      this.conversations.delete(agent.conversationId); for (const runId of runIds) this.runs.delete(runId);
+      const runs = agent.runHistory;
+      this.conversations.delete(agent.conversationId);
+      for (const run of runs) {
+        const indexed = this.runs.get(run.runId);
+        this.runs.set(run.runId, {
+          kind: "detached", runId: run.runId, conversationId: agent.conversationId, status: run.status,
+          ...(indexed?.parentRunId ? { parentRunId: indexed.parentRunId } : {}),
+        });
+      }
       removed.push(agent.conversationId);
     }
     return { removed: removed.length, aborted, conversationIds: removed, errors };

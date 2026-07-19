@@ -38,29 +38,24 @@ const joinBinding = (
   release: hooks.release ?? (() => {}),
 });
 
-test("run returns ordered starts immediately", () => {
-  let resolve!: () => void;
-  const pending = new Promise<void>(done => { resolve = done; });
+test("run forwards validated tasks and preserves manager outcome order", () => {
   const starts = [
     { ok: true, inputIndex: 0, conversationId, runId },
-    { ok: false, inputIndex: 1, error: "Unknown agent" },
+    { ok: false, inputIndex: 1, error: "Unknown agent: missing." },
+  ];
+  const tasks = [
+    { kind: "spawn" as const, agent: "helper", prompt: "valid" },
+    { kind: "spawn" as const, agent: "missing", prompt: "unknown agent" },
   ];
   const manager = {
-    startRun: (_ctx: any, tasks: any[]) => {
-      assert.equal(tasks.length, 2);
-      return { starts, completion: pending };
+    startRun: (_ctx: any, received: any[]) => {
+      assert.deepEqual(received, tasks);
+      return { starts, completion: Promise.resolve(starts) };
     },
   };
-  const result = runAction(deps(manager), {
-    action: "run",
-    tasks: [
-      { kind: "spawn", agent: "helper", prompt: "x" },
-      { kind: "spawn", agent: "missing", prompt: "x" },
-    ],
-  }, {} as any);
+  const result = runAction(deps(manager), { action: "run", tasks }, {} as any);
   assert.deepEqual(json(result), starts);
   assert.equal(result.isError, false);
-  resolve();
 });
 
 test("list is output-free and filtering is pure", () => {

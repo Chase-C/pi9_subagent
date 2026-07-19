@@ -67,7 +67,7 @@ Agent markdown is discovered from the user `${PI_AGENT_DIR ?? ~/.pi/agent}/agent
 | `tools` | no | Comma-separated allowlist; include `subagent` for recursive delegation. |
 | `skills` | no | Comma-separated default skills. A spawn-task value replaces this list. |
 
-The body becomes the child system prompt. Spawn tasks require `agent` and `prompt`; `label` is optional, and may override supported execution options such as model, thinking, working directory, and skills. Follow-up tasks identify a conversation and provide a prompt; the conversation's agent and execution context remain fixed.
+The body becomes the child system prompt. Spawn tasks require `agent` and `prompt`; `label` is optional, and tasks may override supported execution options such as model, thinking, working directory, and skills. A model requested by either the task or agent definition must resolve; an unknown or malformed value fails that task instead of falling back. When neither specifies a model, the child inherits the parent's model. An explicit task `cwd` is resolved relative to the parent's working directory and must identify an existing directory. Follow-up tasks identify a conversation and provide a prompt; the conversation's agent and execution context remain fixed.
 
 ## Tool actions
 
@@ -75,15 +75,17 @@ The body becomes the child system prompt. Spawn tasks require `agent` and `promp
 | --- | --- |
 | `agents` | Discover agent definitions and their resolved defaults. |
 | `list` | Return a lightweight inventory of conversations and runs without run output. It is pure: it acknowledges nothing and changes no lifecycle state. |
-| `run` | Start one or more tasks asynchronously, returning a `conversationId` and `runId` for each accepted task. |
+| `run` | Start one or more well-formed tasks asynchronously and return one ordered outcome per task, including identifiers for accepted tasks and errors for semantic or startup failures. |
 | `join` | Block until each specified exact run settles, then return that run's output or error. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying run. |
-| `remove` | Explicitly batch cleanup for the specified conversations, stopping their active work if necessary and removing their runs and accumulated context. |
+| `remove` | Clean up the specified conversations, aborting active work if necessary, deleting resumable child session state, and hiding them from `list`. |
+
+A malformed task rejects the entire `run` batch. Once the batch passes schema and task-shape validation, each task starts independently, so semantic or startup failures such as an unknown agent, invalid model, or missing working directory do not prevent valid siblings from starting. Errors in the outer invocation—including a missing or unknown action, absent or empty tasks, and batch-limit violations—also remain global errors.
 
 A run belongs to one conversation. Spawning creates both; a follow-up creates another run in an existing conversation. Every conversation remains available in the runtime inventory until explicitly removed, including after successful, failed, or interrupted work.
 
 `canResume` becomes true only after a completed run or an interrupted run that preserved its conversation context. It remains false while work is queued or active, and after failures or interruptions that did not preserve context.
 
-`join` is keyed by `runId`, not merely by conversation, so a caller always receives the requested run even when that conversation has newer work. Use `remove` with conversation identifiers when the whole conversation is no longer needed.
+`join` is keyed by `runId`, not merely by conversation, so a caller always receives the requested run even when that conversation has newer work. After `remove`, compact terminal run results remain joinable by `runId`, including the aborted result of work that was active when removed, even though the conversation and resumable session state are gone. Use `remove` with conversation identifiers when the whole conversation is no longer needed.
 
 ## Capacity and concurrency
 

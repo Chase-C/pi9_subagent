@@ -1,15 +1,27 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { test, expect } from "vitest";
 import { AgentManager } from "../../src/runtime/agent-manager.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 
+const knownModel = { provider: "test", id: "known" } as any;
 const config = {
   name: "worker",
   description: "",
   systemPrompt: "",
   source: "project",
 } as any;
-const registry = { agents: new Map([["worker", config]]) } as any;
-const ctx = { cwd: "/tmp" } as any;
+const registry = { agents: new Map([
+  ["worker", config],
+  ["bad-definition", { ...config, name: "bad-definition", model: "missing" }],
+]) } as any;
+const ctx = {
+  cwd: "/tmp",
+  model: knownModel,
+  modelRegistry: { getAll: () => [knownModel] },
+} as any;
 const session = () => ({
   messages: [],
   subscribe: () => () => {},
@@ -52,6 +64,41 @@ test("ordered starts reserve capacity and resumes work at capacity", async () =>
   ]);
 });
 
+test("spawn validation is ordered, isolated, and does not allocate or consume capacity", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "agent-manager-validation-"));
+  const prompts: string[] = [];
+  const countedRunner = async (runCtx: any, agent: any, attempt: any) => {
+    prompts.push(attempt.prompt);
+    return runner(runCtx, agent, attempt);
+  };
+  const manager = new AgentManager(registry, 2, countedRunner, 2);
+  const batch = manager.startRun({ ...ctx, cwd: root }, [
+    { kind: "spawn", agent: "worker", prompt: "inherits parent" },
+    { kind: "spawn", agent: "missing", prompt: "unknown agent" },
+    { kind: "spawn", agent: "worker", prompt: "malformed model", model: "test//known" },
+    { kind: "spawn", agent: "worker", prompt: "unknown model", model: "missing" },
+    { kind: "spawn", agent: "worker", prompt: "invalid cwd", cwd: "missing-directory" },
+    { kind: "spawn", agent: "bad-definition", prompt: "invalid definition model" },
+    { kind: "spawn", agent: "bad-definition", prompt: "override wins", model: "test/known" },
+  ] as any);
+
+  expect(batch.starts.map(start => start.inputIndex)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  expect(batch.starts.map(start => start.ok)).toEqual([true, false, false, false, false, false, true]);
+  expect(batch.starts[1]).toMatchObject({ error: "Unknown agent: missing." });
+  expect(batch.starts[2]).toMatchObject({ error: expect.stringContaining("Invalid model") });
+  expect(batch.starts[3]).toMatchObject({ error: "Unknown model: missing" });
+  expect(batch.starts[4]).toMatchObject({ error: expect.stringContaining("Working directory does not exist") });
+  expect(batch.starts[5]).toMatchObject({ error: "Unknown model: missing" });
+  for (const start of batch.starts.filter(start => !start.ok)) {
+    expect(start).not.toHaveProperty("conversationId");
+    expect(start).not.toHaveProperty("runId");
+  }
+
+  await batch.completion;
+  expect(prompts).toEqual(["inherits parent", "override wins"]);
+  expect(manager.listConversations()).toHaveLength(2);
+});
+
 test("joins exact historical runs and remains stable across resume", async () => {
   const manager = new AgentManager(registry, 1, runner);
   const initial = manager.startRun(ctx, [{
@@ -80,6 +127,46 @@ test("joins exact historical runs and remains stable across resume", async () =>
     output: "old",
   });
   join.release();
+});
+
+test("completed removal preserves exact runs, prevents resume, and reclaims capacity", async () => {
+  const manager = new AgentManager(registry, 1, runner, 1);
+  const initial = manager.startRun(ctx, [{
+    kind: "spawn",
+    agent: "worker",
+    prompt: "old",
+  }] as any);
+  await initial.completion;
+  const first = initial.starts[0] as any;
+  const resumed = manager.startRun(ctx, [{
+    kind: "resume",
+    conversationId: first.conversationId,
+    prompt: "new",
+  }] as any);
+  await resumed.completion;
+  const second = resumed.starts[0] as any;
+
+  expect(manager.removeConversation(first.conversationId)).toMatchObject({ removed: 1, aborted: 0 });
+  expect(manager.listConversations()).toEqual([]);
+  expect(() => manager.conversation(first.conversationId)).toThrow("Unknown conversation");
+  expect((manager.startRun(ctx, [{
+    kind: "resume",
+    conversationId: first.conversationId,
+    prompt: "again",
+  }] as any).starts[0] as any).error).toContain("Unknown conversation");
+
+  const join = manager.bindJoin([first.runId, second.runId]);
+  await join.completion;
+  expect(join.project().map(output)).toEqual(["old", "new"]);
+  join.release();
+
+  const replacement = manager.startRun(ctx, [{
+    kind: "spawn",
+    agent: "worker",
+    prompt: "replacement",
+  }] as any);
+  expect(replacement.starts[0]).toMatchObject({ ok: true });
+  await replacement.completion;
 });
 
 test("removal terminalizes immediately, wakes joins, and leaves children", async () => {
@@ -116,13 +203,16 @@ test("removal terminalizes immediately, wakes joins, and leaves children", async
   const removed = manager.removeConversation(parentRun.conversationId);
   expect(removed.aborted).toBe(1);
   expect(manager.listConversations().map(value => value.conversationId)).toContain(child.conversationId);
-  expect(() => manager.bindJoin([parentRun.runId])).toThrow();
-  await join.completion;
-  expect(join.project()[0].status).toMatchObject({
-    kind: "done",
-    outcome: "aborted",
-    error: "Conversation removed.",
-  });
+  const detachedJoin = manager.bindJoin([parentRun.runId]);
+  await Promise.all([join.completion, detachedJoin.completion]);
+  for (const binding of [join, detachedJoin]) {
+    expect(binding.project()[0].status).toMatchObject({
+      kind: "done",
+      outcome: "aborted",
+      error: "Conversation removed.",
+    });
+    binding.release();
+  }
   expect(physical).toBe(true);
   release();
 });
@@ -172,6 +262,44 @@ test("subtree join discovers late descendants and waits in root-first order", as
   await childStart.completion;
   await join.completion;
 
+  expect(join.project().map(entry => [entry.runId, entry.conversationId])).toEqual([
+    [root.runId, root.conversationId],
+    [child.runId, child.conversationId],
+    [grand.runId, grand.conversationId],
+  ]);
+  expect(join.project().map(output)).toEqual(["root", "child", "grand"]);
+  join.release();
+});
+
+test("new subtree join discovers descendants after conversations were removed", async () => {
+  const manager = new AgentManager(registry, 4, runner);
+  const rootStart = manager.startRun(ctx, [{
+    kind: "spawn",
+    agent: "worker",
+    prompt: "root",
+  }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{
+    kind: "spawn",
+    agent: "worker",
+    prompt: "child",
+  }] as any, parent(root.conversationId, root.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const grandStart = manager.startRun(ctx, [{
+    kind: "spawn",
+    agent: "worker",
+    prompt: "grand",
+  }] as any, parent(child.conversationId, child.runId));
+  await grandStart.completion;
+  const grand = grandStart.starts[0] as any;
+
+  manager.removeConversation(child.conversationId);
+  manager.removeConversation(root.conversationId);
+  manager.removeConversation(grand.conversationId);
+  const join = manager.bindJoin([root.runId]);
+  await join.completion;
   expect(join.project().map(entry => [entry.runId, entry.conversationId])).toEqual([
     [root.runId, root.conversationId],
     [child.runId, child.conversationId],
