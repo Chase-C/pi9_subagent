@@ -3,8 +3,8 @@ import { Text } from "@earendil-works/pi-tui";
 import type { Conversation } from "./conversation.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId } from "./identifiers.js";
-import type { SubagentRuntime } from "./runtime.js";
-import { parseSubagentInvocation, SubagentParams, type RunStatus, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
+import type { OrderedStartOutcome, SubagentRuntime } from "./runtime.js";
+import { parseSubagentInvocation, SubagentParams, type RunStatus, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError, type TaskRequest } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 
 export interface ActionDeps {
@@ -83,8 +83,23 @@ export function runAction(
   const options = deps.parent
     ? { parent: { conversationId: deps.parent.conversationId, runId: deps.parent.runId() } }
     : {};
-  const handle = deps.runtime.startRun(ctx, invocation.tasks, options);
-  return jsonResult(handle.starts);
+  const tasks: TaskRequest[] = [];
+  const inputIndexes: number[] = [];
+  const starts: OrderedStartOutcome[] = [];
+  invocation.tasks.forEach((task, inputIndex) => {
+    if ("error" in task) starts.push({ ok: false, inputIndex, error: task.error });
+    else {
+      tasks.push(task);
+      inputIndexes.push(inputIndex);
+    }
+  });
+  const handle = deps.runtime.startRun(ctx, tasks, options);
+  starts.push(...handle.starts.map(start => ({
+    ...start,
+    inputIndex: inputIndexes[start.inputIndex],
+  })));
+  starts.sort((a, b) => a.inputIndex - b.inputIndex);
+  return jsonResult(starts);
 }
 
 export async function joinAction(

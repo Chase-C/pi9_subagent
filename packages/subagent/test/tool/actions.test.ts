@@ -58,6 +58,33 @@ test("run forwards validated tasks and preserves manager outcome order", () => {
   assert.equal(result.isError, false);
 });
 
+test("run returns task parse failures while starting valid siblings", () => {
+  const tasks = [
+    { kind: "spawn" as const, agent: "helper", prompt: "first" },
+    { error: "Task must carry exactly one of agent (spawn) or conversationId (resume)." },
+    { kind: "spawn" as const, agent: "missing", prompt: "third" },
+  ];
+  const runtimeStarts = [
+    { ok: true as const, inputIndex: 0, conversationId, runId },
+    { ok: false as const, inputIndex: 1, error: "Unknown agent: missing." },
+  ];
+  const manager = {
+    startRun: (_ctx: any, received: any[]) => {
+      assert.deepEqual(received, [tasks[0], tasks[2]]);
+      return { starts: runtimeStarts, completion: Promise.resolve(runtimeStarts) };
+    },
+  };
+
+  const result = runAction(deps(manager), { action: "run", tasks }, {} as any);
+
+  assert.deepEqual(json(result), [
+    { ok: true, inputIndex: 0, conversationId, runId },
+    { ok: false, inputIndex: 1, error: tasks[1].error },
+    { ok: false, inputIndex: 2, error: "Unknown agent: missing." },
+  ]);
+  assert.equal(result.isError, false);
+});
+
 test("list is output-free and filtering is pure", () => {
   let calls = 0;
   const manager = {

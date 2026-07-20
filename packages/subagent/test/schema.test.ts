@@ -62,17 +62,23 @@ test("invocations parse every action without aliases", () => {
   assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId] }), { action: "remove", conversationIds: [conversationId] });
 });
 
-test("a malformed task rejects the whole run batch", () => {
+test("task parse failures remain indexed within a runnable batch", () => {
   const parsed = parseSubagentInvocation({
     action: "run",
     tasks: [
       { agent: "helper", prompt: "first" },
-      { agent: "", prompt: "invalid" },
+      { prompt: "missing agent" },
       { conversationId, prompt: "third" },
     ],
   });
-  assert.ok("error" in parsed);
-  assert.match(parsed.error, /task\[1\]: Task agent must be a non-empty string/);
+  assert.deepEqual(parsed, {
+    action: "run",
+    tasks: [
+      { kind: "spawn", agent: "helper", prompt: "first" },
+      { error: "Task must carry exactly one of agent (spawn) or conversationId (resume)." },
+      { kind: "resume", conversationId, prompt: "third" },
+    ],
+  });
 });
 
 test("whole invocation validation covers limits, status, and required batches", () => {
@@ -152,13 +158,15 @@ test("unsupported actions and invocation fields receive ordinary validation erro
   }
 });
 
-test("unsupported task fields reject the whole invocation", () => {
+test("unsupported task fields produce per-task parse failures", () => {
   for (const [task, expected] of [
     [{ sessionId: conversationId, prompt: "x" }, /sessionId is not allowed/],
     [{ agent: "a", prompt: "x", retainConversation: true }, /retainConversation is not allowed/],
   ] as const) {
     const parsed = parseSubagentInvocation({ action: "run", tasks: [task] });
-    assert.ok("error" in parsed);
-    assert.match(parsed.error, expected);
+    assert.ok("tasks" in parsed);
+    const failure = parsed.tasks[0];
+    assert.ok(failure && "error" in failure);
+    assert.match(failure.error, expected);
   }
 });

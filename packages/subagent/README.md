@@ -79,7 +79,19 @@ The body becomes the child system prompt. Spawn tasks require `agent` and `promp
 | `join` | Block until each specified exact run settles, then return that run's output or error. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying run. |
 | `remove` | Clean up the specified conversations, aborting active work if necessary, deleting resumable child session state, and hiding them from `list`. |
 
-A malformed task rejects the entire `run` batch. Once the batch passes schema and task-shape validation, each task starts independently, so semantic or startup failures such as an unknown agent, invalid model, or missing working directory do not prevent valid siblings from starting. Errors in the outer invocation—including a missing or unknown action, absent or empty tasks, and batch-limit violations—also remain global errors.
+Each task is handled independently after the tool call passes SDK schema validation. Task-level parsing and startup failures—such as a missing agent, an unknown agent, an invalid model, or a missing working directory—return an ordered `{ ok: false, inputIndex, error }` outcome without preventing valid sibling tasks from starting. Invalid outer invocations—including a missing or unknown action, absent or empty tasks, and batch-limit violations—remain global errors. Provider-level schema violations may reject the tool call before execution.
+
+For example, a three-task batch can return a successful start, a task-level failure, and another successful start in input order:
+
+```json
+[
+  { "ok": true, "inputIndex": 0, "conversationId": "quiet-otter", "runId": "search-boldly" },
+  { "ok": false, "inputIndex": 1, "error": "Task must carry exactly one of agent (spawn) or conversationId (resume)." },
+  { "ok": true, "inputIndex": 2, "conversationId": "calm-fox", "runId": "inspect-carefully" }
+]
+```
+
+Rejected tasks receive no `conversationId` or `runId` and do not appear in `list`; only accepted tasks enter the run lifecycle.
 
 A run belongs to one conversation. Spawning creates both; a follow-up creates another run in an existing conversation. Every conversation remains available in the runtime inventory until explicitly removed, including after successful, failed, or interrupted work.
 

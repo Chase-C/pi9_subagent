@@ -7,13 +7,13 @@ import { isRunId, type RunId } from "./identifiers.js";
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 
 const NonBlankString = (description: string) =>
-  Type.String({ minLength: 1, pattern: ".*\\S.*", description });
+  Type.String({ minLength: 1, description });
 
 export const TaskSchema = Type.Object({
-  agent: Type.Optional(Type.String({ description: "Agent definition name." })),
-  conversationId: Type.Optional(Type.String()),
+  agent: Type.Optional(Type.String({ description: "Agent definition to `Spawn`." })),
+  conversationId: Type.Optional(Type.String({ description: "Conversation to `Resume`." })),
   prompt: NonBlankString("The subagent's complete instructions."),
-  label: Type.Optional(NonBlankString("Display label.")),
+  label: Type.Optional(NonBlankString("3–5 plain words describing the task, for display; not an identifier.")),
   skills: Type.Optional(Type.Array(Type.String(), { description: "Skills override." })),
   model: Type.Optional(Type.String({ description: "Model override." })),
   thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
@@ -63,7 +63,7 @@ export type ParsedTask = TaskRequest | { error: string };
 export type SubagentInvocation =
   | { action: "agents" }
   | { action: "list"; status?: RunStatus[] }
-  | { action: "run"; tasks: TaskRequest[] }
+  | { action: "run"; tasks: ParsedTask[] }
   | { action: "join"; runIds: RunId[] }
   | { action: "remove"; conversationIds: ConversationId[] };
 
@@ -71,7 +71,6 @@ export type SubagentInvocationParseError = {
   error: string;
   action?: SubagentAction;
   missingAction?: boolean;
-  errors?: string[];
   taskCountError?: boolean;
 };
 
@@ -162,14 +161,7 @@ export function parseSubagentInvocation(
         };
       }
 
-      const tasks = params.tasks.map(parseTask);
-      const errors = tasks.flatMap((task, index) =>
-        "error" in task ? [`task[${index}]: ${task.error}`] : [],
-      );
-
-      return errors.length > 0
-        ? { error: errors.join("\n"), errors, action: parsedAction }
-        : { action: parsedAction, tasks: tasks as TaskRequest[] };
+      return { action: parsedAction, tasks: params.tasks.map(parseTask) };
     }
     case "join": {
       const ids = parseIds(
