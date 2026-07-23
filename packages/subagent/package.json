@@ -1,7 +1,7 @@
 {
   "name": "@pi9/subagent",
   "version": "0.6.0",
-  "description": "Retained-conversation, background, and recursive subagents for Pi with live progress and tree-wide concurrency limits.",
+  "description": "Asynchronous, resumable, and recursive subagent conversations for Pi with exact-run retrieval and live progress.",
   "license": "MIT",
   "author": "Chase Cummings <chaseecummings@gmail.com>",
   "type": "module",
@@ -39,6 +39,8 @@
     "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "sample:ids": "node scripts/sample-ids.mjs",
+    "sort:identifier-words": "node scripts/sort-identifier-word-lists.mjs",
     "release": "node ../../scripts/release.mjs subagent",
     "release:patch": "node ../../scripts/release.mjs subagent patch",
     "release:minor": "node ../../scripts/release.mjs subagent minor",

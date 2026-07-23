@@ -1,210 +1,336 @@
-import { test } from "vitest";
 import assert from "node:assert/strict";
+import { test } from "vitest";
+import { renderSubagentCall, renderSubagentResult, type SubagentToolDetails } from "../../src/tool-renderer.js";
 
-import subagentExtension from "../../src/index.js";
-import { fakeAgent } from "../helpers/fake-agent.js";
+const lines = (component: { render(width: number): string[] }) => component.render(200).map(line => line.trimEnd()).join("\n");
+const renderCall = (args: unknown) => lines(renderSubagentCall(args));
+const renderResult = (details: SubagentToolDetails, expanded = false, isPartial = false, width = 200) =>
+  renderSubagentResult({ details }, { expanded, isPartial }).render(width).map(line => line.trimEnd()).join("\n");
 
-function registerExtension() {
-  let registeredTool: any;
-  subagentExtension({ registerTool: (tool: any) => { registeredTool = tool; } } as any);
-  return registeredTool;
-}
-
-function registerExtensionWithMessageRenderers() {
-  const renderers = new Map<string, any>();
-  subagentExtension({
-    registerTool() {},
-    registerMessageRenderer: (customType: string, renderer: any) => renderers.set(customType, renderer),
-  } as any);
-  return renderers;
-}
-
-const passthroughTheme = { fg: (_color: string, text: string) => text };
-
-function titleText(tool: any, args: unknown, context?: unknown): string {
-  return tool.renderCall(args, passthroughTheme, context).render(200).join("\n");
-}
-
-test("background completion message renderer shows compact themed status summary when collapsed", () => {
-  const renderers = registerExtensionWithMessageRenderers();
-  const renderer = renderers.get("subagent-background-completion");
-  assert.equal(typeof renderer, "function");
-
-  const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` };
-  const component = renderer(
-    {
-      content: "fallback content with sessionId hidden-session",
-      details: {
-        completions: [
-          { sessionId: "s-complete", agent: "helper", label: "short task that is much too long for the configured display limit", status: "completed", elapsedMs: 1250 },
-          { sessionId: "s-error", agent: "critic", status: "error", elapsedMs: 65000 },
-        ],
-      },
-    },
-    { expanded: false },
-    theme,
+test("call titles summarize action-specific input counts", () => {
+  assert.equal(renderCall({ action: "run", tasks: [{}, {}, {}] }), "subagent run  3 tasks");
+  assert.equal(renderCall({ action: "join", runIds: ["one", "two"] }), "subagent join  2 runs");
+  assert.equal(renderCall({ action: "remove", conversationIds: ["one"] }), "subagent remove  1 conversation");
+  assert.equal(renderCall({ action: "agents" }), "subagent agents");
+  assert.equal(
+    lines(renderSubagentCall({ action: "run" }, { bold: text => `<b>${text}</b>` })),
+    "<b>subagent</b> run",
   );
-  const rendered = component.render(160).join("\n");
-
-  assert.match(rendered, /2 background subagents completed/);
-  assert.match(rendered, /helper \(short task that is much too long for the configured display…\) · <success>completed<\/success> · 1\.3s/);
-  assert.match(rendered, /critic · <error>error<\/error> · 1m05s/);
-  assert.doesNotMatch(rendered, /s-complete|s-error|hidden-session/);
-  assert.doesNotMatch(rendered, /Call subagent results/);
 });
 
-test("background completion message renderer expands to full session details and results hint", () => {
-  const renderers = registerExtensionWithMessageRenderers();
-  const renderer = renderers.get("subagent-background-completion");
-  assert.equal(typeof renderer, "function");
+test("run uses outcome-first collapsed output and tagged delegation blocks when expanded", () => {
+  const details: SubagentToolDetails = {
+    action: "run",
+    tasks: [
+      { inputIndex: 0, kind: "spawn", agent: "scout", label: "auth map", prompt: "Map auth.", conversationId: "quiet-otter" as any, runId: "search-boldly" as any },
+      { inputIndex: 1, kind: "spawn", agent: "reviewer", label: "risk review", prompt: "Review risks.", conversationId: "amber-fox" as any, runId: "inspect-carefully" as any },
+      { inputIndex: 2, kind: "resume", agent: "scout", label: "follow-up", prompt: "Check tests.", conversationId: "bright-heron" as any, runId: "verify-quietly" as any },
+    ],
+  };
 
-  const component = renderer(
-    {
-      content: "1 background subagent completed since the last notification:\n- fallback · completed · 1s · sessionId fallback-id\n\nCall subagent results with these sessionIds to retrieve output.",
-      details: {
-        completions: [
-          { sessionId: "s-interrupted", agent: "helper", label: "full detail task", status: "interrupted", elapsedMs: 1000 },
-        ],
-      },
-    },
-    { expanded: true },
-    passthroughTheme,
-  );
-  const rendered = component.render(160).join("\n");
-
-  assert.match(rendered, /1 background subagent completed since the last notification:/);
-  assert.match(rendered, /helper \(full detail task\) · interrupted · 1\.0s · sessionId s-interrupted/);
-  assert.match(rendered, /Call subagent results with these sessionIds to retrieve output\./);
+  assert.equal(renderResult(details), [
+    "✓ Started 2 new conversations and resumed 1",
+    "  auth map · risk review · follow-up",
+  ].join("\n"));
+  assert.equal(renderResult(details, true), [
+    "→ auth map · scout · spawn",
+    "  Map auth.",
+    "  started · conversation quiet-otter · run search-boldly",
+    "",
+    "→ risk review · reviewer · spawn",
+    "  Review risks.",
+    "  started · conversation amber-fox · run inspect-carefully",
+    "",
+    "→ follow-up · scout · resume",
+    "  Check tests.",
+    "  started · conversation bright-heron · run verify-quietly",
+  ].join("\n"));
 });
 
-test("subagent tool result renderer falls back to simple text when themed rendering fails", () => {
-  const tool = registerExtension();
+test("agents render configuration tags in expanded mode", () => {
+  const details: SubagentToolDetails = {
+    action: "agents",
+    agents: [{ name: "scout", description: "Read-only reconnaissance.", source: "project", model: "anthropic/sonnet", thinking: "medium", tools: ["read", "grep"] }],
+  };
+  assert.equal(renderResult(details), "✓ Found 1 available agent\n  scout");
+  assert.equal(renderResult(details, true), [
+    "→ scout · project",
+    "  Read-only reconnaissance.",
+    "  model anthropic/sonnet · thinking medium",
+    "  tools read, grep",
+  ].join("\n"));
+});
 
-  let component: any;
-  assert.doesNotThrow(() => {
-    component = tool.renderResult(
-      {
-        content: [{ type: "text", text: "plain fallback helper output" }],
-        details: {
-          view: "inventory",
-          sessions: [{
-            id: "s1", inputIndex: 0, createdAt: 1,
-            config: { name: "helper", description: "Helper", source: "project", model: undefined, thinking: undefined, tools: undefined, retainConversation: false },
-            status: { kind: "done", outcome: "completed", completedAt: 2 },
-            activity: { turns: 1, compactions: 0, toolHistory: [] },
-            usage: undefined,
+test("list renders status summary and tagged run inventory", () => {
+  const details: SubagentToolDetails = {
+    action: "list",
+    runs: [
+      { conversationId: "quiet-otter" as any, runId: "search-boldly" as any, agent: "scout", label: "auth map", kind: "spawn", status: "running" },
+      { conversationId: "amber-fox" as any, runId: "inspect-carefully" as any, agent: "reviewer", label: "risk review", kind: "spawn", status: "completed" },
+    ],
+  };
+  assert.equal(renderResult(details), "✓ Found 2 runs · 1 running · 1 completed\n  auth map · risk review");
+  assert.equal(renderResult(details, true), [
+    "→ auth map · scout · spawn",
+    "  running · conversation quiet-otter · run search-boldly",
+    "",
+    "→ risk review · reviewer · spawn",
+    "  completed · conversation amber-fox · run inspect-carefully",
+  ].join("\n"));
+});
+
+test("join distinguishes partial waits and terminal child errors", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [
+      { conversationId: "quiet-otter" as any, runId: "search-boldly" as any, label: "auth map", status: "completed", output: "Mapped auth." },
+      { conversationId: "calm-wren" as any, runId: "test-thoroughly" as any, label: "test audit", status: "error", error: "Child failed." },
+    ],
+  };
+  const partial: SubagentToolDetails = {
+    action: "join",
+    runs: [
+      details.runs[0],
+      { conversationId: "calm-wren" as any, runId: "test-thoroughly" as any, label: "test audit", status: "running" },
+    ],
+  };
+  assert.equal(renderResult(partial, false, true), [
+    "✓ auth map · completed",
+    "● test audit · running",
+    "  waiting for result",
+  ].join("\n"));
+  assert.equal(renderResult(details, true), [
+    "✓ auth map · completed",
+    "  conversation quiet-otter · run search-boldly",
+    "",
+    "  Mapped auth.",
+    "",
+    "× test audit · error",
+    "  conversation calm-wren · run test-thoroughly",
+    "",
+    "  Child failed.",
+  ].join("\n"));
+});
+
+test("join renders recent filtered activity, recursive groups, outcomes, and background details", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{
+      conversationId: "root-conversation" as any,
+      runId: "root-run" as any,
+      agent: "worker",
+      label: "root task",
+      kind: "spawn",
+      prompt: "Investigate the whole system.",
+      status: "running",
+      joinToolCallIds: ["represented-join"],
+      activity: [
+        { tool: "old", summary: "too old" },
+        { tool: "read", summary: "a" },
+        { tool: "subagent", summary: "join", toolCallId: "represented-join" },
+        { tool: "grep", summary: "b" },
+        { tool: "bash", summary: "c" },
+      ],
+      joins: [
+        { status: "completed", toolCallId: "represented-join", targets: [{ conversationId: "c1" as any, runId: "r1" as any, label: "child", agent: "scout", status: "completed" }] },
+        { status: "completed", targets: [{ conversationId: "c1" as any, runId: "r1" as any, label: "child", agent: "scout", status: "error", error: "target failed" }] },
+        { status: "running", targets: [{ conversationId: "c2" as any, runId: "r2" as any, label: "branch", status: "running", activity: [{ tool: "read", summary: "nested" }], joins: [{ status: "running", targets: [{ conversationId: "c3" as any, runId: "r3" as any, label: "leaf", agent: "reviewer", status: "running" }] }] }] },
+      ],
+      background: [{ ownerRunId: "root-run" as any, ownerLabel: "root task", entries: [
+        { conversationId: "bg-c1" as any, runId: "bg-r1" as any, label: "watcher", status: "running" },
+        { conversationId: "bg-c2" as any, runId: "bg-r2" as any, label: "done bg", status: "completed", detachedAtFinal: true },
+      ] }],
+    }],
+  };
+  const collapsed = renderResult(details);
+  assert.match(collapsed, /subagent join\(1 run\) · 5 total tool calls/);
+  assert.doesNotMatch(collapsed, /too old|read\(a\)|grep\(b\)|bash\(c\)/);
+  assert.match(collapsed, /✓ joined 1 · child[\s\S]*✓ joined 1 · child/);
+  assert.match(collapsed, /╰─ ● branch · running[\s\S]*subagent join\(1 run\) · 1 total tool call[\s\S]*╰─ ● leaf · reviewer · running/);
+  assert.doesNotMatch(collapsed, /read\(nested\)/);
+  assert.match(collapsed, /background · 1 active · 1 completed/);
+  assert.doesNotMatch(collapsed, /bg-r2|detached at final/);
+
+  const expanded = renderResult(details, true);
+  assert.match(expanded, /Investigate the whole system\./);
+  assert.match(expanded, /conversation bg-c2 · run bg-r2 · detached at final/);
+});
+
+test("join trees color status markers and target statuses semantically", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{
+      conversationId: "root-c" as any,
+      runId: "root-r" as any,
+      label: "root",
+      status: "running",
+      joins: [{
+        status: "completed",
+        targets: [{
+          conversationId: "child-c" as any,
+          runId: "child-r" as any,
+          label: "child",
+          agent: "scout",
+          status: "completed",
+          activity: [{ tool: "read" }],
+        }, {
+          conversationId: "sibling-c" as any,
+          runId: "sibling-r" as any,
+          label: "sibling",
+          status: "completed",
+        }],
+      }],
+    }],
+  };
+  const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` } as any;
+  const rendered = lines(renderSubagentResult({ details }, { expanded: true }, theme));
+
+  assert.match(rendered, /<success>✓<\/success> <muted>joined 2 · child, sibling<\/muted>/);
+  assert.match(rendered, /<muted>├─<\/muted> <success>✓<\/success> <text>child<\/text><muted> · scout<\/muted> <muted>·<\/muted> <success>completed<\/success>/);
+  assert.match(rendered, /<muted>│<\/muted>\s+<muted>read<\/muted>/);
+});
+
+test("join activity is newest-first and reports hidden tool calls", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{
+      conversationId: "root-c" as any,
+      runId: "root-r" as any,
+      label: "activity",
+      status: "running",
+      activity: [
+        { tool: "first", summary: "1" },
+        { tool: "second", summary: "2" },
+        { tool: "third", summary: "3" },
+        { tool: "fourth", summary: "4" },
+        { tool: "fifth", summary: "5" },
+      ],
+    }],
+  };
+
+  assert.equal(renderResult(details), [
+    "● activity · running",
+    "  fifth(5)",
+    "  fourth(4)",
+    "  third(3)",
+    "  +2 tool calls",
+  ].join("\n"));
+});
+
+test("terminal join collapse hides output and history while expansion retains them without nested answers", () => {
+  const details = { action: "join", runs: [{
+    conversationId: "root-c" as any, runId: "root-r" as any, label: "finished", status: "completed", output: "Root answer.", prompt: "Full prompt.",
+    activity: [{ tool: "read", summary: "history" }],
+    joins: [{ status: "completed", targets: [{ conversationId: "child-c" as any, runId: "child-r" as any, label: "child", status: "completed", output: "SECRET CHILD ANSWER" }] }],
+  }] } as unknown as SubagentToolDetails;
+  assert.equal(renderResult(details), "✓ finished · completed");
+  const expanded = renderResult(details, true);
+  assert.match(expanded, /Full prompt\.|read\(history\)|✓ joined 1 · child|child · completed/);
+  assert.doesNotMatch(expanded, /SECRET CHILD ANSWER/);
+});
+
+test("expanded terminal joins retain recursive history, node-local filtering, and detached backgrounds", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{
+      conversationId: "root-c" as any,
+      runId: "root-r" as any,
+      label: "root",
+      status: "completed",
+      output: "root answer",
+      activity: [
+        { toolCallId: "same-id", tool: "subagent", summary: "root represented join" },
+        { toolCallId: "child-only-id", tool: "read", summary: "parent activity survives" },
+      ],
+      joins: [{
+        status: "completed",
+        toolCallId: "same-id",
+        targets: [{
+          conversationId: "child-c" as any,
+          runId: "child-r" as any,
+          label: "child",
+          status: "completed",
+          activity: [
+            { toolCallId: "same-id", tool: "read", summary: "child activity survives" },
+            { toolCallId: "child-only-id", tool: "subagent", summary: "child represented join" },
+          ],
+          joins: [{
+            status: "completed",
+            toolCallId: "child-only-id",
+            targets: [{ conversationId: "leaf-c" as any, runId: "leaf-r" as any, label: "leaf", status: "completed" }],
           }],
-        },
-      },
-      { expanded: true },
-      { fg() { throw new Error("theme failed"); } },
-    );
-  });
+          background: [{ ownerRunId: "child-r" as any, ownerLabel: "child", entries: [{
+            conversationId: "background-c" as any,
+            runId: "background-r" as any,
+            label: "background child",
+            status: "running",
+            detachedAtFinal: true,
+          }] }],
+        }],
+      }],
+    }],
+  };
 
-  assert.match(component.render(120).join("\n"), /plain fallback helper output/);
+  assert.equal(renderResult(details), "✓ root · completed");
+  const expanded = renderResult(details, true);
+  assert.match(expanded, /✓ joined 1 · child[\s\S]*child · completed[\s\S]*read\(child activity survives\)/);
+  assert.match(expanded, /✓ joined 1 · leaf[\s\S]*leaf · completed/);
+  assert.match(expanded, /conversation background-c · run background-r · detached at final/);
+  assert.match(expanded, /parent activity survives/);
+  assert.doesNotMatch(expanded, /root represented join|child represented join/);
 });
 
-test("subagent tool result renderer keeps plain text for a current error envelope", () => {
-  const tool = registerExtension();
-  const passthroughTheme = { fg: (_color: string, text: string) => text };
-  const component = tool.renderResult(
-    {
-      content: [{ type: "text", text: "task[0]: bad" }],
-      details: { view: "error", errors: ["task[0]: bad"] },
-    },
-    { expanded: false },
-    passthroughTheme,
-  );
+test("expanded joins order and separate sections while preserving indentation across wraps", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{
+      conversationId: "root-c" as any,
+      runId: "root-r" as any,
+      label: "wrapped",
+      status: "completed",
+      prompt: "Prompt words that wrap onto another line.",
+      activity: [{ tool: "read", summary: "Tool summary words that also wrap." }],
+      output: "Result words that wrap onto another line.",
+    }],
+  };
 
-  assert.equal(component.render(120).join("\n").trim(), "task[0]: bad");
+  assert.equal(renderResult(details, true, false, 24), [
+    "✓ wrapped · completed",
+    "  conversation root-c ·",
+    "  run root-r",
+    "",
+    "  Prompt words that wrap",
+    "  onto another line.",
+    "",
+    "  read(Tool summary",
+    "  words that also wrap.)",
+    "",
+    "  Result words that wrap",
+    "  onto another line.",
+  ].join("\n"));
 });
 
-test("subagent run title shows live running/queued/finished counts and elapsed once a partial result populates state", () => {
-  const tool = registerExtension();
-  const context: any = { state: {} };
-  const sessions = [
-    fakeAgent({ id: "a", config: { name: "alpha" }, status: { kind: "running", startedAt: 1 } }),
-    fakeAgent({ id: "b", config: { name: "beta" }, status: { kind: "running", startedAt: 1 } }),
-    fakeAgent({ id: "c", config: { name: "gamma" }, status: { kind: "queued" } }),
-    fakeAgent({ id: "d", config: { name: "delta" }, status: { kind: "completed", startedAt: 1, completedAt: 2 } }),
-  ];
-
-  tool.renderResult(
-    { content: [{ type: "text", text: "" }], details: { view: "run", sessions } },
-    { expanded: false, isPartial: true },
-    passthroughTheme,
-    context,
-  );
-
-  const title = titleText(tool, { action: "run", tasks: [{}, {}, {}, {}] }, context);
-
-  assert.match(title, /^subagent run  2 running · 1 queued · 1 finished · \d/);
+test("remove renders aggregate aborts without assigning them to a conversation", () => {
+  const details: SubagentToolDetails = {
+    action: "remove",
+    removed: 2,
+    aborted: 1,
+    conversationIds: ["quiet-otter", "amber-fox"] as any,
+    errors: [],
+  };
+  assert.equal(renderResult(details), "✓ Removed 2 conversations · 1 active run aborted\n  quiet-otter · amber-fox");
+  assert.equal(renderResult(details, true), [
+    "→ quiet-otter · removed",
+    "  conversation quiet-otter",
+    "",
+    "→ amber-fox · removed",
+    "  conversation amber-fox",
+    "",
+    "  1 active run aborted",
+  ].join("\n"));
 });
 
-test("subagent run title falls back to the task count before a live result, with or without a render context", () => {
-  const tool = registerExtension();
-
-  // No render context at all (older call sites / non-TUI re-renders): must not throw.
-  assert.match(titleText(tool, { action: "run", tasks: [{}, {}, {}] }), /^subagent run  3 tasks\s*$/);
-
-  // Empty row-local state, before the first partial result populates a summary.
-  assert.match(titleText(tool, { action: "run", tasks: [{}, {}, {}] }, { state: {} }), /^subagent run  3 tasks\s*$/);
-});
-
-test("subagent run title omits zero running/queued counts, keeping finished and elapsed", () => {
-  const tool = registerExtension();
-  const context: any = { state: {} };
-  const sessions = [
-    fakeAgent({ id: "a", config: { name: "alpha" }, status: { kind: "completed", startedAt: 1, completedAt: 2 } }),
-    fakeAgent({ id: "b", config: { name: "beta" }, status: { kind: "completed", startedAt: 1, completedAt: 2 } }),
-  ];
-
-  tool.renderResult(
-    { content: [{ type: "text", text: "" }], details: { view: "run", sessions } },
-    { expanded: false, isPartial: true },
-    passthroughTheme,
-    context,
-  );
-
-  const title = titleText(tool, { action: "run", tasks: [{}, {}] }, context);
-  assert.match(title, /^subagent run  2 finished · \d/);
-  assert.doesNotMatch(title, /running|queued/);
-});
-
-test("subagent run title derives finished counts from a completed results envelope", () => {
-  const tool = registerExtension();
-  const context: any = { state: {} };
-  const results = [
-    { snapshot: fakeAgent({ id: "a", config: { name: "alpha" }, status: { kind: "completed", startedAt: 1, completedAt: 2 } }) },
-    { snapshot: fakeAgent({ id: "b", config: { name: "beta" }, status: { kind: "error", startedAt: 1, completedAt: 2, error: "boom" } }) },
-  ];
-
-  tool.renderResult(
-    { content: [{ type: "text", text: "" }], details: { view: "results", results } },
-    { expanded: false },
-    passthroughTheme,
-    context,
-  );
-
-  const title = titleText(tool, { action: "run" }, context);
-  assert.match(title, /^subagent run  2 finished · /);
-  assert.doesNotMatch(title, /running|queued/);
-});
-
-test("subagent run title counts the subtree through the shared state path when nested children are present", () => {
-  const tool = registerExtension();
-  const context: any = { state: {} };
-  const root = fakeAgent({ id: "r", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
-  const child = fakeAgent({ id: "c", parentSessionId: "r", config: { name: "child" }, createdAt: 2, status: { kind: "queued" } });
-  const grandchild = fakeAgent({ id: "g", parentSessionId: "c", config: { name: "grand" }, createdAt: 3, status: { kind: "completed", startedAt: 2, completedAt: 3 } });
-
-  tool.renderResult(
-    { content: [{ type: "text", text: "" }], details: { view: "run", sessions: [root], subtree: [root, child, grandchild] } },
-    { expanded: false, isPartial: true },
-    passthroughTheme,
-    context,
-  );
-
-  // Flat sessions alone would read "1 running"; the subtree adds the queued + finished descendants.
-  assert.match(titleText(tool, { action: "run", tasks: [{}] }, context), /^subagent run  1 running · 1 queued · 1 finished · /);
+test("errors render their message instead of structured output", () => {
+  const details: SubagentToolDetails = { action: "error", requestedAction: "join", message: "Unknown run." };
+  assert.equal(renderResult(details), "Unknown run.");
 });
