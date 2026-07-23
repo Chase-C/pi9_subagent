@@ -4,8 +4,8 @@ import { renderSubagentCall, renderSubagentResult, type SubagentToolDetails } fr
 
 const lines = (component: { render(width: number): string[] }) => component.render(200).map(line => line.trimEnd()).join("\n");
 const renderCall = (args: unknown) => lines(renderSubagentCall(args));
-const renderResult = (details: SubagentToolDetails, expanded = false, isPartial = false) =>
-  lines(renderSubagentResult({ details }, { expanded, isPartial }));
+const renderResult = (details: SubagentToolDetails, expanded = false, isPartial = false, width = 200) =>
+  renderSubagentResult({ details }, { expanded, isPartial }).render(width).map(line => line.trimEnd()).join("\n");
 
 test("call titles summarize action-specific input counts", () => {
   assert.equal(renderCall({ action: "run", tasks: [{}, {}, {}] }), "subagent run  3 tasks");
@@ -96,18 +96,18 @@ test("join distinguishes partial waits and terminal child errors", () => {
   };
   assert.equal(renderResult(partial, false, true), [
     "✓ auth map · completed",
-    "  Mapped auth.",
-    "",
     "● test audit · running",
     "  waiting for result",
   ].join("\n"));
   assert.equal(renderResult(details, true), [
     "✓ auth map · completed",
     "  conversation quiet-otter · run search-boldly",
+    "",
     "  Mapped auth.",
     "",
     "× test audit · error",
     "  conversation calm-wren · run test-thoroughly",
+    "",
     "  Child failed.",
   ].join("\n"));
 });
@@ -156,6 +156,40 @@ test("join renders recent filtered activity, recursive groups, outcomes, and bac
   assert.match(expanded, /conversation bg-c2 · run bg-r2 · detached at final/);
 });
 
+test("join trees color status markers and target statuses semantically", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{
+      conversationId: "root-c" as any,
+      runId: "root-r" as any,
+      label: "root",
+      status: "running",
+      joins: [{
+        status: "completed",
+        targets: [{
+          conversationId: "child-c" as any,
+          runId: "child-r" as any,
+          label: "child",
+          agent: "scout",
+          status: "completed",
+          activity: [{ tool: "read" }],
+        }, {
+          conversationId: "sibling-c" as any,
+          runId: "sibling-r" as any,
+          label: "sibling",
+          status: "completed",
+        }],
+      }],
+    }],
+  };
+  const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` } as any;
+  const rendered = lines(renderSubagentResult({ details }, { expanded: true }, theme));
+
+  assert.match(rendered, /<success>✓<\/success> <muted>joined 2 · child, sibling<\/muted>/);
+  assert.match(rendered, /<muted>├─<\/muted> <success>✓<\/success> <text>child<\/text><muted> · scout<\/muted> <muted>·<\/muted> <success>completed<\/success>/);
+  assert.match(rendered, /<muted>│<\/muted>\s+<muted>read<\/muted>/);
+});
+
 test("join activity is newest-first and reports hidden tool calls", () => {
   const details: SubagentToolDetails = {
     action: "join",
@@ -183,13 +217,13 @@ test("join activity is newest-first and reports hidden tool calls", () => {
   ].join("\n"));
 });
 
-test("terminal join collapse hides history while expansion retains it and never renders nested answers", () => {
+test("terminal join collapse hides output and history while expansion retains them without nested answers", () => {
   const details = { action: "join", runs: [{
     conversationId: "root-c" as any, runId: "root-r" as any, label: "finished", status: "completed", output: "Root answer.", prompt: "Full prompt.",
     activity: [{ tool: "read", summary: "history" }],
     joins: [{ status: "completed", targets: [{ conversationId: "child-c" as any, runId: "child-r" as any, label: "child", status: "completed", output: "SECRET CHILD ANSWER" }] }],
   }] } as unknown as SubagentToolDetails;
-  assert.equal(renderResult(details), "✓ finished · completed\n  Root answer.");
+  assert.equal(renderResult(details), "✓ finished · completed");
   const expanded = renderResult(details, true);
   assert.match(expanded, /Full prompt\.|read\(history\)|✓ joined 1 · child|child · completed/);
   assert.doesNotMatch(expanded, /SECRET CHILD ANSWER/);
@@ -237,13 +271,43 @@ test("expanded terminal joins retain recursive history, node-local filtering, an
     }],
   };
 
-  assert.equal(renderResult(details), "✓ root · completed\n  root answer");
+  assert.equal(renderResult(details), "✓ root · completed");
   const expanded = renderResult(details, true);
   assert.match(expanded, /✓ joined 1 · child[\s\S]*child · completed[\s\S]*read\(child activity survives\)/);
   assert.match(expanded, /✓ joined 1 · leaf[\s\S]*leaf · completed/);
   assert.match(expanded, /conversation background-c · run background-r · detached at final/);
   assert.match(expanded, /parent activity survives/);
   assert.doesNotMatch(expanded, /root represented join|child represented join/);
+});
+
+test("expanded joins order and separate sections while preserving indentation across wraps", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{
+      conversationId: "root-c" as any,
+      runId: "root-r" as any,
+      label: "wrapped",
+      status: "completed",
+      prompt: "Prompt words that wrap onto another line.",
+      activity: [{ tool: "read", summary: "Tool summary words that also wrap." }],
+      output: "Result words that wrap onto another line.",
+    }],
+  };
+
+  assert.equal(renderResult(details, true, false, 24), [
+    "✓ wrapped · completed",
+    "  conversation root-c ·",
+    "  run root-r",
+    "",
+    "  Prompt words that wrap",
+    "  onto another line.",
+    "",
+    "  read(Tool summary",
+    "  words that also wrap.)",
+    "",
+    "  Result words that wrap",
+    "  onto another line.",
+  ].join("\n"));
 });
 
 test("remove renders aggregate aborts without assigning them to a conversation", () => {

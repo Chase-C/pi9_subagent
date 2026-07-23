@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import type { AgentSource } from "./agents.js";
 import type { RunKind } from "./conversation.js";
 import type { ConversationId, RunId } from "./identifiers.js";
@@ -123,7 +123,7 @@ export function renderSubagentResult(
   result: { details?: SubagentToolDetails; content?: readonly { type?: string; text?: string }[] },
   options: { expanded?: boolean; isPartial?: boolean } = {},
   theme?: ThemeLike,
-): Text {
+): Component {
   const details = result.details;
   if (!details) return new Text(fallbackText(result), 0, 0);
   if (details.action === "error") return new Text(paint(theme, "error", details.message), 0, 0);
@@ -131,7 +131,24 @@ export function renderSubagentResult(
   const lines = options.expanded
     ? expandedLines(details, theme)
     : collapsedLines(details, options.isPartial === true, theme);
-  return new Text(lines.join("\n"), 0, 0);
+  return new IndentedText(lines);
+}
+
+class IndentedText implements Component {
+  constructor(private readonly lines: readonly string[]) {}
+
+  render(width: number): string[] {
+    return this.lines.flatMap(line => {
+      if (!line) return [""];
+      const indent = line.match(/^ */)?.[0] ?? "";
+      const indentWidth = visibleWidth(indent);
+      const content = line.slice(indent.length);
+      return wrapTextWithAnsi(content, Math.max(1, width - indentWidth))
+        .map(wrapped => `${indent}${wrapped}`);
+    });
+  }
+
+  invalidate(): void {}
 }
 
 function collapsedLines(details: Exclude<SubagentToolDetails, { action: "error" }>, partial: boolean, theme?: ThemeLike): string[] {
@@ -223,7 +240,8 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
 
 function joinLines(runs: readonly JoinedRunRenderItem[], expanded: boolean, partial: boolean, theme?: ThemeLike): string[] {
   if (runs.length === 0) return [success(theme, "No runs joined")];
-  return blocks(runs, (run, index) => renderJoinRoot(run, index, expanded, partial, theme));
+  const rendered = runs.map((run, index) => renderJoinRoot(run, index, expanded, partial, theme));
+  return expanded ? joinBlocks(rendered) : rendered.flat();
 }
 
 function renderJoinRoot(run: JoinedRunRenderItem, index: number, expanded: boolean, partial: boolean, theme?: ThemeLike): string[] {
@@ -236,19 +254,21 @@ function renderJoinRoot(run: JoinedRunRenderItem, index: number, expanded: boole
   ];
   const message = run.output ?? run.error;
   if (terminal && !expanded) {
-    if (message) lines.push(`  ${paint(theme, failed ? "error" : "dim", truncate(message, 320))}`);
+    if (failed && message) lines.push(`  ${paint(theme, "error", truncate(message, 320))}`);
     return lines;
   }
 
   if (expanded) {
-    if (run.prompt) lines.push(`  ${paint(theme, "dim", run.prompt)}`);
     lines.push(`  ${identity(theme, run.conversationId, run.runId)}`);
+    if (run.prompt) appendSection(lines, [`  ${paint(theme, "dim", run.prompt)}`]);
   } else if (partial && !run.activity?.length && !run.joins?.length) {
     lines.push(`  ${paint(theme, "dim", "waiting for result")}`);
   }
 
-  lines.push(...renderJoinNode(run.activity, run.joins, run.background, "  ", expanded, theme));
-  if (terminal && message) lines.push(`  ${paint(theme, failed ? "error" : "dim", truncate(message, 1200))}`);
+  const activity = renderJoinNode(run.activity, run.joins, run.background, "  ", expanded, theme);
+  if (expanded) appendSection(lines, activity);
+  else lines.push(...activity);
+  if (terminal && message) appendSection(lines, [`  ${paint(theme, failed ? "error" : "dim", truncate(message, 1200))}`]);
   return lines;
 }
 
@@ -307,7 +327,7 @@ function renderTerminalJoin(group: JoinInvocationRenderItem, indent: string, exp
   const summary = failed
     ? `${group.status === "interrupted" ? "join interrupted" : "join failed"}${group.error ? ` · ${group.error}` : ""}`
     : `joined ${group.targets.length}${labels.length ? ` · ${labels.join(", ")}` : ""}`;
-  const lines = [`${indent}${paint(theme, failed ? "error" : "muted", `${failed ? "×" : "✓"} ${summary}`)}`];
+  const lines = [`${indent}${statusMarker(theme, group.status)} ${paint(theme, failed ? "error" : "muted", summary)}`];
   if (expanded) lines.push(...renderJoinTargets(group.targets, indent, true, theme));
   return lines;
 }
@@ -319,9 +339,9 @@ function renderJoinTargets(targets: readonly JoinTargetRenderItem[], indent: str
     const label = target.label || target.agent || target.runId;
     const agent = target.agent && target.agent !== label ? ` · ${target.agent}` : "";
     const lines = [
-      `${indent}${paint(theme, "muted", connector)} ${statusMarker(theme, target.status)} ${paint(theme, "text", label)}${paint(theme, "muted", agent)} ${paint(theme, "muted", `· ${target.status}`)}`,
+      `${indent}${paint(theme, "muted", connector)} ${statusMarker(theme, target.status)} ${paint(theme, "text", label)}${paint(theme, "muted", agent)} ${paint(theme, "muted", "·")} ${statusText(theme, target.status)}`,
     ];
-    const childIndent = `${indent}${last ? "   " : "│  "}  `;
+    const childIndent = `${indent}${last ? "   " : `${paint(theme, "muted", "│")}  `}  `;
     if (!isTerminal(target.status) || expanded) {
       lines.push(...renderJoinNode(target.activity, target.joins, target.background, childIndent, expanded, theme));
     }
@@ -378,6 +398,12 @@ function statusSummary(statuses: readonly RunStatus[], theme?: ThemeLike): strin
     return total ? [`${total} ${status}`] : [];
   });
   return parts.length ? paint(theme, "muted", ` · ${parts.join(" · ")}`) : "";
+}
+
+function appendSection(lines: string[], section: readonly string[]): void {
+  if (section.length === 0) return;
+  if (lines.length > 0) lines.push("");
+  lines.push(...section);
 }
 
 function blocks<T>(items: readonly T[], render: (item: T, index: number) => string[]): string[] {
