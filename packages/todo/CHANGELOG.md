@@ -4,6 +4,8 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-07-23
+
 ### Changed
 
 - Streamline the model-facing task schema and planning guidance around names, status transitions, verification, and active work.
@@ -72,7 +74,8 @@ All notable changes to `@pi9/todo` will be documented in this file.
 - Add a persistent configurable widget with focused phase previews, terminal-task summaries, animated activity markers, and flexible placement.
 - Add validated global and trusted-project settings for widget presentation, glyph fallback, and tool-output visibility.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/todo-v0.3.4...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/todo-v0.3.5...HEAD
+[0.3.5]: https://github.com/Chase-C/pi9/compare/todo-v0.3.4...todo-v0.3.5
 [0.3.4]: https://github.com/Chase-C/pi9/compare/todo-v0.3.3...todo-v0.3.4
 [0.3.3]: https://github.com/Chase-C/pi9/compare/todo-v0.3.2...todo-v0.3.3
 [0.3.2]: https://github.com/Chase-C/pi9/compare/todo-v0.3.1...todo-v0.3.2
