@@ -6,6 +6,8 @@ export type ConversationLayoutMode = "flat" | "tree";
 export interface ConversationRow {
   readonly conversation: ConversationSnapshot;
   readonly depth: number;
+  readonly treePrefix?: string;
+  readonly treeContinuation?: string;
   readonly contextOnly?: boolean;
 }
 
@@ -15,7 +17,7 @@ export function projectConversations(
 ): ConversationRow[] {
   const mode = options.mode ?? "tree";
   const directMatches = conversations.filter(conversation => conversationMatches(conversation, options.query ?? ""));
-  if (mode === "flat") return directMatches.map(conversation => ({ conversation, depth: 0 }));
+  if (mode === "flat") return [...directMatches].sort(newestConversationFirst).map(conversation => ({ conversation, depth: 0 }));
 
   const allById = new Map(conversations.map(conversation => [conversation.conversationId, conversation]));
   const includedIds = new Set(directMatches.map(conversation => conversation.conversationId));
@@ -41,24 +43,36 @@ export function projectConversations(
     children.set(parentId, siblings);
   }
 
+  for (const siblings of children.values()) siblings.sort(newestConversationFirst);
+
   const nested = new Set([...children.values()].flat().map(conversation => conversation.conversationId));
   const rows: ConversationRow[] = [];
   const seen = new Set<string>();
-  const visit = (conversation: ConversationSnapshot, depth: number) => {
+  const visit = (conversation: ConversationSnapshot, depth: number, ancestorLast: readonly boolean[] = [], isLast = true) => {
     if (seen.has(conversation.conversationId)) return;
     seen.add(conversation.conversationId);
-    rows.push({ conversation, depth, ...(!directIds.has(conversation.conversationId) ? { contextOnly: true } : {}) });
-    for (const child of children.get(conversation.conversationId) ?? []) visit(child, depth + 1);
+    const guides = ancestorLast.map(last => last ? "   " : "│  ").join("");
+    rows.push({
+      conversation,
+      depth,
+      ...(depth ? {
+        treePrefix: `${guides}${isLast ? "╰─ " : "├─ "}`,
+        treeContinuation: `${guides}${isLast ? "   " : "│  "}`,
+      } : {}),
+      ...(!directIds.has(conversation.conversationId) ? { contextOnly: true } : {}),
+    });
+    const descendants = children.get(conversation.conversationId) ?? [];
+    const childAncestors = depth ? [...ancestorLast, isLast] : [];
+    descendants.forEach((child, index) => visit(child, depth + 1, childAncestors, index === descendants.length - 1));
   };
-  for (const conversation of included) if (!nested.has(conversation.conversationId)) visit(conversation, 0);
-  for (const conversation of included) if (!seen.has(conversation.conversationId)) visit(conversation, 0);
+  for (const conversation of included.filter(conversation => !nested.has(conversation.conversationId)).sort(newestConversationFirst)) visit(conversation, 0);
+  for (const conversation of included.filter(conversation => !seen.has(conversation.conversationId)).sort(newestConversationFirst)) visit(conversation, 0);
   return rows;
 }
 
 export function filterAgents(agents: readonly AgentConfig[], query: string): AgentConfig[] {
   const normalized = query.trim().toLowerCase();
-  if (!normalized) return [...agents];
-  return agents.filter(agent => [
+  const filtered = normalized ? agents.filter(agent => [
     agent.name,
     agent.description,
     agent.source,
@@ -67,7 +81,12 @@ export function filterAgents(agents: readonly AgentConfig[], query: string): Age
     agent.sourcePath,
     ...(agent.tools ?? []),
     ...(agent.skills ?? []),
-  ].some(value => value?.toLowerCase().includes(normalized)));
+  ].some(value => value?.toLowerCase().includes(normalized))) : [...agents];
+  return filtered.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function newestConversationFirst(left: ConversationSnapshot, right: ConversationSnapshot): number {
+  return right.createdAt - left.createdAt;
 }
 
 function conversationMatches(conversation: ConversationSnapshot, query: string): boolean {

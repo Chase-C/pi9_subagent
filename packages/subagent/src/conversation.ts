@@ -44,6 +44,7 @@ export interface RunToolUse { readonly id: string; readonly name: string; readon
 export interface RunActivitySnapshot { readonly messageSnippet?: string; readonly turns: number; readonly compactions: number; readonly toolHistory: readonly RunToolUse[] }
 export interface AgentViewConfig { readonly name: string; readonly description?: string; readonly source: AgentSource | undefined; readonly sourcePath?: string; readonly model: string | undefined; readonly thinking: ModelThinkingLevel | undefined; readonly tools: readonly string[] | undefined; readonly skills?: readonly string[] }
 export interface ConversationEffectiveConfig { readonly model?: string; readonly thinking?: ModelThinkingLevel; readonly cwd: string; readonly skills: readonly string[]; readonly tools: readonly string[] }
+export interface ConversationRequestedOverrides { readonly model?: string; readonly thinking?: ModelThinkingLevel }
 export type RunViewStatus =
   | { readonly kind: "queued"; readonly queuedAt: number }
   | { readonly kind: "running"; readonly startedAt: number }
@@ -85,6 +86,7 @@ export interface ConversationSnapshot {
   readonly runs: readonly RunSnapshot[];
   readonly currentRun?: RunSnapshot;
   readonly effectiveConfig?: ConversationEffectiveConfig;
+  readonly requestedOverrides?: ConversationRequestedOverrides;
   readonly canResume: boolean;
 }
 
@@ -151,6 +153,7 @@ export class Conversation {
   readonly agentName: string;
   readonly parent?: ParentRun;
   readonly requestedConfig: AgentRequestedConfig;
+  readonly requestedOverrides?: ConversationRequestedOverrides;
   readonly label?: string;
   private readonly runs: Run[] = [];
   private currentRun?: Run;
@@ -170,6 +173,12 @@ export class Conversation {
     this.label = spawn.label;
     this.parent = options.parent;
     this.requestedConfig = resolveRequestedConfig(config, spawn);
+    if (spawn.model !== undefined || spawn.thinking !== undefined) {
+      this.requestedOverrides = Object.freeze({
+        ...(spawn.model !== undefined ? { model: spawn.model } : {}),
+        ...(spawn.thinking !== undefined ? { thinking: spawn.thinking } : {}),
+      });
+    }
     this.currentRun = this.newRun(initialRunId, "spawn", spawn.prompt);
     this.runs.push(this.currentRun);
   }
@@ -275,6 +284,7 @@ export class Conversation {
       runs,
       ...(this.currentRun ? { currentRun: runs[runs.length - 1] } : {}),
       ...(this.effectiveConfig ? { effectiveConfig: this.effectiveConfig } : {}),
+      ...(this.requestedOverrides ? { requestedOverrides: this.requestedOverrides } : {}),
       canResume: this.canResume,
     });
   }

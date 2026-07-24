@@ -22,6 +22,21 @@ const make = () => new Conversation(
   () => {},
 );
 
+test("preserves only explicit spawn model and thinking overrides", () => {
+  const inherited = make().snapshot();
+  const overridden = new Conversation(
+    cid,
+    r1,
+    { ...config, model: "agent-default" },
+    { kind: "spawn", agent: "helper", prompt: "one", model: "task-model", thinking: "high" },
+    () => {},
+  ).snapshot();
+
+  assert.equal(inherited.requestedOverrides, undefined);
+  assert.deepEqual(overridden.requestedOverrides, { model: "task-model", thinking: "high" });
+  assert.equal(overridden.config.model, "task-model");
+});
+
 test("preserves immutable exact run history across resume", () => {
   const agent = make();
   agent.bindSession(session());

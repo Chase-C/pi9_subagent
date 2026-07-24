@@ -14,7 +14,7 @@ import type { AgentConfig } from "../agents.js";
 import { effectiveStatus, type ConversationSnapshot, type RunSnapshot } from "../conversation.js";
 import type { SubagentRuntime } from "../runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "../settings.js";
-import { clamp, isCancelKey, isDownKey, isEnterKey, isUpKey, type SubagentKeybindings } from "./input.js";
+import { clamp, isCancelKey, isDownKey, isEnterKey, isShiftTabKey, isUpKey, type SubagentKeybindings } from "./input.js";
 import { filterAgents, projectConversations, type ConversationLayoutMode } from "./overlay-model.js";
 import { SubagentSettingsComponent, type SubagentSettingsChange } from "./settings.js";
 
@@ -25,6 +25,7 @@ type PromptTarget = { kind: "agent"; name: string } | { kind: "resume"; conversa
 const PAGES: SubagentOverlayPage[] = ["agents", "conversations", "settings"];
 const PAGE_LABELS: Record<SubagentOverlayPage, string> = { agents: "Agents", conversations: "Conversations", settings: "Settings" };
 const DEFAULT_BODY_HEIGHT = 24;
+const OVERLAY_CHROME_HEIGHT = 6;
 
 export interface OverlayOptions {
   initialPage: SubagentOverlayPage;
@@ -63,7 +64,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     private readonly options: OverlayOptions,
   ) {
     this.page = options.initialPage;
-    this.bodyHeight = tui.terminal ? Math.max(10, Math.floor(tui.terminal.rows * 0.8) - 4) : DEFAULT_BODY_HEIGHT;
+    this.bodyHeight = tui.terminal ? Math.max(10, Math.floor(tui.terminal.rows * 0.8) - OVERLAY_CHROME_HEIGHT) : DEFAULT_BODY_HEIGHT;
     const settings = options.settings?.runtime && options.settings?.display ? options.settings : DEFAULT_SUBAGENT_SETTINGS;
     this.settings = new SubagentSettingsComponent(
       settings,
@@ -109,7 +110,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     }
     if (isCancelKey(data, this.keybindings) || data === "q") { this.done(); return; }
     if (data === "\t") { this.switchPage(1); return; }
-    if (data === "\x1b[Z") { this.switchPage(-1); return; }
+    if (isShiftTabKey(data)) { this.switchPage(-1); return; }
     if ((this.page === "conversations" || this.page === "agents") && data === "/") { this.setFocus("filter"); return; }
     if (this.page === "settings") { this.settings.handleInput(data); return; }
     if (isUpKey(data, this.keybindings)) { this.moveSelection(-1); return; }
@@ -127,7 +128,9 @@ export class SubagentOverlayComponent implements Component, Focusable {
         ? fitHeight(this.settings.render(Math.max(1, innerWidth - 2)), this.bodyHeight)
         : this.renderBrowser(innerWidth);
     const lines = [
-      `${this.border("╭")}${header}${this.border("╮")}`,
+      this.border(`╭${"─".repeat(innerWidth)}╮`),
+      this.row(header, innerWidth),
+      this.border(`├${"─".repeat(innerWidth)}┤`),
       ...body.map(line => this.row(line, innerWidth)),
       this.border(`├${"─".repeat(innerWidth)}┤`),
       this.row(this.muted(this.helpText()), innerWidth),
@@ -149,17 +152,15 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const tabs = PAGES.map(page => {
       const label = `[ ${PAGE_LABELS[page]} ]`;
       return page === this.page ? this.accent(label) : label;
-    }).join(this.border("──"));
-    const fitted = truncateToWidth(tabs, Math.max(0, width - 2), "");
-    return `${this.border("─")}${fitted}${this.border("─".repeat(Math.max(0, width - visibleWidth(fitted) - 1)))}`;
+    }).join("  ");
+    return truncateToWidth(` ${this.accent("Subagents")}    ${tabs}`, width, "");
   }
 
   private renderDetailTitle(width: number): string {
     const conversation = this.findConversation(this.detail!.conversationId);
     const run = conversation && this.findRun(conversation, this.detail!.runId);
-    const title = conversation ? ` ${conversation.config.name} · ${conversation.conversationId}${run ? ` · ${run.runId}` : ""} ` : " Conversation unavailable ";
-    const fitted = truncateToWidth(title, Math.max(0, width - 2), "");
-    return `${this.border("─")}${this.accent(fitted)}${this.border("─".repeat(Math.max(0, width - visibleWidth(fitted) - 1)))}`;
+    const title = conversation ? `${conversation.config.name} · ${conversation.conversationId}${run ? ` · ${run.runId}` : ""}` : "Conversation unavailable";
+    return truncateToWidth(` ${this.accent("Subagents")}  ${title}`, width, "");
   }
 
   private renderBrowser(width: number): string[] {
@@ -173,17 +174,35 @@ export class SubagentOverlayComponent implements Component, Focusable {
     if (!wide) {
       const listHeight = Math.max(4, Math.floor((this.bodyHeight - 2) / 2));
       const inspectorHeight = Math.max(3, this.bodyHeight - listHeight - 2);
-      return fitHeight([
-        ...viewportAt(list, listHeight, this.selectedListLine),
+      return [
+        ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight),
         ` ${filter}`,
         this.border("─".repeat(width)),
-        ...compactViewport(inspector, inspectorHeight),
-      ], this.bodyHeight);
+        ...fitHeight(compactViewport(inspector, inspectorHeight), inspectorHeight),
+      ];
     }
 
-    const left = fitHeight(["", ...viewportAt(list, this.bodyHeight - 2, this.selectedListLine), filter], this.bodyHeight);
+    const listHeight = this.bodyHeight - 2;
+    const left = ["", ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight), filter];
     const right = fitHeight(["", ...compactViewport(inspector, this.bodyHeight - 1)], this.bodyHeight);
     return left.map((line, index) => `${pad(` ${line}`, leftWidth)} ${this.border("│")} ${pad(` ${right[index] ?? ""}`, rightWidth)}`);
+  }
+
+  private renderListViewport(list: string[], height: number, width: number): string[] {
+    if (list.length <= height || height < 6) return viewportAt(list, height, this.selectedListLine);
+
+    const itemCount = this.page === "agents" ? this.filteredAgents.length : this.conversationRows.length;
+    const selected = this.page === "agents" ? this.selectedAgent() : this.selectedConversation();
+    const visibleCount = Math.max(1, Math.floor((height - 2) / 4));
+    const start = clamp(selected - Math.floor(visibleCount / 2), 0, Math.max(0, itemCount - visibleCount));
+    const end = Math.min(itemCount, start + visibleCount);
+    const above = start;
+    const below = itemCount - end;
+    return [
+      above ? this.muted(center(`▲ ${above} more above`, width)) : "",
+      ...list.slice(start * 4, end * 4),
+      below ? this.muted(center(`▼ ${below} more below`, width)) : "",
+    ];
   }
 
   private renderList(width: number): string[] {
@@ -192,12 +211,13 @@ export class SubagentOverlayComponent implements Component, Focusable {
       if (!agents.length) return [this.muted("No matching agent definitions.")];
       const selected = this.selectedAgent(agents);
       return agents.flatMap((agent, index) => {
-        const marker = this.success("→");
-        const name = index === selected ? this.bold(agent.name) : agent.name;
+        const isSelected = index === selected;
+        const marker = isSelected ? this.accent("┃ ") : "  ";
+        const name = isSelected ? this.accent(agent.name) : agent.name;
         return [
-          truncateToWidth(`${marker} ${name} ${this.muted(`· ${agent.source}`)}`, width, "…"),
-          truncateToWidth(`  ${compact(agent.description)}`, width, "…"),
-          this.muted(truncateToWidth(`  ${count(agent.tools, "tool")} · ${count(agent.skills, "skill")}`, width, "…")),
+          truncateToWidth(`${marker}${name} ${this.muted(`· ${agent.source}`)}`, width, "…"),
+          truncateToWidth(`${marker}${compact(agent.description)}`, width, "…"),
+          `${marker}${this.muted(truncateToWidth(`${agent.model ?? "default"}:${agent.thinking ?? "default"} · ${count(agent.tools, "tool")}${agent.skills?.length ? ` · ${count(agent.skills, "skill")}` : ""}`, Math.max(1, width - 2), "…"))}`,
           "",
         ];
       });
@@ -209,15 +229,24 @@ export class SubagentOverlayComponent implements Component, Focusable {
     return rows.flatMap((row, index) => {
       const conversation = row.conversation;
       const run = conversation.currentRun ?? conversation.runs.at(-1);
-      const indent = "  ".repeat(row.depth);
-      const marker = index === selected ? this.success("→") : this.statusMarker(run);
+      const isSelected = index === selected;
+      const firstPrefix = `${isSelected ? this.accent("┃ ") : "  "}${this.muted(row.treePrefix ?? "")}`;
+      const continuationPrefix = `${isSelected ? this.accent("┃ ") : "  "}${this.muted(row.treeContinuation ?? "")}`;
+      const identity = conversation.label || conversation.config.name;
+      const name = isSelected ? this.accent(identity) : identity;
+      const agent = conversation.label ? ` · ${conversation.config.name}` : "";
+      const config = requestedConfigLabel(conversation);
+      const title = `${name}${this.muted(`${agent}${config ? ` (${config})` : ""}`)}`;
       const status = run ? effectiveStatus(run.status) : "idle";
-      const label = conversation.label || conversation.config.name;
+      const elapsed = run ? formatElapsed(runElapsedMs(run)) : "0ms";
+      const tokens = run ? formatTokens(run.usage.totalTokens) : "0 tokens";
+      const timeline = run ? runRecency(run) : "idle";
+      const activity = `${run?.activity.turns ?? 0} ${plural(run?.activity.turns ?? 0, "turn")} · ${run?.activity.toolHistory.length ?? 0} ${plural(run?.activity.toolHistory.length ?? 0, "tool")}`;
       return [
-        truncateToWidth(`${marker} ${indent}${this.bold(label)} ${this.muted(`· ${conversation.config.name}`)}`, width, "…"),
-        row.contextOnly ? this.muted(`  ${indent}(ancestor context)`) : this.muted(truncateToWidth(`  ${indent}${status} · ${run?.activity.turns ?? 0} turns · ${run?.activity.toolHistory.length ?? 0} tools`, width, "…")),
-        this.muted(truncateToWidth(`  ${indent}conversation ${conversation.conversationId}`, width, "…")),
-        "",
+        truncateToWidth(`${firstPrefix}${title}`, width, "…"),
+        truncateToWidth(`${continuationPrefix}${run ? this.statusText(run, status) : this.muted(status)} ${this.muted(`· ${elapsed} · ${tokens}`)}`, width, "…"),
+        truncateToWidth(`${continuationPrefix}${this.muted(`${row.contextOnly ? "ancestor context · " : ""}${timeline} · ${activity} · ${conversation.conversationId}`)}`, width, "…"),
+        row.treeContinuation ? `  ${this.muted(row.treeContinuation)}` : "",
       ];
     });
   }
@@ -271,7 +300,10 @@ export class SubagentOverlayComponent implements Component, Focusable {
       lines.push(`${this.muted("◆")} ${this.accent("Previous runs")}`);
       for (const previous of previousRuns) {
         const label = conversation.label || compact(previous.prompt);
-        const summary = `${this.success("✓")} ${label} ${this.muted(`· ${previous.runId} · ${activitySummary(previous)}`)}`;
+        const failure = previous.status.kind === "done" && previous.status.outcome !== "completed"
+          ? ` ${this.statusText(previous, `[${previous.status.outcome}]`)}`
+          : "";
+        const summary = `${label}${failure} ${this.muted(`· ${previous.runId} · ${activitySummary(previous)} · ${formatTokens(previous.usage.totalTokens)}`)}`;
         lines.push(`  ${truncateToWidth(summary, Math.max(1, width - 2), "…")}`);
       }
       lines.push(this.muted("│"));
@@ -282,11 +314,13 @@ export class SubagentOverlayComponent implements Component, Focusable {
       ...wrapTextWithAnsi(run.prompt, Math.max(1, width - 2)).map(line => `  ${line}`),
       this.muted("│"),
       `${this.statusAccent(run, "●")} ${this.accent("Activity")}`,
-      `  ${this.muted(activitySummary(run))}`,
+      `  ${this.muted(`${activitySummary(run)} · ${formatElapsed(runElapsedMs(run))} · ${formatTokens(run.usage.totalTokens)}`)}`,
     );
-    if (run.activity.messageSnippet) {
+    if (run.status.kind !== "done" && run.activity.messageSnippet) {
       lines.push(`  ${this.dim(truncateToWidth(compact(run.activity.messageSnippet), Math.max(1, width - 2), "…"))}`);
     }
+    const nested = this.renderNestedConversationTree(conversation, run, Math.max(1, width - 2));
+    if (nested.length) lines.push(`  ${this.muted("subagents")}`, ...nested.map(line => `  ${line}`));
 
     if (run.status.kind === "done") {
       const output = run.status.output || run.status.error;
@@ -302,6 +336,34 @@ export class SubagentOverlayComponent implements Component, Focusable {
     lines.push("", this.muted(`enter inspect${this.canResumeConversation(conversation) ? " · r resume" : ""} · x remove`));
     if (this.promptTarget?.kind === "resume") lines.push("", this.accent("Resume conversation"), ...this.renderPrompt(width));
     if (this.actionError) lines.push(this.error(this.actionError));
+    return lines;
+  }
+
+  private renderNestedConversationTree(conversation: ConversationSnapshot, run: RunSnapshot, width: number): string[] {
+    const conversations = this.manager.listConversations();
+    const direct = conversations.filter(candidate => candidate.parent?.conversationId === conversation.conversationId && candidate.parent.runId === run.runId);
+    const children = new Map<string, ConversationSnapshot[]>();
+    for (const candidate of conversations) {
+      const parentId = candidate.parent?.conversationId;
+      if (!parentId) continue;
+      const siblings = children.get(parentId) ?? [];
+      siblings.push(candidate);
+      children.set(parentId, siblings);
+    }
+
+    const lines: string[] = [];
+    const visit = (siblings: readonly ConversationSnapshot[], prefix: string) => siblings.forEach((child, index) => {
+      const last = index === siblings.length - 1;
+      const childRun = child.currentRun ?? child.runs.at(-1);
+      const label = child.label || child.config.name;
+      const agent = child.label ? ` · ${child.config.name}` : "";
+      const status = childRun ? effectiveStatus(childRun.status) : "idle";
+      const connector = `${prefix}${last ? "╰─" : "├─"}`;
+      const content = `${this.muted(connector)} ${this.text(label)}${this.muted(agent)} ${this.muted("·")} ${childRun ? this.statusText(childRun, status) : this.muted(status)}`;
+      lines.push(truncateToWidth(content, width, "…"));
+      visit(children.get(child.conversationId) ?? [], `${prefix}${last ? "   " : `${this.muted("│")}  `}`);
+    });
+    visit(direct, "");
     return lines;
   }
 
@@ -452,6 +514,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   }
   private get activeFilter(): Input | undefined { return this.page === "conversations" ? this.filters.conversations : this.page === "agents" ? this.filters.agents : undefined; }
   private bold(text: string): string { return this.theme.bold?.(text) ?? text; }
+  private text(text: string): string { return this.theme.fg?.("text", text) ?? text; }
   private accent(text: string): string { return this.theme.fg?.("accent", this.bold(text)) ?? text; }
   private success(text: string): string { return this.theme.fg?.("success", text) ?? text; }
   private muted(text: string): string { return this.theme.fg?.("muted", text) ?? text; }
@@ -459,11 +522,14 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private error(text: string): string { return this.theme.fg?.("error", text) ?? text; }
   private border(text: string): string { return this.theme.fg?.("border", text) ?? text; }
   private tag(name: string, value: string): string { return `${this.muted(name)} ${this.theme.fg?.("accent", value) ?? value}`; }
-  private statusAccent(run: RunSnapshot, text: string): string {
+  private statusText(run: RunSnapshot, text: string): string {
     if (run.status.kind === "queued" || run.status.kind === "running") return this.theme.fg?.("warning", text) ?? text;
-    return run.status.outcome === "completed" ? this.success(text) : this.error(text);
+    if (run.status.outcome === "completed") return this.success(text);
+    if (run.status.outcome === "error") return this.error(text);
+    if (run.status.outcome === "aborted" || run.status.outcome === "interrupted") return this.theme.fg?.("warning", text) ?? text;
+    return this.dim(text);
   }
-  private statusMarker(run?: RunSnapshot): string { return run ? this.statusAccent(run, run.status.kind === "running" ? "●" : run.status.kind === "queued" ? "◷" : run.status.outcome === "completed" ? "✓" : "×") : this.muted("○"); }
+  private statusAccent(run: RunSnapshot, text: string): string { return this.statusText(run, text); }
   private row(content: string, width: number): string { return `${this.border("│")}${pad(content, width)}${this.border("│")}`; }
   private helpText(): string {
     if (this.focusRegion === "prompt") return "enter submit · esc cancel";
@@ -474,6 +540,49 @@ export class SubagentOverlayComponent implements Component, Focusable {
   }
 }
 
+function requestedConfigLabel(conversation: ConversationSnapshot): string {
+  const { model, thinking } = conversation.requestedOverrides ?? {};
+  if (model && thinking) return `${model}:${thinking}`;
+  if (model) return model;
+  return thinking ? `thinking ${thinking}` : "";
+}
+function runElapsedMs(run: RunSnapshot, now = Date.now()): number {
+  const start = run.status.kind === "queued" ? run.status.queuedAt : run.status.kind === "running" ? run.status.startedAt : run.status.startedAt ?? run.createdAt;
+  const end = run.status.kind === "done" ? run.status.completedAt : now;
+  return Math.max(0, end - start);
+}
+function formatElapsed(milliseconds: number): string {
+  if (milliseconds < 1_000) return `${milliseconds}ms`;
+  const seconds = milliseconds / 1_000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.floor(seconds - minutes * 60);
+  return `${minutes}m${remainder.toString().padStart(2, "0")}s`;
+}
+function formatTokens(tokens: number): string {
+  if (tokens < 1_000) return `${tokens} tokens`;
+  if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(tokens < 10_000 ? 1 : 0)}k tokens`;
+  return `${(tokens / 1_000_000).toFixed(tokens < 10_000_000 ? 1 : 0)}m tokens`;
+}
+function runRecency(run: RunSnapshot, now = Date.now()): string {
+  if (run.status.kind === "running") return "active now";
+  const timestamp = run.status.kind === "queued" ? run.status.queuedAt : run.status.completedAt;
+  const relative = relativeTime(now - timestamp);
+  if (run.status.kind === "queued") return `queued ${relative}`;
+  const verb = run.status.outcome === "completed" ? "finished" : run.status.outcome === "error" ? "failed" : run.status.outcome;
+  return `${verb} ${relative}`;
+}
+function relativeTime(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  if (seconds < 2) return "now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+function plural(amount: number, noun: string): string { return `${noun}${amount === 1 ? "" : "s"}`; }
 function activitySummary(run: RunSnapshot): string {
   const parts = [
     `${run.activity.turns} turn${run.activity.turns === 1 ? "" : "s"}`,
@@ -499,6 +608,7 @@ function markdownTheme(theme: Theme): MarkdownTheme {
 }
 function compact(text?: string): string { return text?.replace(/\s+/g, " ").trim() || "No description"; }
 function count(values: readonly unknown[] | undefined, noun: string): string { const amount = values?.length ?? 0; return `${amount} ${noun}${amount === 1 ? "" : "s"}`; }
+function center(text: string, width: number): string { return `${" ".repeat(Math.max(0, Math.floor((width - visibleWidth(text)) / 2)))}${text}`; }
 function pad(text: string, width: number): string { const fitted = visibleWidth(text) > width ? truncateToWidth(text, width, "") : text; return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`; }
 function fitHeight(lines: string[], height: number): string[] { return [...lines.slice(0, height), ...Array(Math.max(0, height - lines.length)).fill("")]; }
 function viewportAt(lines: string[], height: number, selectedLine: number): string[] {

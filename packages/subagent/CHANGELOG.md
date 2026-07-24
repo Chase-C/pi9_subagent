@@ -4,6 +4,12 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Refine the `/subagents` overlay with a framed header, pinned filters, reverse tab navigation, stable overflow counts, and consistent selected-row styling.
+- Sort agents by name and conversations newest-first while preserving selection and rendering recursive conversations with muted, continuous tree connectors.
+- Enrich conversation rows and details with explicit task-level model/thinking overrides, elapsed time, token and compaction usage, previous-run metadata, and nested subagent activity trees.
+
 ### Documentation
 
 - Restore the README feature overview, including the minimal tool prompt size that reduces parent-context bloat.
