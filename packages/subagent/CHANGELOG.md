@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-24
+
 ### Changed
 
 - Refine the `/subagents` overlay with a framed header, pinned filters, reverse tab navigation, stable overflow counts, and consistent selected-row styling.
@@ -172,7 +174,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.1...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.2...HEAD
+[0.7.2]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.1...subagent-v0.7.2
 [0.7.1]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.0...subagent-v0.7.1
 [0.7.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.6.0...subagent-v0.7.0
 [0.6.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.5.1...subagent-v0.6.0
