@@ -20,6 +20,48 @@ describe("conversation projection", () => {
     ]);
   });
 
+  it("projects classic connectors and continuous ancestor rails", () => {
+    const root = fakeAgent({ conversationId: "root", createdAt: 1 });
+    const branchA = fakeAgent({ conversationId: "branch-a", createdAt: 3, parent: { conversationId: "root", runId: "root-run" } });
+    const leafA = fakeAgent({ conversationId: "leaf-a", createdAt: 4, parent: { conversationId: "branch-a", runId: "branch-run" } });
+    const branchB = fakeAgent({ conversationId: "branch-b", createdAt: 2, parent: { conversationId: "root", runId: "root-run" } });
+
+    const rows = projectConversations([root, branchA, leafA, branchB]);
+
+    expect(rows.map(row => [row.conversation.conversationId, row.treePrefix, row.treeContinuation])).toEqual([
+      ["root", undefined, undefined],
+      ["branch-a", "├─ ", "│  "],
+      ["leaf-a", "│  ╰─ ", "│     "],
+      ["branch-b", "╰─ ", "   "],
+    ]);
+  });
+
+  it("sorts roots and siblings newest first while preserving tree shape", () => {
+    const olderRoot = fakeAgent({ conversationId: "older-root", createdAt: 1 });
+    const olderChild = fakeAgent({ conversationId: "older-child", createdAt: 2, parent: { conversationId: "older-root", runId: "root-run" } });
+    const newerChild = fakeAgent({ conversationId: "newer-child", createdAt: 3, parent: { conversationId: "older-root", runId: "root-run" } });
+    const newerRoot = fakeAgent({ conversationId: "newer-root", createdAt: 4 });
+
+    expect(projectConversations([olderRoot, olderChild, newerChild, newerRoot]).map(row => row.conversation.conversationId)).toEqual([
+      "newer-root",
+      "older-root",
+      "newer-child",
+      "older-child",
+    ]);
+    expect(projectConversations([olderRoot, newerRoot], { mode: "flat" }).map(row => row.conversation.conversationId)).toEqual([
+      "newer-root",
+      "older-root",
+    ]);
+  });
+
+  it("treats later insertions as newer when timestamps are equal", () => {
+    const first = fakeAgent({ conversationId: "first", createdAt: 1 });
+    const second = fakeAgent({ conversationId: "second", createdAt: 1 });
+
+    expect(projectConversations([first, second]).map(row => row.conversation.conversationId)).toEqual(["second", "first"]);
+    expect(projectConversations([first, second], { mode: "flat" }).map(row => row.conversation.conversationId)).toEqual(["second", "first"]);
+  });
+
   it("filters conversations using run identities and activity", () => {
     const first = fakeAgent({ conversationId: "first", runId: "run-alpha" });
     const second = fakeAgent({ conversationId: "second", messageSnippet: "reviewing authentication" });
@@ -30,6 +72,17 @@ describe("conversation projection", () => {
 });
 
 describe("agent filtering", () => {
+  it("sorts agents by name without mutating the source list", () => {
+    const agents = [
+      { name: "writer", description: "Writes docs", source: "user" },
+      { name: "analyst", description: "Analyzes code", source: "project" },
+      { name: "reviewer", description: "Reviews code", source: "project" },
+    ] as any;
+
+    expect(filterAgents(agents, "").map(agent => agent.name)).toEqual(["analyst", "reviewer", "writer"]);
+    expect(agents.map((agent: any) => agent.name)).toEqual(["writer", "analyst", "reviewer"]);
+  });
+
   it("matches configuration fields", () => {
     const agents = [
       { name: "reviewer", description: "Reviews code", source: "project", skills: ["security"] },

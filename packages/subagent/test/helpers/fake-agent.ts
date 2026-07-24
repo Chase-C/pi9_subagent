@@ -60,6 +60,7 @@ export interface FakeAgentOptions {
   usage?: Usage;
   totalUsage?: Usage;
   canResume?: boolean;
+  requestedOverrides?: ConversationSnapshot["requestedOverrides"];
   previousRuns?: RunSnapshot[];
   runs?: RunSnapshot[];
 }
@@ -136,6 +137,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     },
     runs,
     currentRun: runs.at(-1),
+    ...(options.requestedOverrides ? { requestedOverrides: options.requestedOverrides } : {}),
     canResume: options.canResume ?? false,
   };
 }

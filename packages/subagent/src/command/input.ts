@@ -42,3 +42,7 @@ export function isUpKey(data: string, keybindings?: SubagentKeybindings) {
 export function isDownKey(data: string, keybindings?: SubagentKeybindings) {
   return keybindingsMatch(keybindings, data, "tui.select.down") || matchesKey(data, "down") || data === "\x1b[B" || data === "j" || data === "J";
 }
+
+export function isShiftTabKey(data: string) {
+  return matchesKey(data, "shift+tab") || data === "\x1b[Z";
+}
